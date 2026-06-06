@@ -1,17 +1,31 @@
-research_task:
+market_analysis_task:
   description: >
-    Conduct a thorough research about {topic}
-    Make sure you find any interesting and relevant information given
-    the current year is {current_year}.
-  expected_output: >
-    A list with 10 bullet points of the most relevant information about {topic}
-  agent: researcher
+    今天是交易日 {trade_date}。请对A股大盘进行完整的技术面分析。
 
-reporting_task:
-  description: >
-    Review the context you got and expand each topic into a full section for a report.
-    Make sure the report is detailed and contains any and all relevant information.
+    **分析标的：**
+    1. 上证指数（000001.SH）
+    2. 创业板指（399006.SZ）
+
+    **分析步骤（按顺序调用工具）：**
+    1. 用 get_index_technicals 分别获取两个指数的技术分析摘要。
+    2. 用 get_market_breadth 获取今日市场宽度（涨跌比、涨停跌停、成交额）。
+    3. 用 get_index_contribution 获取两个指数的权重股贡献分析。
+
+    **你需要回答：**
+    - 今天大盘整体偏多还是偏空？处于什么阶段（上升/回调/震荡/下跌）？
+    - 均线系统（MA5/10/20/60）的排列和方向如何？
+    - 量能是放量还是缩量？说明资金态度。
+    - KDJ/RSI/BIAS 是否处于极端区域？
+    - 权重股是拉升还是拖累指数？
+    - 有哪些需要重点关注的信号或风险？
+
+    **输出格式：**
+    用结构化 Markdown 输出，分 "市场概览"、"上证指数"、"创业板指"、"综合研判" 四个部分。
+    每个部分包含关键数据（价格、涨跌、均线、量能、指标）和分析结论。
   expected_output: >
-    A fully fledged report with the main topics, each with a full section of information.
-    Formatted as markdown without '```'
-  agent: reporting_analyst
+    一份结构化的A股大盘复盘报告（Markdown格式），包含：
+    - 市场概览（涨跌比、成交额、环比变化）
+    - 上证指数技术分析（K线形态、均线量能、KDJ/RSI/BIAS、贡献分析）
+    - 创业板指技术分析（同上）
+    - 综合研判（大盘定性、关键信号、风险提示）
+  agent: market_analyst
