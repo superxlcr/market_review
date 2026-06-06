@@ -72,13 +72,19 @@ def get_offset_info(df: pd.DataFrame, period: int):
 
 
 def ma_role(price: float, ma_val: float, direction: str) -> str:
-    """Determine MA role: 支撑 / 压制 / 无 (flat → no role)."""
+    """Determine MA role: 支撑/压制/拖拽/无, combining direction + price position."""
     if direction == "→":
         return "无"
-    if price > ma_val:
-        return "支撑"
-    else:
-        return "压制"
+    if direction == "↑":
+        if price > ma_val:
+            return "支撑"
+        else:
+            return "向上拖拽"   # price below MA but MA rising → pulling up
+    else:  # ↓
+        if price < ma_val:
+            return "压制"
+        else:
+            return "向下拖拽"   # price above MA but MA falling → pulling down
 
 
 def latest_val(series: list[float]) -> float | None:
@@ -203,8 +209,8 @@ def render_index_section(code: str, name: str, end_date: str = None):
             if d == "↓": return "#43a047"
             return "#999"
         def _role_color(r: str) -> str:
-            if "支撑" in r: return "#e53935"
-            if "压制" in r: return "#43a047"
+            if "支撑" in r or "向上" in r: return "#e53935"
+            if "压制" in r or "向下" in r: return "#43a047"
             return "#999"
 
         rows_html = ""

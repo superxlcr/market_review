@@ -37,17 +37,17 @@ def calc_ma(df: pd.DataFrame, periods: list[int] = None) -> dict[str, list[float
 
 def ma_direction(ma_values: list[float]) -> str:
     """
-    Determine MA direction by comparing today's value to 3 days ago.
-    Simple slope judgement: >0.1% up, <0.1% down, else flat.
+    Determine MA direction by comparing today's value to yesterday's.
+    Simple 1-day slope: >0.06% up, <0.06% down, else flat.
     Returns '↑' (up), '↓' (down), or '→' (flat).
     """
     valid = [v for v in ma_values if not np.isnan(v)]
-    if len(valid) < 4:
+    if len(valid) < 2:
         return "→"
-    chg_pct = (valid[-1] - valid[-4]) / valid[-4] * 100
-    if chg_pct > 0.1:
+    chg_pct = (valid[-1] - valid[-2]) / valid[-2] * 100
+    if chg_pct > 0.05:
         return "↑"
-    elif chg_pct < -0.1:
+    elif chg_pct < -0.05:
         return "↓"
     return "→"
 
