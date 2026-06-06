@@ -31,11 +31,17 @@ class DataProvider:
 
         # Determine fetch range
         end_date = datetime.now().strftime("%Y%m%d")
+        desired_start = (datetime.now() - timedelta(days=lookback_days * 2)).strftime("%Y%m%d")
         if cached:
             oldest = cached[-1]["date"].replace("-", "")
-            start_date = (datetime.strptime(oldest, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+            # If cached data doesn't go back far enough (e.g. MA240 upgrade),
+            # extend the fetch window to cover the full desired range
+            if desired_start < oldest:
+                start_date = desired_start
+            else:
+                start_date = (datetime.strptime(oldest, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
         else:
-            start_date = (datetime.now() - timedelta(days=lookback_days * 2)).strftime("%Y%m%d")
+            start_date = desired_start
 
         fetched = self._fetch_from_api(code, start_date, end_date)
         if fetched:

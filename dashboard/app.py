@@ -54,7 +54,7 @@ def plot_kline_with_ma(df, title: str):
     ), row=1, col=1)
 
     # MA lines
-    colors = {"MA5": "#2196f3", "MA10": "#ff9800", "MA20": "#9c27b0", "MA60": "#4caf50"}
+    colors = {"MA5": "#2196f3", "MA10": "#ff9800", "MA20": "#9c27b0", "MA60": "#4caf50", "MA120": "#ff5722", "MA240": "#795548"}
     for name, color in colors.items():
         if name in mas:
             fig.add_trace(go.Scatter(

@@ -27,7 +27,7 @@ def init_data_provider(token: str):
 class GetIndexTechnicalsInput(BaseModel):
     index_code: str = Field(..., description="指数代码，如 000001.SH（上证）或 399006.SZ（创业板）")
     index_name: str = Field(..., description="指数中文名，如 '上证指数'")
-    lookback_days: int = Field(120, description="回看交易日数，默认120天（约半年）")
+    lookback_days: int = Field(360, description="回看交易日数，默认360天（约1.5年，覆盖年线MA240）")
 
 
 class GetIndexTechnicalsTool(BaseTool):

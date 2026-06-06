@@ -27,7 +27,7 @@ def rows_to_df(rows: list[dict]) -> pd.DataFrame:
 def calc_ma(df: pd.DataFrame, periods: list[int] = None) -> dict[str, list[float]]:
     """Compute SMA for given periods. Returns {f'MA{p}': [...values...]}"""
     if periods is None:
-        periods = [5, 10, 20, 60]
+        periods = [5, 10, 20, 60, 120, 240]
     result = {}
     for p in periods:
         col = f"MA{p}"
@@ -58,7 +58,7 @@ def ma_arrangement(df: pd.DataFrame) -> str:
     Determine MA arrangement: 多头排列 / 空头排列 / 缠绕.
     Uses latest MA5/10/20/60 values.
     """
-    mas = calc_ma(df, [5, 10, 20, 60])
+    mas = calc_ma(df, [5, 10, 20, 60, 120, 240])
     latest = {}
     for k, v in mas.items():
         for val in reversed(v):
@@ -68,7 +68,7 @@ def ma_arrangement(df: pd.DataFrame) -> str:
     if len(latest) < 3:
         return "数据不足"
 
-    vals = [latest.get(f"MA{p}") for p in [5, 10, 20, 60] if latest.get(f"MA{p}") is not None]
+    vals = [latest.get(f"MA{p}") for p in [5, 10, 20, 60, 120, 240] if latest.get(f"MA{p}") is not None]
     if all(vals[i] > vals[i+1] for i in range(len(vals)-1)):
         return "多头排列"
     if all(vals[i] < vals[i+1] for i in range(len(vals)-1)):
@@ -195,10 +195,10 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
         "latest_close": round(latest_close, 2),
         "ma_arrangement": ma_arrangement(df),
         "ma_directions": {
-            f"MA{p}": ma_direction(mas[f"MA{p}"]) for p in [5, 10, 20, 60]
+            f"MA{p}": ma_direction(mas[f"MA{p}"]) for p in [5, 10, 20, 60, 120, 240]
         },
         "mas": {f"MA{p}": round(float([v for v in mas[f"MA{p}"] if not np.isnan(v)][-1]), 2)
-                for p in [5, 10, 20, 60] if any(not np.isnan(v) for v in mas[f"MA{p}"])},
+                for p in [5, 10, 20, 60, 120, 240] if any(not np.isnan(v) for v in mas[f"MA{p}"])},
         "volume": volume_analysis(df),
         "kline_pattern": kline_pattern(df),
         "kdj_k": round(float([v for v in kdj["K"] if not np.isnan(v)][-1]), 1),
