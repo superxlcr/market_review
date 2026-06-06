@@ -94,6 +94,17 @@ def get_offset_info(df: pd.DataFrame, period: int):
             avg_offset_vol, avg_vs_today_pct, window)
 
 
+def _vol_color_ramp(pct: float) -> str:
+    """Volume comparison color: gray(#999) at 0%, fully saturated red/green at 20%+."""
+    abs_pct = abs(pct)
+    t = min(abs_pct / 20.0, 1.0)
+    if pct > 0:
+        r, g, b = 153 + 76 * t, 153 - 96 * t, 153 - 100 * t   # → red(229,57,53)
+    else:
+        r, g, b = 153 - 86 * t, 153 + 7 * t, 153 - 82 * t     # → green(67,160,71)
+    return f"rgb({int(r)},{int(g)},{int(b)})"
+
+
 def ma_role(price: float, ma_val: float, direction: str) -> str:
     """Determine MA role: 支撑/压制/拖拽/无, combining direction + price position."""
     if direction == "→":
@@ -236,17 +247,6 @@ def render_index_section(code: str, name: str, end_date: str = None):
             if "压制" in r or "向下" in r: return "#43a047"
             return "#999"
 
-        # Shared color interpolator for volume comparison
-        def _vol_color(pct: float) -> str:
-            """Gray(#999) at 0%, fully saturated red/green at 20%+."""
-            abs_pct = abs(pct)
-            t = min(abs_pct / 20.0, 1.0)
-            if pct > 0:
-                r, g, b = 153 + 76 * t, 153 - 96 * t, 153 - 100 * t   # → red(229,57,53)
-            else:
-                r, g, b = 153 - 86 * t, 153 + 7 * t, 153 - 82 * t     # → green(67,160,71)
-            return f"rgb({int(r)},{int(g)},{int(b)})"
-
         rows_html = ""
         for p in ma_periods:
             ma_key = f"MA{p}"
@@ -258,7 +258,7 @@ def render_index_section(code: str, name: str, end_date: str = None):
             if offset_vol is not None and offset_vs_pct is not None:
                 sign_v = "+" if offset_vs_pct > 0 else ""
                 off_str = f"{offset_vol:.2f}亿（{sign_v}{offset_vs_pct:.1f}%）"
-                off_color = _vol_color(offset_vs_pct)
+                off_color = _vol_color_ramp(offset_vs_pct)
             else:
                 off_str = "N/A"
                 off_color = "#999"
@@ -267,7 +267,7 @@ def render_index_section(code: str, name: str, end_date: str = None):
             if avg_vol is not None and avg_vs_pct is not None and window > 1:
                 sign_a = "+" if avg_vs_pct > 0 else ""
                 avg_str = f"{avg_vol:.2f}亿（{sign_a}{avg_vs_pct:.1f}%）"
-                avg_color = _vol_color(avg_vs_pct)
+                avg_color = _vol_color_ramp(avg_vs_pct)
                 avg_hint = f"扣抵日+后续{window - 1}日均量"
             else:
                 avg_str = "—"
@@ -306,14 +306,57 @@ def render_index_section(code: str, name: str, end_date: str = None):
     with vol_col:
         st.markdown("**成交量分析**")
         vol = volume_analysis(df)
-        vol_rows = [
-            {"指标": "今日量", "值": f"{vol.get('latest_vol', 0):.0f}"},
-            {"指标": "5日均量", "值": f"{vol.get('ma5_vol', 0):.0f}"},
-            {"指标": "vs MA5", "值": f"{vol.get('vs_ma5_pct', 0):+.1f}%"},
-            {"指标": "vs MA20", "值": f"{vol.get('vs_ma20_pct', 0):+.1f}%"},
-            {"指标": "量能判定", "值": vol.get("label", "N/A")},
-        ]
-        st.dataframe(pd.DataFrame(vol_rows), hide_index=True, width="stretch")
+
+        def _vol_trend_color(t: str) -> str:
+            if "上升" in t or "上行" in t: return "#e53935"
+            if "下降" in t or "下行" in t: return "#43a047"
+            return "#999"
+
+        def _vol_cross_color(cs: str) -> str:
+            if "金叉" in cs: return "#e53935"
+            if "死叉" in cs: return "#43a047"
+            return "#999"
+
+        # Build styled volume analysis table
+        vol_rows = []
+        # 1. 今日成交量
+        lv = vol.get("latest_vol_yi")
+        vol_rows.append(("今日成交量", f"{lv:.2f}亿" if lv else "N/A", None))
+        # 2. 5日成交量趋势
+        t5 = vol.get("trend_5d", "")
+        vol_rows.append(("5日量趋势", t5, _vol_trend_color(t5)))
+        # 3. 5日均量
+        m5 = vol.get("ma5_yi")
+        v5 = vol.get("vs_ma5_pct", 0)
+        sign5 = "+" if v5 > 0 else ""
+        vol_rows.append(("5日均量", f"{m5:.2f}亿（{sign5}{v5:.1f}%）" if m5 else "N/A", "#e53935" if v5 > 0 else ("#43a047" if v5 < 0 else "#999")))
+        # 4. 10日均量
+        m10 = vol.get("ma10_yi")
+        v10 = vol.get("vs_ma10_pct", 0)
+        sign10 = "+" if v10 > 0 else ""
+        vol_rows.append(("10日均量", f"{m10:.2f}亿（{sign10}{v10:.1f}%）" if m10 else "N/A", "#e53935" if v10 > 0 else ("#43a047" if v10 < 0 else "#999")))
+        # 5. 均量状态
+        cs = vol.get("cross_state") or "—"
+        cd = vol.get("cross_days", 0)
+        if cd and cs in ("金叉", "死叉"):
+            cs_str = f"{cs} {cd}天"
+        else:
+            cs_str = cs
+        vol_rows.append(("均量状态", cs_str, _vol_cross_color(cs_str)))
+
+        rows_html = ""
+        for label, value, color in vol_rows:
+            color_attr = f"color:{color};" if color else ""
+            rows_html += f"""<tr>
+                <td style="color:#888;text-align:left;">{label}</td>
+                <td style="{color_attr}font-weight:bold;text-align:right;">{value}</td>
+            </tr>"""
+
+        st.html(f"""
+        <table style="width:100%;font-size:15px;border-collapse:collapse;">
+            <tbody>{rows_html}</tbody>
+        </table>
+        """)
 
     st.divider()
 

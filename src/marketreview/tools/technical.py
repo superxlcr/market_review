@@ -108,20 +108,92 @@ def ma_arrangement(df: pd.DataFrame) -> str:
 
 
 def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
-    """Analyze volume: latest vol vs 5/20-day average."""
+    """
+    Enhanced volume analysis:
+      - latest_vol_yi: 今日成交量（亿）
+      - ma5_yi, ma10_yi: 5/10日均量（亿）
+      - vs_ma5_pct, vs_ma10_pct: 今日量 vs 均量 %
+      - trend_5d: 5日成交量趋势（持续上升/偏多上行/震荡/偏空下行/持续下降）
+      - cross_state: 均量状态（金叉/死叉/多头/空头）
+      - cross_days: 金叉/死叉持续天数
+    """
     if df.empty or "vol" not in df.columns:
         return {}
-    latest_vol = df["vol"].iloc[-1]
-    ma5_vol = df["vol"].rolling(5).mean().iloc[-1]
-    ma20_vol = df["vol"].rolling(20).mean().iloc[-1]
-    vs_ma5 = (latest_vol / ma5_vol - 1) * 100 if not np.isnan(ma5_vol) else 0
-    vs_ma20 = (latest_vol / ma20_vol - 1) * 100 if not np.isnan(ma20_vol) else 0
+
+    vol_series = df["vol"].astype(float)
+    latest_vol = float(vol_series.iloc[-1])
+    latest_vol_yi = round(latest_vol / 1e8, 2)   # 手 → 亿
+
+    ma5 = vol_series.rolling(5).mean()
+    ma10 = vol_series.rolling(10).mean()
+
+    latest_ma5 = float(ma5.iloc[-1])
+    latest_ma10 = float(ma10.iloc[-1])
+
+    ma5_yi = round(latest_ma5 / 1e8, 2)
+    ma10_yi = round(latest_ma10 / 1e8, 2)
+
+    vs_ma5 = round((latest_vol / latest_ma5 - 1) * 100, 1) if not np.isnan(latest_ma5) else 0
+    vs_ma10 = round((latest_vol / latest_ma10 - 1) * 100, 1) if not np.isnan(latest_ma10) else 0
+
+    # ---- 5-day volume trend ----
+    last5 = vol_series.iloc[-5:].tolist()
+    if len(last5) >= 5:
+        ups = sum(1 for i in range(1, 5) if last5[i] > last5[i-1])
+        if ups == 4:
+            trend_5d = "持续上升"
+        elif ups == 3:
+            trend_5d = "偏多上行"
+        elif ups == 1:
+            trend_5d = "偏空下行"
+        elif ups == 0:
+            trend_5d = "持续下降"
+        else:
+            trend_5d = "量能震荡"
+    else:
+        trend_5d = "数据不足"
+
+    # ---- 均量交叉检测 (MA5 vs MA10) ----
+    cross_state = None
+    cross_days = 0
+
+    ma5_vals = ma5.dropna().tolist()
+    ma10_vals = ma10.dropna().tolist()
+    if len(ma5_vals) >= 2 and len(ma10_vals) >= 2:
+        n = min(len(ma5_vals), len(ma10_vals))
+        a5 = ma5_vals[-n:]
+        a10 = ma10_vals[-n:]
+
+        # Walk backwards to find most recent cross
+        for i in range(len(a5) - 1, 0, -1):
+            prev_diff = a5[i-1] - a10[i-1]
+            curr_diff = a5[i] - a10[i]
+            if prev_diff <= 0 and curr_diff > 0:
+                cross_state = "金叉"
+                cross_days = len(a5) - 1 - i
+                break
+            elif prev_diff >= 0 and curr_diff < 0:
+                cross_state = "死叉"
+                cross_days = len(a5) - 1 - i
+                break
+
+        if cross_state is None:
+            # No recent cross found — just report current alignment
+            if a5[-1] > a10[-1]:
+                cross_state = "多头"
+            else:
+                cross_state = "空头"
+            cross_days = 0
+
     return {
-        "latest_vol": round(float(latest_vol), 0),
-        "ma5_vol": round(float(ma5_vol), 0),
-        "vs_ma5_pct": round(float(vs_ma5), 1),
-        "vs_ma20_pct": round(float(vs_ma20), 1),
-        "label": "放量" if vs_ma5 > 5 else ("缩量" if vs_ma5 < -5 else "量平"),
+        "latest_vol_yi": latest_vol_yi,
+        "ma5_yi": ma5_yi,
+        "ma10_yi": ma10_yi,
+        "vs_ma5_pct": vs_ma5,
+        "vs_ma10_pct": vs_ma10,
+        "trend_5d": trend_5d,
+        "cross_state": cross_state,
+        "cross_days": cross_days,
     }
 
 
