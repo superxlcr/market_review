@@ -337,9 +337,6 @@ else:
             up_chg = _up - _yup
             if abs(up_chg) > 50:
                 hints.append(f'上涨家数{"↑" if up_chg > 0 else "↓"}{abs(up_chg)}')
-            dl_chg = _dl - _ydl
-            if dl_chg > 3:
-                hints.append(f'跌停数↑{dl_chg}')
             hint_str = "  |  ".join(hints) if hints else ""
             hint_color = "#e53935" if up_chg >= 0 else "#43a047"
 
