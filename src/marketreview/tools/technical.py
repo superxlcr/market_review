@@ -278,6 +278,60 @@ def _interpret_candle(bullish: bool, body_pct: float, upper_pct: float, lower_pc
     return "；".join(parts) if parts else "普通K线"
 
 
+# ------- MA offset / role helpers (shared by Agent tools & dashboard) -------
+
+def get_offset_info(df: pd.DataFrame, period: int) -> dict[str, Any]:
+    """
+    Returns dict with keys:
+      offset_date, offset_amount_yi, vs_today_pct,
+      avg_offset_amount_yi, avg_vs_today_pct, window
+
+    扣抵日 = N trading days before today (date-ascending df).
+    扣抵量 = turnover on that single day (in 亿).
+    后续均量 = average turnover from 扣抵日 (inclusive) forward window days.
+               Window: MA5/10→1, MA20/60/120/240→5.
+    pct = (今日量 / xx量 - 1) * 100: 正=今日量更大=安全, 负=今日量不足=危险。
+    """
+    idx = len(df) - 1 - period
+    if idx < 0:
+        return {"offset_date": "N/A", "offset_amount_yi": None, "vs_today_pct": None,
+                "avg_offset_amount_yi": None, "avg_vs_today_pct": None, "window": 0}
+
+    # Window size for后续均量: MA5/10不取, 其余统一5天
+    window = 1 if period <= 10 else 5
+
+    today_amount = float(df.iloc[-1]["amount"]) / 1e5   # 千元 → 亿
+
+    # 单日扣抵量
+    offset_amount = float(df.iloc[idx]["amount"]) / 1e5
+    vs_today_pct = round((today_amount / offset_amount - 1) * 100, 1)
+
+    # 后续均量: 扣抵日 + 后续 window-1 天
+    end_idx = min(idx + window, len(df))
+    window_amounts = [float(df.iloc[i]["amount"]) / 1e5 for i in range(idx, end_idx)]
+    avg_offset_amount = round(sum(window_amounts) / len(window_amounts), 2)
+    avg_vs_today_pct = round((today_amount / avg_offset_amount - 1) * 100, 1)
+
+    return {
+        "offset_date": str(df.iloc[idx]["date"])[:10],
+        "offset_amount_yi": round(offset_amount, 2),
+        "vs_today_pct": vs_today_pct,
+        "avg_offset_amount_yi": avg_offset_amount,
+        "avg_vs_today_pct": avg_vs_today_pct,
+        "window": window,
+    }
+
+
+def get_ma_role(price: float, ma_val: float, direction: str) -> str:
+    """Determine MA role: 支撑/压制/拖拽/无, combining direction + price position."""
+    if direction == "→":
+        return "无"
+    if direction == "↑":
+        return "支撑" if price > ma_val else "向上拖拽"
+    # ↓
+    return "压制" if price < ma_val else "向下拖拽"
+
+
 # ------- Summary builder (called by Agent tools) -------
 
 def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str, Any]:

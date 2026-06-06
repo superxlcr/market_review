@@ -55,8 +55,8 @@ class GetMarketBreadthInput(BaseModel):
 class GetMarketBreadthTool(BaseTool):
     name: str = "get_market_breadth"
     description: str = (
-        "获取全市场宽度数据：涨跌家数比、涨停跌停数、两市成交额。"
-        "数据从 Tushare 的 limit_list 和 daily_basic 接口获取。"
+        "获取全市场宽度数据：涨跌家数比、涨停跌停数、各交易所成交额。"
+        "数据通过 DataProvider 获取。"
     )
     args_schema: Type[BaseModel] = GetMarketBreadthInput
 
@@ -64,39 +64,12 @@ class GetMarketBreadthTool(BaseTool):
         if _data_provider is None:
             return json.dumps({"error": "DataProvider未初始化"}, ensure_ascii=False)
         try:
-            api = _data_provider._api
+            breadth = _data_provider.get_market_breadth(trade_date)
+            if breadth is None:
+                return json.dumps({"error": f"无 {trade_date} 市场宽度数据"}, ensure_ascii=False)
 
-            # 全市场个股行情：close/pre_close 算涨跌比，amount 算总成交额
-            daily = api.daily(
-                trade_date=trade_date,
-                fields="ts_code,close,pre_close,amount",
-            )
-            if daily is None or daily.empty:
-                return json.dumps({"error": f"daily 无 {trade_date} 数据"}, ensure_ascii=False)
-
-            up = int(len(daily[daily["close"] > daily["pre_close"]]))
-            down = int(len(daily[daily["close"] < daily["pre_close"]]))
-            flat = int(len(daily[daily["close"] == daily["pre_close"]]))
-
-            # 总成交额（千元 → 亿元）
-            total_amount = float(daily["amount"].sum())
-            total_amount_yi = round(total_amount / 1e5, 0)
-
-            # 涨停跌停
-            try:
-                limits = api.limit_list(trade_date=trade_date, limit_type="U,D")
-                up_limit = int(len(limits[limits["limit"] == "U"])) if limits is not None and not limits.empty else 0
-                down_limit = int(len(limits[limits["limit"] == "D"])) if limits is not None and not limits.empty else 0
-            except Exception:
-                up_limit, down_limit = 0, 0
-
-            return json.dumps({
-                "trade_date": trade_date,
-                "up": up, "down": down, "flat": flat,
-                "up_down_ratio": f"{up}:{down}",
-                "up_limit": up_limit, "down_limit": down_limit,
-                "total_amount_yi": total_amount_yi,
-            }, ensure_ascii=False, indent=2)
+            breadth["up_down_ratio"] = f"{breadth['up']}:{breadth['down']}"
+            return json.dumps(breadth, ensure_ascii=False, indent=2)
         except Exception as e:
             return json.dumps({"error": str(e)}, ensure_ascii=False)
 

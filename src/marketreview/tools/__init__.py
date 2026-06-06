@@ -9,4 +9,6 @@ from .technical import (
     calc_bias,
     kline_pattern,
     build_technical_summary,
+    get_offset_info,
+    get_ma_role,
 )

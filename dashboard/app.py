@@ -27,6 +27,8 @@ from marketreview.tools.technical import (
     calc_rsi,
     calc_bias,
     kline_pattern,
+    get_offset_info,
+    get_ma_role,
 )
 
 st.set_page_config(page_title="A股复盘", page_icon="📊", layout="wide")
@@ -57,43 +59,6 @@ def load_data(code: str, lookback: int = 360, end_date: str = None):
     return df
 
 
-def get_offset_info(df: pd.DataFrame, period: int):
-    """
-    Returns (扣抵日, 扣抵量_亿, 今日量vs扣抵量_pct,
-             后续均量_亿, 今日量vs后续均量_pct, 窗口天数).
-
-    扣抵日 = N trading days before today (date-ascending df).
-    扣抵量 = turnover on that single day (in 亿).
-    后续均量 = average turnover from 扣抵日 (inclusive) forward window days.
-               Window: MA5/10→1, MA20/60/120/240→5.
-    pct = (今日量 / xx量 - 1) * 100: 正=今日量更大=安全, 负=今日量不足=危险。
-    """
-    idx = len(df) - 1 - period
-    if idx < 0:
-        return "N/A", None, None, None, None, 0
-
-    # Window size for后续均量: MA5/10不取, 其余统一5天
-    if period <= 10:
-        window = 1
-    else:
-        window = 5
-
-    today_amount = float(df.iloc[-1]["amount"]) / 1e5   # 千元 → 亿
-
-    # 单日扣抵量
-    offset_amount = float(df.iloc[idx]["amount"]) / 1e5
-    vs_today_pct = round((today_amount / offset_amount - 1) * 100, 1)
-
-    # 后续均量: 扣抵日 + 后续 window-1 天
-    end_idx = min(idx + window, len(df))
-    window_amounts = [float(df.iloc[i]["amount"]) / 1e5 for i in range(idx, end_idx)]
-    avg_offset_amount = round(sum(window_amounts) / len(window_amounts), 2)
-    avg_vs_today_pct = round((today_amount / avg_offset_amount - 1) * 100, 1)
-
-    return (str(df.iloc[idx]["date"])[:10], round(offset_amount, 2), vs_today_pct,
-            avg_offset_amount, avg_vs_today_pct, window)
-
-
 def _vol_color_ramp(pct: float) -> str:
     """Volume comparison color: gray(#999) at 0%, fully saturated red/green at 20%+."""
     abs_pct = abs(pct)
@@ -104,21 +69,6 @@ def _vol_color_ramp(pct: float) -> str:
         r, g, b = 153 - 86 * t, 153 + 7 * t, 153 - 82 * t     # → green(67,160,71)
     return f"rgb({int(r)},{int(g)},{int(b)})"
 
-
-def ma_role(price: float, ma_val: float, direction: str) -> str:
-    """Determine MA role: 支撑/压制/拖拽/无, combining direction + price position."""
-    if direction == "→":
-        return "无"
-    if direction == "↑":
-        if price > ma_val:
-            return "支撑"
-        else:
-            return "向上拖拽"   # price below MA but MA rising → pulling up
-    else:  # ↓
-        if price < ma_val:
-            return "压制"
-        else:
-            return "向下拖拽"   # price above MA but MA falling → pulling down
 
 
 def latest_val(series: list[float]) -> float | None:
@@ -252,8 +202,14 @@ def render_index_section(code: str, name: str, end_date: str = None):
             ma_key = f"MA{p}"
             ma_val = latest_val(mas[ma_key])
             direction = ma_dirs.get(ma_key, "→")
-            role = ma_role(price, ma_val, direction) if ma_val else "N/A"
-            offset_date, offset_amount, offset_vs_pct, avg_amount, avg_vs_pct, window = get_offset_info(df, p)
+            role = get_ma_role(price, ma_val, direction) if ma_val else "N/A"
+            offset = get_offset_info(df, p)
+            offset_date = offset["offset_date"]
+            offset_amount = offset["offset_amount_yi"]
+            offset_vs_pct = offset["vs_today_pct"]
+            avg_amount = offset["avg_offset_amount_yi"]
+            avg_vs_pct = offset["avg_vs_today_pct"]
+            window = offset["window"]
             val_str = f"{ma_val:.2f}" if ma_val else "N/A"
             if offset_amount is not None and offset_vs_pct is not None:
                 sign_v = "+" if offset_vs_pct > 0 else ""
