@@ -54,24 +54,56 @@ def ma_direction(ma_values: list[float]) -> str:
 
 def ma_arrangement(df: pd.DataFrame) -> str:
     """
-    Determine MA arrangement: 多头排列 / 空头排列 / 缠绕.
-    Uses latest MA5/10/20/60 values.
+    Determine MA arrangement by splitting into two groups:
+      - 短期: MA5 / MA10 / MA20
+      - 中长期: MA60 / MA120 / MA240
+
+    Each group is classified as 多头 / 空头 / 缠绕, then combined.
     """
     mas = calc_ma(df, [5, 10, 20, 60, 120, 240])
-    latest = {}
-    for k, v in mas.items():
-        for val in reversed(v):
-            if not np.isnan(val):
-                latest[k] = val
-                break
-    if len(latest) < 3:
+
+    def _latest(ma_key: str) -> float | None:
+        for v in reversed(mas[ma_key]):
+            if not np.isnan(v):
+                return float(v)
+        return None
+
+    short = [v for v in (_latest(f"MA{p}") for p in [5, 10, 20]) if v is not None]
+    medium_long = [v for v in (_latest(f"MA{p}") for p in [60, 120, 240]) if v is not None]
+
+    def _judge(vals: list[float]) -> str:
+        if len(vals) < 2:
+            return "数据不足"
+        if all(vals[i] > vals[i+1] for i in range(len(vals)-1)):
+            return "多头"
+        if all(vals[i] < vals[i+1] for i in range(len(vals)-1)):
+            return "空头"
+        return "缠绕"
+
+    s = _judge(short)
+    ml = _judge(medium_long)
+
+    if "数据不足" in (s, ml):
         return "数据不足"
 
-    vals = [latest.get(f"MA{p}") for p in [5, 10, 20, 60, 120, 240] if latest.get(f"MA{p}") is not None]
-    if all(vals[i] > vals[i+1] for i in range(len(vals)-1)):
+    # Combine
+    if s == "多头" and ml == "多头":
         return "多头排列"
-    if all(vals[i] < vals[i+1] for i in range(len(vals)-1)):
+    if s == "空头" and ml == "空头":
         return "空头排列"
+    if s == "多头" and ml == "缠绕":
+        return "短期偏多，中长期缠绕"
+    if s == "多头" and ml == "空头":
+        return "短期偏多，中长期偏空"
+    if s == "缠绕" and ml == "多头":
+        return "短期缠绕，中长期偏多"
+    if s == "缠绕" and ml == "空头":
+        return "短期缠绕，中长期偏空"
+    if s == "空头" and ml == "多头":
+        return "短期偏空，中长期偏多"
+    if s == "空头" and ml == "缠绕":
+        return "短期偏空，中长期缠绕"
+    # both 缠绕
     return "均线缠绕"
 
 

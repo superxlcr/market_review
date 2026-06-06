@@ -59,16 +59,19 @@ def load_data(code: str, lookback: int = 360, end_date: str = None):
 
 def get_offset_info(df: pd.DataFrame, period: int):
     """
-    Returns (扣抵日, 扣抵价) for MA period.
+    Returns (扣抵日, 扣抵量_亿, 今日量vs扣抵量_pct) for MA period.
     扣抵日 = N trading days before today (date-ascending df).
-    扣抵价 = close price on that day.
-    If today's close > 扣抵价, MA will keep rising; if <, MA will turn down.
+    扣抵量 = volume on that day (in 亿).
+    pct = (今日量 / 扣抵量 - 1) * 100: 正=今日量更足=安全, 负=今日量不足=危险。
     """
     idx = len(df) - 1 - period
     if idx < 0:
-        return "N/A", None
+        return "N/A", None, None
     row = df.iloc[idx]
-    return str(row["date"])[:10], round(float(row["close"]), 2)
+    today_vol = float(df.iloc[-1]["vol"]) / 1e8   # 手 → 亿
+    offset_vol = float(row["vol"]) / 1e8
+    vs_today_pct = round((today_vol / offset_vol - 1) * 100, 1)
+    return str(row["date"])[:10], round(offset_vol, 2), vs_today_pct
 
 
 def ma_role(price: float, ma_val: float, direction: str) -> str:
@@ -219,16 +222,37 @@ def render_index_section(code: str, name: str, end_date: str = None):
             ma_val = latest_val(mas[ma_key])
             direction = ma_dirs.get(ma_key, "→")
             role = ma_role(price, ma_val, direction) if ma_val else "N/A"
-            offset_date, offset_price = get_offset_info(df, p)
+            offset_date, offset_vol, offset_vs_pct = get_offset_info(df, p)
             val_str = f"{ma_val:.2f}" if ma_val else "N/A"
-            off_str = f"{offset_price:.2f}" if offset_price else "N/A"
+            if offset_vol is not None and offset_vs_pct is not None:
+                sign_v = "+" if offset_vs_pct > 0 else ""
+                off_str = f"{offset_vol:.2f}亿（{sign_v}{offset_vs_pct:.1f}%）"
+                # 今日量 > 扣抵量（+%）→ 量能充足 = 安全红色
+                # 今日量 < 扣抵量（-%）→ 量能不足 = 危险绿色
+                # 颜色插值：0% = 灰色(#999)，20%+ = 完全红/绿饱和
+                abs_pct = abs(offset_vs_pct)
+                t = min(abs_pct / 20.0, 1.0)  # 0..1
+                if offset_vs_pct > 0:
+                    # gray(153,153,153) → red(229,57,53)
+                    r = int(153 + (229 - 153) * t)
+                    g = int(153 + (57 - 153) * t)
+                    b = int(153 + (53 - 153) * t)
+                else:
+                    # gray(153,153,153) → green(67,160,71)
+                    r = int(153 + (67 - 153) * t)
+                    g = int(153 + (160 - 153) * t)
+                    b = int(153 + (71 - 153) * t)
+                off_color = f"rgb({r},{g},{b})"
+            else:
+                off_str = "N/A"
+                off_color = "#999"
             rows_html += f"""<tr>
                 <td style="font-weight:600;text-align:center;">{ma_key}</td>
                 <td style="text-align:right;">{val_str}</td>
                 <td style="color:{_dir_color(direction)};font-weight:bold;text-align:center;">{direction}</td>
                 <td style="color:{_role_color(role)};font-weight:bold;text-align:center;">{role}</td>
                 <td style="color:#888;text-align:center;">{offset_date}</td>
-                <td style="color:#888;text-align:right;">{off_str}</td>
+                <td style="color:{off_color};font-weight:bold;text-align:right;">{off_str}</td>
             </tr>"""
 
         st.html(f"""
@@ -239,12 +263,12 @@ def render_index_section(code: str, name: str, end_date: str = None):
                 <th style="text-align:center;">方向</th>
                 <th style="text-align:center;">作用</th>
                 <th style="text-align:center;">扣抵日</th>
-                <th style="text-align:right;">扣抵价</th>
+                <th style="text-align:right;">扣抵量</th>
             </tr></thead>
             <tbody>{rows_html}</tbody>
         </table>
         """)
-        st.caption("扣抵: 今日收盘 > 扣抵价 → MA继续上行；今日收盘 < 扣抵价 → MA拐头下行")
+        st.caption("扣抵量: 量先价行 — 今日量 > 扣抵量（红色）= 量能充足容易突破；今日量 < 扣抵量（绿色）= 量能不足压力大；颜色越淡幅度越小")
 
         arrangement = ma_arrangement(df)
         st.markdown(f"**均线排列:** {arrangement}")

@@ -31,7 +31,8 @@
       "Bash(repo diff *)",
       "Bash(repo forall -c git log *)",
       "Bash(repo forall -c git status *)",
-      "WebFetch(domain:tushare.pro)"
+      "WebFetch(domain:tushare.pro)",
+      "Bash(rm -f \"i:/AIcode/marketreview/,\")"
     ],
     "ask": [
       "Bash(git add *)",
