@@ -64,30 +64,38 @@ class GetMarketBreadthTool(BaseTool):
         if _data_provider is None:
             return json.dumps({"error": "DataProvider未初始化"}, ensure_ascii=False)
         try:
-            # Use tushare daily_basic + limit_list for breadth
             api = _data_provider._api
-            # daily_basic — all stocks on this date
-            basic = api.daily_basic(trade_date=trade_date, fields="ts_code,close,pre_close")
-            if basic is None or basic.empty:
-                return json.dumps({"error": f"daily_basic 无 {trade_date} 数据"}, ensure_ascii=False)
 
-            up = len(basic[basic["close"] > basic["pre_close"]])
-            down = len(basic[basic["close"] < basic["pre_close"]])
-            flat = len(basic[basic["close"] == basic["pre_close"]])
+            # 全市场个股行情：close/pre_close 算涨跌比，amount 算总成交额
+            daily = api.daily(
+                trade_date=trade_date,
+                fields="ts_code,close,pre_close,amount",
+            )
+            if daily is None or daily.empty:
+                return json.dumps({"error": f"daily 无 {trade_date} 数据"}, ensure_ascii=False)
 
-            # limit_list
-            limits = api.limit_list(trade_date=trade_date, limit_type="U,D")
-            up_limit = len(limits[limits["limit"] == "U"]) if limits is not None and not limits.empty else 0
-            down_limit = len(limits[limits["limit"] == "D"]) if limits is not None and not limits.empty else 0
+            up = int(len(daily[daily["close"] > daily["pre_close"]]))
+            down = int(len(daily[daily["close"] < daily["pre_close"]]))
+            flat = int(len(daily[daily["close"] == daily["pre_close"]]))
 
-            # total turnover (approximate from daily_basic amount col if available)
-            total_amount = float(basic["amount"].sum()) if "amount" in basic.columns else 0
+            # 总成交额（千元 → 亿元）
+            total_amount = float(daily["amount"].sum())
+            total_amount_yi = round(total_amount / 1e5, 0)
+
+            # 涨停跌停
+            try:
+                limits = api.limit_list(trade_date=trade_date, limit_type="U,D")
+                up_limit = int(len(limits[limits["limit"] == "U"])) if limits is not None and not limits.empty else 0
+                down_limit = int(len(limits[limits["limit"] == "D"])) if limits is not None and not limits.empty else 0
+            except Exception:
+                up_limit, down_limit = 0, 0
 
             return json.dumps({
                 "trade_date": trade_date,
-                "up": int(up), "down": int(down), "flat": int(flat),
-                "up_limit": int(up_limit), "down_limit": int(down_limit),
-                "total_amount_yi": round(total_amount / 1e8, 0),
+                "up": up, "down": down, "flat": flat,
+                "up_down_ratio": f"{up}:{down}",
+                "up_limit": up_limit, "down_limit": down_limit,
+                "total_amount_yi": total_amount_yi,
             }, ensure_ascii=False, indent=2)
         except Exception as e:
             return json.dumps({"error": str(e)}, ensure_ascii=False)

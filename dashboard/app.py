@@ -7,6 +7,10 @@ import os
 import sys
 import pandas as pd
 import numpy as np
+from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Ensure src is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -250,41 +254,94 @@ st.caption("Agent 1 — 大盘分析")
 # ============ 市场概览 ============
 st.header("📈 市场概览")
 
-# Try to read breadth from cache/tool output
+
+@st.cache_data(ttl=300)
+def load_market_breadth(trade_date: str):
+    """Fetch total market turnover and up/down ratio from Tushare daily endpoint."""
+    try:
+        import tushare as ts
+        token = os.environ.get("TUSHARE_TOKEN", "")
+        if not token:
+            return None
+        ts.set_token(token)
+        api = ts.pro_api()
+        daily = api.daily(
+            trade_date=trade_date,
+            fields="ts_code,close,pre_close,amount",
+        )
+        if daily is None or daily.empty:
+            return None
+        up = int(len(daily[daily["close"] > daily["pre_close"]]))
+        down = int(len(daily[daily["close"] < daily["pre_close"]]))
+        flat = int(len(daily[daily["close"] == daily["pre_close"]]))
+        total_yi = float(daily["amount"].sum()) / 1e5  # 千元→亿元
+        return {"up": up, "down": down, "flat": flat, "total_yi": total_yi}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# Get latest trade date from cache
 cm = CacheManager()
-# Check if we have the data in report.md for basic numbers
+latest_date = cm.get_latest_date("000001.SH")
+if latest_date:
+    trade_date_str = latest_date.replace("-", "")
+else:
+    trade_date_str = datetime.now().strftime("%Y%m%d")
+
+breadth = load_market_breadth(trade_date_str)
+
 breadth_col1, breadth_col2, breadth_col3 = st.columns(3)
 
 with breadth_col1:
     st.markdown("**涨跌比**")
-    st.info("等待 market_breadth 工具就绪\n\n运行 Agent 1 后此处显示：\n- 上涨/下跌家数\n- 涨停/跌停数")
+    if breadth and "error" not in breadth:
+        up, down, flat = breadth["up"], breadth["down"], breadth["flat"]
+        total_stocks = up + down + flat
+        up_pct = up / total_stocks * 100 if total_stocks else 0
+        st.metric("上涨家数", f"{up}", delta=f"{up_pct:.0f}%")
+        st.caption(f"下跌 {down}  |  平盘 {flat}  |  涨跌比 {up}:{down}")
+    else:
+        st.info("TUSHARE_TOKEN 未配置或数据获取失败")
 
 with breadth_col2:
-    st.markdown("**成交额**")
-    # Compute from cached data
-    try:
-        df_sh = load_data("000001.SH")
-        df_cy = load_data("399006.SZ")
-        if not df_sh.empty and not df_cy.empty:
-            sh_amt = float(df_sh["amount"].iloc[-1]) / 1e8
-            cy_amt = float(df_cy["amount"].iloc[-1]) / 1e8
-            sh_amt_prev = float(df_sh["amount"].iloc[-2]) / 1e8
-            cy_amt_prev = float(df_cy["amount"].iloc[-2]) / 1e8
-            total = sh_amt + cy_amt
-            total_prev = sh_amt_prev + cy_amt_prev
-            delta = (total / total_prev - 1) * 100 if total_prev else 0
-            st.metric("两市成交额（估算）", f"{total:.0f} 亿", delta=f"{delta:+.1f}%")
-            st.caption(f"上证 {sh_amt:.0f}亿 | 创业板 {cy_amt:.0f}亿")
-    except Exception:
-        st.info("暂无成交额数据")
+    st.markdown("**两市成交额**")
+    if breadth and "error" not in breadth:
+        total_yi = breadth["total_yi"]
+        # Get prev day for delta
+        from datetime import timedelta
+        prev_date = (datetime.strptime(trade_date_str, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+        prev_breadth = load_market_breadth(prev_date)
+        delta_str = None
+        if prev_breadth and "error" not in prev_breadth:
+            prev_yi = prev_breadth["total_yi"]
+            delta_pct = (total_yi / prev_yi - 1) * 100 if prev_yi else 0
+            delta_str = f"{delta_pct:+.1f}%"
+        st.metric(
+            "全市场成交额",
+            f"{total_yi:,.0f} 亿",
+            delta=delta_str,
+        )
+        st.caption(f"{total_yi/10000:.2f} 万亿  |  交易日: {trade_date_str}")
+    else:
+        st.info("TUSHARE_TOKEN 未配置或数据获取失败")
 
 with breadth_col3:
-    st.markdown("**量能趋势**")
-    if not df_sh.empty:
-        recent_vols = [float(df_sh["amount"].iloc[-(i+1)]) / 1e8 for i in range(5)]
-        vol_trend = "↑ 放量" if recent_vols[0] > recent_vols[1] else ("↓ 缩量" if recent_vols[0] < recent_vols[1] else "→ 持平")
-        st.metric("近5日量能趋势", vol_trend)
-        st.caption(f"今日: {recent_vols[0]:.0f}亿 | 昨日: {recent_vols[1]:.0f}亿")
+    st.markdown("**涨停跌停**")
+    if breadth and "error" not in breadth:
+        try:
+            import tushare as ts
+            token = os.environ.get("TUSHARE_TOKEN", "")
+            ts.set_token(token)
+            api = ts.pro_api()
+            limits = api.limit_list(trade_date=trade_date_str, limit_type="U,D")
+            up_limit = int(len(limits[limits["limit"] == "U"])) if limits is not None and not limits.empty else 0
+            down_limit = int(len(limits[limits["limit"] == "D"])) if limits is not None and not limits.empty else 0
+            st.metric("涨停", f"{up_limit}")
+            st.caption(f"跌停 {down_limit}")
+        except Exception:
+            st.info("涨停跌停数据获取失败")
+    else:
+        st.info("待数据就绪")
 
 st.divider()
 
