@@ -23,15 +23,20 @@ class DataProvider:
         """
         Return recent daily K-line rows (date DESC) for `code`.
         Tries cache first; fetches missing range from tushare and writes cache.
+        Checks both count AND freshness — stale cache triggers a re-fetch.
         """
         cached = self.cache.get_daily(code, limit=lookback_days)
-
+        today = datetime.now()
         if len(cached) >= lookback_days:
-            return cached[:lookback_days]
+            latest_cached = cached[0]["date"].replace("-", "")  # handle both YYYYMMDD and YYYY-MM-DD
+            latest_dt = datetime.strptime(latest_cached, "%Y%m%d")
+            if (today - latest_dt).days <= 5:   # cache is recent enough
+                return cached[:lookback_days]
+            # Cache is stale — fall through to fetch
 
         # Determine fetch range
-        end_date = datetime.now().strftime("%Y%m%d")
-        desired_start = (datetime.now() - timedelta(days=lookback_days * 2)).strftime("%Y%m%d")
+        end_date = today.strftime("%Y%m%d")
+        desired_start = (today - timedelta(days=lookback_days * 2)).strftime("%Y%m%d")
         if cached:
             oldest = cached[-1]["date"].replace("-", "")
             # If cached data doesn't go back far enough (e.g. MA240 upgrade),

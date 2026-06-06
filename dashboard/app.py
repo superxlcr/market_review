@@ -51,8 +51,9 @@ def load_data(code: str, lookback: int = 360, end_date: str = None):
     rows = dp.get_daily(code, lookback_days=lookback)
     df = rows_to_df(rows)
     if end_date and not df.empty:
-        cutoff = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
-        df = df[df["date"] <= cutoff]
+        # Cache returns dates as YYYYMMDD; normalize to that for comparison
+        cutoff = end_date.replace("-", "")
+        df = df[df["date"].str.replace("-", "") <= cutoff]
     return df
 
 
@@ -281,14 +282,16 @@ def render_index_section(code: str, name: str, end_date: str = None):
 # Resolve trade date: query param ?date=YYYYMMDD, or latest from cache
 _query_date = st.query_params.get("date", None)
 if _query_date:
-    # Convert YYYYMMDD to YYYY-MM-DD for display
-    _display_date = f"{_query_date[:4]}-{_query_date[4:6]}-{_query_date[6:8]}"
+    _raw_date = _query_date
 else:
     _resolve_dp = DataProvider(tushare_token=os.environ.get("TUSHARE_TOKEN", ""))
-    _resolve_date = _resolve_dp.get_latest_trade_date("000001.SH")
-    _display_date = _resolve_date[:10] if _resolve_date else datetime.now().strftime("%Y-%m-%d")
-# trade_date in YYYYMMDD format for API calls
-_trade_date_yyyymmdd = _display_date.replace("-", "")
+    _raw_date = _resolve_dp.get_latest_trade_date("000001.SH")
+    if not _raw_date:
+        _raw_date = datetime.now().strftime("%Y%m%d")
+# Normalize to consistent formats (handle both YYYYMMDD and YYYY-MM-DD inputs)
+_raw_clean = _raw_date.replace("-", "")
+_display_date = f"{_raw_clean[:4]}-{_raw_clean[4:6]}-{_raw_clean[6:8]}"
+_trade_date_yyyymmdd = _raw_clean
 
 st.title(f"📊 A股复盘 Dashboard — {_display_date}")
 st.caption("Agent 1 — 大盘分析")
