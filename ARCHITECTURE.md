@@ -110,23 +110,28 @@ SQLite 缓存 CRUD，仅 DataProvider 内部使用。
 
 ```
 dashboard/
-  app.py                    Streamlit 页面
+  app.py                         Streamlit 页面骨架 (~520 lines)
+  services/
+    dashboard_service.py         DashboardService — 统一数据入口
+  rendering/
+    styles.py                    _vol_color_ramp(), up_down_color(), PAGE_CSS
+    charts.py                    plot_kline_with_ma(), plot_turnover_trend()
 
 src/marketreview/
   tools/
-    technical.py            技术分析函数库（Dashboard + Agent 共用）
-    market_tools.py          Agent 1 CrewAI 工具
-    contribution.py          指数权重贡献计算
-    __init__.py              导出清单
+    technical.py                 技术分析函数库（Dashboard + Agent 共用）
+    market_tools.py              Agent 1 CrewAI 工具
+    contribution.py              指数权重贡献计算
+    __init__.py                  导出清单
   data/
-    data_provider.py         数据层唯一入口
-    cache_manager.py         SQLite 缓存（内部）
-    schema.sql               DDL
+    data_provider.py             数据层唯一入口
+    cache_manager.py             SQLite 缓存（DataProvider 内部使用）
+    schema.sql                   DDL
   config/
-    agents.yaml              Agent 1 角色定义
-    tasks.yaml               Agent 1 任务描述
-  crew.py                    CrewAI crew 组装
-  main.py                    CLI 入口
+    agents.yaml                  Agent 1 角色定义
+    tasks.yaml                   Agent 1 任务描述
+  crew.py                        CrewAI crew 组装
+  main.py                        CLI 入口
 ```
 
 ## 相关文档

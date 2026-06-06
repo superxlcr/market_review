@@ -15,8 +15,6 @@ load_dotenv()
 # Ensure src is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from marketreview.data.cache_manager import CacheManager
-from marketreview.data.data_provider import DataProvider
 from marketreview.tools.technical import (
     rows_to_df,
     calc_ma,
@@ -30,45 +28,14 @@ from marketreview.tools.technical import (
     get_offset_info,
     get_ma_role,
 )
+from services.dashboard_service import DashboardService
+from rendering.styles import vol_color_ramp, up_down_color, PAGE_CSS
+from rendering.charts import plot_kline_with_ma, plot_turnover_trend
 
 st.set_page_config(page_title="A股复盘", page_icon="📊", layout="wide")
+st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-.streamlit-expanderHeader {
-    font-size: 1.44em !important;
-    font-weight: 600;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ------- Helpers -------
-
-
-@st.cache_data(ttl=300)
-def load_data(code: str, lookback: int = 360, end_date: str = None):
-    """Load K-line data via DataProvider (cache + auto-fetch from Tushare)."""
-    token = os.environ.get("TUSHARE_TOKEN", "")
-    dp = DataProvider(tushare_token=token)
-    rows = dp.get_daily(code, lookback_days=lookback)
-    df = rows_to_df(rows)
-    if end_date and not df.empty:
-        # Cache returns dates as YYYYMMDD; normalize to that for comparison
-        cutoff = end_date.replace("-", "")
-        df = df[df["date"].str.replace("-", "") <= cutoff]
-    return df
-
-
-def _vol_color_ramp(pct: float) -> str:
-    """Volume comparison color: gray(#999) at 0%, fully saturated red/green at 20%+."""
-    abs_pct = abs(pct)
-    t = min(abs_pct / 20.0, 1.0)
-    if pct > 0:
-        r, g, b = 153 + 76 * t, 153 - 96 * t, 153 - 100 * t   # → red(229,57,53)
-    else:
-        r, g, b = 153 - 86 * t, 153 + 7 * t, 153 - 82 * t     # → green(67,160,71)
-    return f"rgb({int(r)},{int(g)},{int(b)})"
-
+# ------- Utils -------
 
 
 def latest_val(series: list[float]) -> float | None:
@@ -79,53 +46,12 @@ def latest_val(series: list[float]) -> float | None:
     return None
 
 
-# ------- Chart -------
-
-
-def plot_kline_with_ma(df: pd.DataFrame, display_days: int = 60):
-    """Plotly candlestick + MA overlay. MAs computed on full data, chart shows last N days."""
-    import plotly.graph_objects as go
-
-    # Compute MAs on full dataset (needed for MA240)
-    mas = calc_ma(df)
-
-    # Slice to last display_days for display
-    plot_df = df.tail(display_days)
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Candlestick(
-        x=plot_df["date"], open=plot_df["open"], high=plot_df["high"],
-        low=plot_df["low"], close=plot_df["close"], name="K线",
-        increasing_line_color="#e53935", decreasing_line_color="#43a047",
-    ))
-
-    ma_colors = {"MA5": "#2196f3", "MA10": "#ff9800", "MA20": "#9c27b0",
-                 "MA60": "#4caf50", "MA120": "#ff5722", "MA240": "#795548"}
-    for name, color in ma_colors.items():
-        if name in mas:
-            ma_slice = mas[name][-display_days:]
-            fig.add_trace(go.Scatter(
-                x=plot_df["date"], y=ma_slice, mode="lines",
-                line=dict(color=color, width=1.2), name=name,
-            ))
-
-    fig.update_layout(
-        xaxis_rangeslider_visible=False,
-        template="plotly_white", height=420, margin=dict(l=20, r=20, t=20, b=20),
-        legend=dict(orientation="h", yanchor="top", y=1.08, xanchor="left", x=0),
-    )
-    fig.update_xaxes(title_text="", showticklabels=False)
-    fig.update_yaxes(title_text="价格")
-    return fig
-
-
 # ------- Index Section Builder -------
 
 
-def render_index_section(code: str, name: str, end_date: str = None):
+def render_index_section(service: DashboardService, code: str, name: str, end_date: str = None):
     """Render a full analysis section for one index."""
-    df = load_data(code, end_date=end_date)
+    df = service.get_index_data(code, end_date=end_date)
 
     if df.empty:
         st.warning(f"暂无 {name} 数据，请先运行 Agent 1 拉取数据")
@@ -214,7 +140,7 @@ def render_index_section(code: str, name: str, end_date: str = None):
             if offset_amount is not None and offset_vs_pct is not None:
                 sign_v = "+" if offset_vs_pct > 0 else ""
                 off_str = f"{offset_amount:.2f}亿（{sign_v}{offset_vs_pct:.1f}%）"
-                off_color = _vol_color_ramp(offset_vs_pct)
+                off_color = vol_color_ramp(offset_vs_pct)
             else:
                 off_str = "N/A"
                 off_color = "#999"
@@ -223,7 +149,7 @@ def render_index_section(code: str, name: str, end_date: str = None):
             if avg_amount is not None and avg_vs_pct is not None and window > 1:
                 sign_a = "+" if avg_vs_pct > 0 else ""
                 avg_str = f"{avg_amount:.2f}亿（{sign_a}{avg_vs_pct:.1f}%）"
-                avg_color = _vol_color_ramp(avg_vs_pct)
+                avg_color = vol_color_ramp(avg_vs_pct)
                 avg_hint = f"扣抵日+后续{window - 1}日均量"
             else:
                 avg_str = "—"
@@ -343,13 +269,15 @@ def render_index_section(code: str, name: str, end_date: str = None):
 
 # ------- Page -------
 
+# ======== Init DashboardService ========
+_service = DashboardService()
+
 # Resolve trade date: query param ?date=YYYYMMDD, or latest from cache
 _query_date = st.query_params.get("date", None)
 if _query_date:
     _raw_date = _query_date
 else:
-    _resolve_dp = DataProvider(tushare_token=os.environ.get("TUSHARE_TOKEN", ""))
-    _raw_date = _resolve_dp.get_latest_trade_date("000001.SH")
+    _raw_date = _service.get_latest_trade_date()
     if not _raw_date:
         _raw_date = datetime.now().strftime("%Y%m%d")
 # Normalize to consistent formats (handle both YYYYMMDD and YYYY-MM-DD inputs)
@@ -366,65 +294,9 @@ st.header("📈 市场概览")
 
 @st.cache_data(ttl=300)
 def load_market_overview(trade_date: str):
-    """Fetch complete market overview via DataProvider (no direct Tushare calls)."""
-    try:
-        token = os.environ.get("TUSHARE_TOKEN", "")
-        if not token:
-            return None
-        dp = DataProvider(tushare_token=token)
-
-        # --- Today ---
-        today = dp.get_market_breadth(trade_date)
-        if today is None:
-            return {"error": f"无法获取 {trade_date} 市场数据"}
-
-        # --- Yesterday (walk back calendar days to find previous trading day) ---
-        from datetime import datetime, timedelta
-        dt = datetime.strptime(trade_date, "%Y%m%d")
-        yesterday = None
-        for i in range(1, 10):
-            prev_date = (dt - timedelta(days=i)).strftime("%Y%m%d")
-            result = dp.get_market_breadth(prev_date)
-            if result is not None:
-                yesterday = result
-                break
-
-        # --- 10-day trend: use DataProvider to find trading days ---
-        index_rows = dp.get_daily("000001.SH", lookback_days=360)
-        all_trading_dates = sorted(set(
-            r["date"].replace("-", "") for r in index_rows
-        ), reverse=True)
-
-        # Only include trading days up to the requested date, then take first 10
-        trading_dates = [td for td in all_trading_dates if td <= trade_date]
-
-        trend = []
-        for td in trading_dates:
-            if len(trend) >= 10:
-                break
-            day_data = dp.get_market_breadth(td)
-            if day_data is not None:
-                trend.append({
-                    "date": td,
-                    "total_yi": day_data["total_yi"],
-                    "up": day_data["up"],
-                    "down": day_data["down"],
-                })
-        trend.reverse()  # chronological order
-
-        totals = [d["total_yi"] for d in trend]
-        avg_5d = round(sum(totals[-5:]) / min(5, len(totals)), 0) if totals else 0
-        avg_10d = round(sum(totals) / len(totals), 0) if totals else 0
-
-        return {
-            "today": today,
-            "yesterday": yesterday,
-            "trend": trend,
-            "avg_5d": avg_5d,
-            "avg_10d": avg_10d,
-        }
-    except Exception as e:
-        return {"error": str(e)}
+    """Fetch complete market overview via DashboardService."""
+    svc = DashboardService()
+    return svc.get_market_overview(trade_date)
 
 
 overview = load_market_overview(_trade_date_yyyymmdd)
@@ -628,13 +500,13 @@ st.divider()
 
 # ============ 上证指数 ============
 with st.expander("📈 上证指数 000001.SH", expanded=True):
-    render_index_section("000001.SH", "上证指数", end_date=_trade_date_yyyymmdd)
+    render_index_section(_service, "000001.SH", "上证指数", end_date=_trade_date_yyyymmdd)
 
 st.divider()
 
 # ============ 创业板指 ============
 with st.expander("📉 创业板指 399006.SZ", expanded=False):
-    render_index_section("399006.SZ", "创业板指", end_date=_trade_date_yyyymmdd)
+    render_index_section(_service, "399006.SZ", "创业板指", end_date=_trade_date_yyyymmdd)
 
 # ============ Agent 1 分析报告 ============
 st.divider()
