@@ -16,10 +16,12 @@ load_dotenv()
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from marketreview.data.cache_manager import CacheManager
+from marketreview.data.data_provider import DataProvider
 from marketreview.tools.technical import (
     rows_to_df,
     calc_ma,
     ma_arrangement,
+    ma_direction,
     volume_analysis,
     calc_kdj,
     calc_rsi,
@@ -42,11 +44,16 @@ st.markdown("""
 
 
 @st.cache_data(ttl=300)
-def load_data(code: str, lookback: int = 360):
-    """Load cached K-line data for a code."""
-    cm = CacheManager()
-    rows = cm.get_daily(code, limit=lookback)
-    return rows_to_df(rows)
+def load_data(code: str, lookback: int = 360, end_date: str = None):
+    """Load K-line data via DataProvider (cache + auto-fetch from Tushare)."""
+    token = os.environ.get("TUSHARE_TOKEN", "")
+    dp = DataProvider(tushare_token=token)
+    rows = dp.get_daily(code, lookback_days=lookback)
+    df = rows_to_df(rows)
+    if end_date and not df.empty:
+        cutoff = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
+        df = df[df["date"] <= cutoff]
+    return df
 
 
 def get_offset_info(df: pd.DataFrame, period: int):
@@ -64,11 +71,13 @@ def get_offset_info(df: pd.DataFrame, period: int):
 
 
 def ma_role(price: float, ma_val: float, direction: str) -> str:
-    """Determine MA role: 支撑 or 压制."""
+    """Determine MA role: 支撑 / 压制 / 无 (flat → no role)."""
+    if direction == "→":
+        return "无"
     if price > ma_val:
-        return "支撑" if direction == "↑" else "⚠压制"
+        return "支撑"
     else:
-        return "压制" if direction == "↓" else "⚠支撑"
+        return "压制"
 
 
 def latest_val(series: list[float]) -> float | None:
@@ -123,9 +132,9 @@ def plot_kline_with_ma(df: pd.DataFrame, display_days: int = 60):
 # ------- Index Section Builder -------
 
 
-def render_index_section(code: str, name: str):
+def render_index_section(code: str, name: str, end_date: str = None):
     """Render a full analysis section for one index."""
-    df = load_data(code)
+    df = load_data(code, end_date=end_date)
 
     if df.empty:
         st.warning(f"暂无 {name} 数据，请先运行 Agent 1 拉取数据")
@@ -144,16 +153,21 @@ def render_index_section(code: str, name: str):
 
     with ohlc_col:
         o = float(latest["open"])
+        today_vol = float(latest["vol"]) / 1e8   # 手 → 亿
+        yesterday_vol = float(prev["vol"]) / 1e8
 
         st.markdown("**K线数据**")
         prev_close = float(prev["close"])
         chg_pct = (price / prev_close - 1) * 100
         open_vs_prev = (o / prev_close - 1) * 100
+        vol_vs_prev = (today_vol / yesterday_vol - 1) * 100
 
         chg_color = "#e53935" if chg_pct >= 0 else "#43a047"
         open_color = "#e53935" if o >= prev_close else "#43a047"
+        vol_color = "#e53935" if vol_vs_prev >= 0 else "#43a047"
         sign_p = "+" if chg_pct >= 0 else ""
         sign_o = "+" if open_vs_prev >= 0 else ""
+        sign_v = "+" if vol_vs_prev >= 0 else ""
 
         st.html(f"""
         <div style="font-size:18px;line-height:2;">
@@ -161,6 +175,8 @@ def render_index_section(code: str, name: str):
             <div>今日开盘：<span style="color:{open_color};">{o:.2f}（{sign_o}{open_vs_prev:.2f}%）</span></div>
             <div>涨跌幅：<span style="color:{chg_color};font-weight:bold;">{sign_p}{chg_pct:.2f}%</span></div>
             <div>昨日收盘：<span>{prev_close:.2f}</span></div>
+            <div>今日成交量：<span style="color:{vol_color};">{today_vol:.2f}亿（{sign_v}{vol_vs_prev:.2f}%）</span></div>
+            <div>昨日成交量：<span style="color:#333;">{yesterday_vol:.2f}亿</span></div>
         </div>
         """)
 
@@ -178,25 +194,49 @@ def render_index_section(code: str, name: str):
         ma_periods = [5, 10, 20, 60, 120, 240]
         ma_dirs = {}
         for p in ma_periods:
-            ma_dirs[f"MA{p}"] = _ma_direction(mas[f"MA{p}"])
+            ma_dirs[f"MA{p}"] = ma_direction(mas[f"MA{p}"])
 
-        ma_rows = []
+        # Build colored HTML table
+        def _dir_color(d: str) -> str:
+            if d == "↑": return "#e53935"
+            if d == "↓": return "#43a047"
+            return "#999"
+        def _role_color(r: str) -> str:
+            if "支撑" in r: return "#e53935"
+            if "压制" in r: return "#43a047"
+            return "#999"
+
+        rows_html = ""
         for p in ma_periods:
             ma_key = f"MA{p}"
             ma_val = latest_val(mas[ma_key])
             direction = ma_dirs.get(ma_key, "→")
             role = ma_role(price, ma_val, direction) if ma_val else "N/A"
             offset_date, offset_price = get_offset_info(df, p)
-            ma_rows.append({
-                "均线": ma_key,
-                "值": f"{ma_val:.2f}" if ma_val else "N/A",
-                "方向": direction,
-                "作用": role,
-                "扣抵日": offset_date,
-                "扣抵价": f"{offset_price:.2f}" if offset_price else "N/A",
-            })
+            val_str = f"{ma_val:.2f}" if ma_val else "N/A"
+            off_str = f"{offset_price:.2f}" if offset_price else "N/A"
+            rows_html += f"""<tr>
+                <td style="font-weight:600;text-align:center;">{ma_key}</td>
+                <td style="text-align:right;">{val_str}</td>
+                <td style="color:{_dir_color(direction)};font-weight:bold;text-align:center;">{direction}</td>
+                <td style="color:{_role_color(role)};font-weight:bold;text-align:center;">{role}</td>
+                <td style="color:#888;text-align:center;">{offset_date}</td>
+                <td style="color:#888;text-align:right;">{off_str}</td>
+            </tr>"""
 
-        st.dataframe(pd.DataFrame(ma_rows), hide_index=True, width="stretch")
+        st.html(f"""
+        <table style="width:100%;font-size:15px;border-collapse:collapse;">
+            <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+                <th style="text-align:center;">均线</th>
+                <th style="text-align:right;">值</th>
+                <th style="text-align:center;">方向</th>
+                <th style="text-align:center;">作用</th>
+                <th style="text-align:center;">扣抵日</th>
+                <th style="text-align:right;">扣抵价</th>
+            </tr></thead>
+            <tbody>{rows_html}</tbody>
+        </table>
+        """)
         st.caption("扣抵: 今日收盘 > 扣抵价 → MA继续上行；今日收盘 < 扣抵价 → MA拐头下行")
 
         arrangement = ma_arrangement(df)
@@ -236,24 +276,19 @@ def render_index_section(code: str, name: str):
                      help=hint)
 
 
-def _ma_direction(ma_values: list[float]) -> str:
-    """Determine MA direction (lightweight, no polyfit needed)."""
-    valid = [v for v in ma_values[-5:] if not np.isnan(v)]
-    if len(valid) < 2:
-        return "→"
-    if valid[-1] > valid[0]:
-        return "↑"
-    elif valid[-1] < valid[0]:
-        return "↓"
-    return "→"
-
-
 # ------- Page -------
 
-# Resolve trade date early for title
-_resolve_cm = CacheManager()
-_resolve_date = _resolve_cm.get_latest_date("000001.SH")
-_display_date = _resolve_date[:10] if _resolve_date else datetime.now().strftime("%Y-%m-%d")
+# Resolve trade date: query param ?date=YYYYMMDD, or latest from cache
+_query_date = st.query_params.get("date", None)
+if _query_date:
+    # Convert YYYYMMDD to YYYY-MM-DD for display
+    _display_date = f"{_query_date[:4]}-{_query_date[4:6]}-{_query_date[6:8]}"
+else:
+    _resolve_dp = DataProvider(tushare_token=os.environ.get("TUSHARE_TOKEN", ""))
+    _resolve_date = _resolve_dp.get_latest_trade_date("000001.SH")
+    _display_date = _resolve_date[:10] if _resolve_date else datetime.now().strftime("%Y-%m-%d")
+# trade_date in YYYYMMDD format for API calls
+_trade_date_yyyymmdd = _display_date.replace("-", "")
 
 st.title(f"📊 A股复盘 Dashboard — {_display_date}")
 st.caption("Agent 1 — 大盘分析")
@@ -264,56 +299,15 @@ st.header("📈 市场概览")
 
 @st.cache_data(ttl=300)
 def load_market_overview(trade_date: str):
-    """Fetch complete market overview: breadth, exchange breakdown, yesterday, 10-day trend."""
+    """Fetch complete market overview via DataProvider (no direct Tushare calls)."""
     try:
-        import tushare as ts
         token = os.environ.get("TUSHARE_TOKEN", "")
         if not token:
             return None
-        ts.set_token(token)
-        api = ts.pro_api()
-
-        def _fetch_day(date_str: str):
-            """Fetch market breadth + exchange breakdown for a single trading day."""
-            daily = api.daily(trade_date=date_str, fields="ts_code,close,pre_close,amount")
-            if daily is None or daily.empty:
-                return None
-
-            up = int(len(daily[daily["close"] > daily["pre_close"]]))
-            down = int(len(daily[daily["close"] < daily["pre_close"]]))
-            flat = int(len(daily[daily["close"] == daily["pre_close"]]))
-
-            # Exchange breakdown
-            sh = daily[daily["ts_code"].str.endswith(".SH")]
-            sz = daily[daily["ts_code"].str.endswith(".SZ")]
-            bj = daily[daily["ts_code"].str.endswith(".BJ")]
-
-            total_yi = round(float(daily["amount"].sum()) / 1e5, 0)  # 千元→亿元
-            sh_yi = round(float(sh["amount"].sum()) / 1e5, 0) if len(sh) > 0 else 0
-            sz_yi = round(float(sz["amount"].sum()) / 1e5, 0) if len(sz) > 0 else 0
-            bj_yi = round(float(bj["amount"].sum()) / 1e5, 0) if len(bj) > 0 else 0
-
-            # 涨停/跌停 via stk_limit + daily merge
-            up_limit = down_limit = 0
-            try:
-                limits = api.stk_limit(trade_date=date_str)
-                if limits is not None and not limits.empty:
-                    merged = daily.merge(limits, on="ts_code")
-                    up_limit = int(len(merged[merged["close"] == merged["up_limit"]]))
-                    down_limit = int(len(merged[merged["close"] == merged["down_limit"]]))
-            except Exception:
-                pass
-
-            return {
-                "trade_date": date_str,
-                "up": up, "down": down, "flat": flat,
-                "up_limit": up_limit, "down_limit": down_limit,
-                "total_yi": total_yi,
-                "sh_yi": sh_yi, "sz_yi": sz_yi, "bj_yi": bj_yi,
-            }
+        dp = DataProvider(tushare_token=token)
 
         # --- Today ---
-        today = _fetch_day(trade_date)
+        today = dp.get_market_breadth(trade_date)
         if today is None:
             return {"error": f"无法获取 {trade_date} 市场数据"}
 
@@ -323,27 +317,25 @@ def load_market_overview(trade_date: str):
         yesterday = None
         for i in range(1, 10):
             prev_date = (dt - timedelta(days=i)).strftime("%Y%m%d")
-            result = _fetch_day(prev_date)
+            result = dp.get_market_breadth(prev_date)
             if result is not None:
                 yesterday = result
                 break
 
-        # --- 10-day trend: find trading days from cache, then fetch each ---
-        cm = CacheManager()
-        index_rows = cm.get_daily("000001.SH", limit=20)
-        trading_dates = sorted(set(
+        # --- 10-day trend: use DataProvider to find trading days ---
+        index_rows = dp.get_daily("000001.SH", lookback_days=360)
+        all_trading_dates = sorted(set(
             r["date"].replace("-", "") for r in index_rows
         ), reverse=True)
 
-        # Also include today if not in cached dates
-        if trade_date not in trading_dates:
-            trading_dates.insert(0, trade_date)
+        # Only include trading days up to the requested date, then take first 10
+        trading_dates = [td for td in all_trading_dates if td <= trade_date]
 
         trend = []
         for td in trading_dates:
             if len(trend) >= 10:
                 break
-            day_data = _fetch_day(td)
+            day_data = dp.get_market_breadth(td)
             if day_data is not None:
                 trend.append({
                     "date": td,
@@ -368,15 +360,7 @@ def load_market_overview(trade_date: str):
         return {"error": str(e)}
 
 
-# Get latest trade date from cache
-cm = CacheManager()
-latest_date = cm.get_latest_date("000001.SH")
-if latest_date:
-    trade_date_str = latest_date.replace("-", "")
-else:
-    trade_date_str = datetime.now().strftime("%Y%m%d")
-
-overview = load_market_overview(trade_date_str)
+overview = load_market_overview(_trade_date_yyyymmdd)
 
 if overview is None:
     st.info("TUSHARE_TOKEN 未配置，无法加载市场概览")
@@ -572,13 +556,13 @@ st.divider()
 
 # ============ 上证指数 ============
 with st.expander("📈 上证指数 000001.SH", expanded=True):
-    render_index_section("000001.SH", "上证指数")
+    render_index_section("000001.SH", "上证指数", end_date=_trade_date_yyyymmdd)
 
 st.divider()
 
 # ============ 创业板指 ============
 with st.expander("📉 创业板指 399006.SZ", expanded=False):
-    render_index_section("399006.SZ", "创业板指")
+    render_index_section("399006.SZ", "创业板指", end_date=_trade_date_yyyymmdd)
 
 # ============ Agent 1 分析报告 ============
 st.divider()

@@ -37,18 +37,17 @@ def calc_ma(df: pd.DataFrame, periods: list[int] = None) -> dict[str, list[float
 
 def ma_direction(ma_values: list[float]) -> str:
     """
-    Determine MA direction from last few values.
+    Determine MA direction by comparing today's value to 3 days ago.
+    Simple slope judgement: >0.1% up, <0.1% down, else flat.
     Returns '↑' (up), '↓' (down), or '→' (flat).
     """
-    valid = [v for v in ma_values[-5:] if not np.isnan(v)]
-    if len(valid) < 3:
+    valid = [v for v in ma_values if not np.isnan(v)]
+    if len(valid) < 4:
         return "→"
-    # simple linear regression slope
-    x = np.arange(len(valid))
-    slope = np.polyfit(x, valid, 1)[0]
-    if slope > 0.3:
+    chg_pct = (valid[-1] - valid[-4]) / valid[-4] * 100
+    if chg_pct > 0.1:
         return "↑"
-    elif slope < -0.3:
+    elif chg_pct < -0.1:
         return "↓"
     return "→"
 

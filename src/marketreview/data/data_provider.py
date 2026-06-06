@@ -58,6 +58,60 @@ class DataProvider:
         rows = self.get_daily(code, lookback_days=5)
         return rows[0]["date"] if rows else None
 
+    def get_market_breadth(self, trade_date: str) -> dict | None:
+        """
+        Fetch single-day market breadth data.
+
+        Returns dict with keys:
+          trade_date, up, down, flat, up_limit, down_limit,
+          total_yi, sh_yi, sz_yi, bj_yi
+        Or None if no data for this date.
+        """
+        import time
+        try:
+            daily = self._api.daily(
+                trade_date=trade_date,
+                fields="ts_code,close,pre_close,amount",
+            )
+            if daily is None or daily.empty:
+                return None
+
+            up = int(len(daily[daily["close"] > daily["pre_close"]]))
+            down = int(len(daily[daily["close"] < daily["pre_close"]]))
+            flat = int(len(daily[daily["close"] == daily["pre_close"]]))
+
+            # Exchange breakdown
+            sh = daily[daily["ts_code"].str.endswith(".SH")]
+            sz = daily[daily["ts_code"].str.endswith(".SZ")]
+            bj = daily[daily["ts_code"].str.endswith(".BJ")]
+
+            total_yi = round(float(daily["amount"].sum()) / 1e5, 0)
+            sh_yi = round(float(sh["amount"].sum()) / 1e5, 0) if len(sh) > 0 else 0
+            sz_yi = round(float(sz["amount"].sum()) / 1e5, 0) if len(sz) > 0 else 0
+            bj_yi = round(float(bj["amount"].sum()) / 1e5, 0) if len(bj) > 0 else 0
+
+            # 涨停/跌停
+            up_limit = down_limit = 0
+            try:
+                limits = self._api.stk_limit(trade_date=trade_date)
+                if limits is not None and not limits.empty:
+                    merged = daily.merge(limits, on="ts_code")
+                    up_limit = int(len(merged[merged["close"] == merged["up_limit"]]))
+                    down_limit = int(len(merged[merged["close"] == merged["down_limit"]]))
+            except Exception:
+                pass
+
+            return {
+                "trade_date": trade_date,
+                "up": up, "down": down, "flat": flat,
+                "up_limit": up_limit, "down_limit": down_limit,
+                "total_yi": total_yi,
+                "sh_yi": sh_yi, "sz_yi": sz_yi, "bj_yi": bj_yi,
+            }
+        except Exception as e:
+            print(f"[DataProvider] get_market_breadth failed for {trade_date}: {e}")
+            return None
+
     # ------- internal -------
 
     def _fetch_from_api(self, code: str, start: str, end: str) -> list[dict]:
