@@ -59,19 +59,41 @@ def load_data(code: str, lookback: int = 360, end_date: str = None):
 
 def get_offset_info(df: pd.DataFrame, period: int):
     """
-    Returns (扣抵日, 扣抵量_亿, 今日量vs扣抵量_pct) for MA period.
+    Returns (扣抵日, 扣抵量_亿, 今日量vs扣抵量_pct,
+             后续均量_亿, 今日量vs后续均量_pct, 窗口天数).
+
     扣抵日 = N trading days before today (date-ascending df).
-    扣抵量 = volume on that day (in 亿).
-    pct = (今日量 / 扣抵量 - 1) * 100: 正=今日量更足=安全, 负=今日量不足=危险。
+    扣抵量 = volume on that single day (in 亿).
+    后续均量 = average volume from 扣抵日 (inclusive) forward window days.
+               Window: MA5/10→1, MA20/60→3, MA120/240→5.
+    pct = (今日量 / xx量 - 1) * 100: 正=今日量更足=安全, 负=今日量不足=危险。
     """
     idx = len(df) - 1 - period
     if idx < 0:
-        return "N/A", None, None
-    row = df.iloc[idx]
+        return "N/A", None, None, None, None, 0
+
+    # Window size for后续均量
+    if period <= 10:
+        window = 1
+    elif period <= 60:
+        window = 3
+    else:
+        window = 5
+
     today_vol = float(df.iloc[-1]["vol"]) / 1e8   # 手 → 亿
-    offset_vol = float(row["vol"]) / 1e8
+
+    # 单日扣抵量
+    offset_vol = float(df.iloc[idx]["vol"]) / 1e8
     vs_today_pct = round((today_vol / offset_vol - 1) * 100, 1)
-    return str(row["date"])[:10], round(offset_vol, 2), vs_today_pct
+
+    # 后续均量: 扣抵日 + 后续 window-1 天
+    end_idx = min(idx + window, len(df))
+    window_vols = [float(df.iloc[i]["vol"]) / 1e8 for i in range(idx, end_idx)]
+    avg_offset_vol = round(sum(window_vols) / len(window_vols), 2)
+    avg_vs_today_pct = round((today_vol / avg_offset_vol - 1) * 100, 1)
+
+    return (str(df.iloc[idx]["date"])[:10], round(offset_vol, 2), vs_today_pct,
+            avg_offset_vol, avg_vs_today_pct, window)
 
 
 def ma_role(price: float, ma_val: float, direction: str) -> str:
@@ -216,36 +238,44 @@ def render_index_section(code: str, name: str, end_date: str = None):
             if "压制" in r or "向下" in r: return "#43a047"
             return "#999"
 
+        # Shared color interpolator for volume comparison
+        def _vol_color(pct: float) -> str:
+            """Gray(#999) at 0%, fully saturated red/green at 20%+."""
+            abs_pct = abs(pct)
+            t = min(abs_pct / 20.0, 1.0)
+            if pct > 0:
+                r, g, b = 153 + 76 * t, 153 - 96 * t, 153 - 100 * t   # → red(229,57,53)
+            else:
+                r, g, b = 153 - 86 * t, 153 + 7 * t, 153 - 82 * t     # → green(67,160,71)
+            return f"rgb({int(r)},{int(g)},{int(b)})"
+
         rows_html = ""
         for p in ma_periods:
             ma_key = f"MA{p}"
             ma_val = latest_val(mas[ma_key])
             direction = ma_dirs.get(ma_key, "→")
             role = ma_role(price, ma_val, direction) if ma_val else "N/A"
-            offset_date, offset_vol, offset_vs_pct = get_offset_info(df, p)
+            offset_date, offset_vol, offset_vs_pct, avg_vol, avg_vs_pct, window = get_offset_info(df, p)
             val_str = f"{ma_val:.2f}" if ma_val else "N/A"
             if offset_vol is not None and offset_vs_pct is not None:
                 sign_v = "+" if offset_vs_pct > 0 else ""
                 off_str = f"{offset_vol:.2f}亿（{sign_v}{offset_vs_pct:.1f}%）"
-                # 今日量 > 扣抵量（+%）→ 量能充足 = 安全红色
-                # 今日量 < 扣抵量（-%）→ 量能不足 = 危险绿色
-                # 颜色插值：0% = 灰色(#999)，20%+ = 完全红/绿饱和
-                abs_pct = abs(offset_vs_pct)
-                t = min(abs_pct / 20.0, 1.0)  # 0..1
-                if offset_vs_pct > 0:
-                    # gray(153,153,153) → red(229,57,53)
-                    r = int(153 + (229 - 153) * t)
-                    g = int(153 + (57 - 153) * t)
-                    b = int(153 + (53 - 153) * t)
-                else:
-                    # gray(153,153,153) → green(67,160,71)
-                    r = int(153 + (67 - 153) * t)
-                    g = int(153 + (160 - 153) * t)
-                    b = int(153 + (71 - 153) * t)
-                off_color = f"rgb({r},{g},{b})"
+                off_color = _vol_color(offset_vs_pct)
             else:
                 off_str = "N/A"
                 off_color = "#999"
+
+            # 后续均量: window=1 (MA5/10) 与扣抵量相同，显示"—"
+            if avg_vol is not None and avg_vs_pct is not None and window > 1:
+                sign_a = "+" if avg_vs_pct > 0 else ""
+                avg_str = f"{avg_vol:.2f}亿（{sign_a}{avg_vs_pct:.1f}%）"
+                avg_color = _vol_color(avg_vs_pct)
+                avg_hint = f"扣抵日+后续{window - 1}日均量"
+            else:
+                avg_str = "—"
+                avg_color = "#999"
+                avg_hint = ""
+
             rows_html += f"""<tr>
                 <td style="font-weight:600;text-align:center;">{ma_key}</td>
                 <td style="text-align:right;">{val_str}</td>
@@ -253,6 +283,7 @@ def render_index_section(code: str, name: str, end_date: str = None):
                 <td style="color:{_role_color(role)};font-weight:bold;text-align:center;">{role}</td>
                 <td style="color:#888;text-align:center;">{offset_date}</td>
                 <td style="color:{off_color};font-weight:bold;text-align:right;">{off_str}</td>
+                <td style="color:{avg_color};font-weight:bold;text-align:right;" title="{avg_hint}">{avg_str}</td>
             </tr>"""
 
         st.html(f"""
@@ -264,11 +295,12 @@ def render_index_section(code: str, name: str, end_date: str = None):
                 <th style="text-align:center;">作用</th>
                 <th style="text-align:center;">扣抵日</th>
                 <th style="text-align:right;">扣抵量</th>
+                <th style="text-align:right;">后续均量</th>
             </tr></thead>
             <tbody>{rows_html}</tbody>
         </table>
         """)
-        st.caption("扣抵量: 量先价行 — 今日量 > 扣抵量（红色）= 量能充足容易突破；今日量 < 扣抵量（绿色）= 量能不足压力大；颜色越淡幅度越小")
+        st.caption("扣抵量: 扣抵日当日量 vs 今日量 | 后续均量: 扣抵日+后续N天窗口均量（MA20/60窗口3天，MA120/240窗口5天，MA5/10无后续窗口）| 红色=安全 绿色=危险 灰色=持平")
 
         arrangement = ma_arrangement(df)
         st.markdown(f"**均线排列:** {arrangement}")
