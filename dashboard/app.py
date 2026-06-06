@@ -63,10 +63,10 @@ def get_offset_info(df: pd.DataFrame, period: int):
              后续均量_亿, 今日量vs后续均量_pct, 窗口天数).
 
     扣抵日 = N trading days before today (date-ascending df).
-    扣抵量 = volume on that single day (in 亿).
-    后续均量 = average volume from 扣抵日 (inclusive) forward window days.
-               Window: MA5/10→1, MA20/60→3, MA120/240→5.
-    pct = (今日量 / xx量 - 1) * 100: 正=今日量更足=安全, 负=今日量不足=危险。
+    扣抵量 = turnover on that single day (in 亿).
+    后续均量 = average turnover from 扣抵日 (inclusive) forward window days.
+               Window: MA5/10→1, MA20/60/120/240→5.
+    pct = (今日量 / xx量 - 1) * 100: 正=今日量更大=安全, 负=今日量不足=危险。
     """
     idx = len(df) - 1 - period
     if idx < 0:
@@ -78,20 +78,20 @@ def get_offset_info(df: pd.DataFrame, period: int):
     else:
         window = 5
 
-    today_vol = float(df.iloc[-1]["vol"]) / 1e8   # 手 → 亿
+    today_amount = float(df.iloc[-1]["amount"]) / 1e5   # 千元 → 亿
 
     # 单日扣抵量
-    offset_vol = float(df.iloc[idx]["vol"]) / 1e8
-    vs_today_pct = round((today_vol / offset_vol - 1) * 100, 1)
+    offset_amount = float(df.iloc[idx]["amount"]) / 1e5
+    vs_today_pct = round((today_amount / offset_amount - 1) * 100, 1)
 
     # 后续均量: 扣抵日 + 后续 window-1 天
     end_idx = min(idx + window, len(df))
-    window_vols = [float(df.iloc[i]["vol"]) / 1e8 for i in range(idx, end_idx)]
-    avg_offset_vol = round(sum(window_vols) / len(window_vols), 2)
-    avg_vs_today_pct = round((today_vol / avg_offset_vol - 1) * 100, 1)
+    window_amounts = [float(df.iloc[i]["amount"]) / 1e5 for i in range(idx, end_idx)]
+    avg_offset_amount = round(sum(window_amounts) / len(window_amounts), 2)
+    avg_vs_today_pct = round((today_amount / avg_offset_amount - 1) * 100, 1)
 
-    return (str(df.iloc[idx]["date"])[:10], round(offset_vol, 2), vs_today_pct,
-            avg_offset_vol, avg_vs_today_pct, window)
+    return (str(df.iloc[idx]["date"])[:10], round(offset_amount, 2), vs_today_pct,
+            avg_offset_amount, avg_vs_today_pct, window)
 
 
 def _vol_color_ramp(pct: float) -> str:
@@ -194,21 +194,21 @@ def render_index_section(code: str, name: str, end_date: str = None):
 
     with ohlc_col:
         o = float(latest["open"])
-        today_vol = float(latest["vol"]) / 1e8   # 手 → 亿
-        yesterday_vol = float(prev["vol"]) / 1e8
+        today_amount = float(latest["amount"]) / 1e5   # 千元 → 亿
+        yesterday_amount = float(prev["amount"]) / 1e5
 
         st.markdown("**K线数据**")
         prev_close = float(prev["close"])
         chg_pct = (price / prev_close - 1) * 100
         open_vs_prev = (o / prev_close - 1) * 100
-        vol_vs_prev = (today_vol / yesterday_vol - 1) * 100
+        amount_vs_prev = (today_amount / yesterday_amount - 1) * 100
 
         chg_color = "#e53935" if chg_pct >= 0 else "#43a047"
         open_color = "#e53935" if o >= prev_close else "#43a047"
-        vol_color = "#e53935" if vol_vs_prev >= 0 else "#43a047"
+        amount_color = "#e53935" if amount_vs_prev >= 0 else "#43a047"
         sign_p = "+" if chg_pct >= 0 else ""
         sign_o = "+" if open_vs_prev >= 0 else ""
-        sign_v = "+" if vol_vs_prev >= 0 else ""
+        sign_a = "+" if amount_vs_prev >= 0 else ""
 
         st.html(f"""
         <div style="font-size:18px;line-height:2;">
@@ -216,8 +216,8 @@ def render_index_section(code: str, name: str, end_date: str = None):
             <div>今日开盘：<span style="color:{open_color};">{o:.2f}（{sign_o}{open_vs_prev:.2f}%）</span></div>
             <div>涨跌幅：<span style="color:{chg_color};font-weight:bold;">{sign_p}{chg_pct:.2f}%</span></div>
             <div>昨日收盘：<span>{prev_close:.2f}</span></div>
-            <div>今日成交量：<span style="color:{vol_color};">{today_vol:.2f}亿（{sign_v}{vol_vs_prev:.2f}%）</span></div>
-            <div>昨日成交量：<span style="color:#333;">{yesterday_vol:.2f}亿</span></div>
+            <div>今日成交额：<span style="color:{amount_color};">{today_amount:.2f}亿（{sign_a}{amount_vs_prev:.2f}%）</span></div>
+            <div>昨日成交额：<span style="color:#333;">{yesterday_amount:.2f}亿</span></div>
         </div>
         """)
 
@@ -253,20 +253,20 @@ def render_index_section(code: str, name: str, end_date: str = None):
             ma_val = latest_val(mas[ma_key])
             direction = ma_dirs.get(ma_key, "→")
             role = ma_role(price, ma_val, direction) if ma_val else "N/A"
-            offset_date, offset_vol, offset_vs_pct, avg_vol, avg_vs_pct, window = get_offset_info(df, p)
+            offset_date, offset_amount, offset_vs_pct, avg_amount, avg_vs_pct, window = get_offset_info(df, p)
             val_str = f"{ma_val:.2f}" if ma_val else "N/A"
-            if offset_vol is not None and offset_vs_pct is not None:
+            if offset_amount is not None and offset_vs_pct is not None:
                 sign_v = "+" if offset_vs_pct > 0 else ""
-                off_str = f"{offset_vol:.2f}亿（{sign_v}{offset_vs_pct:.1f}%）"
+                off_str = f"{offset_amount:.2f}亿（{sign_v}{offset_vs_pct:.1f}%）"
                 off_color = _vol_color_ramp(offset_vs_pct)
             else:
                 off_str = "N/A"
                 off_color = "#999"
 
             # 后续均量: window=1 (MA5/10) 与扣抵量相同，显示"—"
-            if avg_vol is not None and avg_vs_pct is not None and window > 1:
+            if avg_amount is not None and avg_vs_pct is not None and window > 1:
                 sign_a = "+" if avg_vs_pct > 0 else ""
-                avg_str = f"{avg_vol:.2f}亿（{sign_a}{avg_vs_pct:.1f}%）"
+                avg_str = f"{avg_amount:.2f}亿（{sign_a}{avg_vs_pct:.1f}%）"
                 avg_color = _vol_color_ramp(avg_vs_pct)
                 avg_hint = f"扣抵日+后续{window - 1}日均量"
             else:
@@ -304,57 +304,62 @@ def render_index_section(code: str, name: str, end_date: str = None):
         st.markdown(f"**均线排列:** {arrangement}")
 
     with vol_col:
-        st.markdown("**成交量分析**")
+        st.markdown("**成交额分析**")
         vol = volume_analysis(df)
 
-        def _vol_trend_color(t: str) -> str:
+        def _amt_trend_color(t: str) -> str:
             if "上升" in t or "上行" in t: return "#e53935"
             if "下降" in t or "下行" in t: return "#43a047"
             return "#999"
 
-        def _vol_cross_color(cs: str) -> str:
+        def _amt_cross_color(cs: str) -> str:
             if "金叉" in cs: return "#e53935"
             if "死叉" in cs: return "#43a047"
             return "#999"
 
-        # Build styled volume analysis table
-        vol_rows = []
-        # 1. 今日成交量
-        lv = vol.get("latest_vol_yi")
-        vol_rows.append(("今日成交量", f"{lv:.2f}亿" if lv else "N/A", None))
-        # 2. 5日成交量趋势
+        # Build styled amount analysis table
+        amt_rows = []
+        # 1. 今日成交额
+        lv = vol.get("latest_amount_yi")
+        amt_rows.append(("今日成交额", f"{lv:.2f}亿" if lv else "N/A", None))
+        # 2. 5日成交额趋势
         t5 = vol.get("trend_5d", "")
-        vol_rows.append(("5日量趋势", t5, _vol_trend_color(t5)))
+        amt_rows.append(("5日额趋势", t5, _amt_trend_color(t5)))
         # 3. 5日均量
         m5 = vol.get("ma5_yi")
         v5 = vol.get("vs_ma5_pct", 0)
         sign5 = "+" if v5 > 0 else ""
-        vol_rows.append(("5日均量", f"{m5:.2f}亿（{sign5}{v5:.1f}%）" if m5 else "N/A", "#e53935" if v5 > 0 else ("#43a047" if v5 < 0 else "#999")))
+        amt_rows.append(("5日均量", f"{m5:.2f}亿（{sign5}{v5:.1f}%）" if m5 else "N/A", "#e53935" if v5 > 0 else ("#43a047" if v5 < 0 else "#999")))
         # 4. 10日均量
         m10 = vol.get("ma10_yi")
         v10 = vol.get("vs_ma10_pct", 0)
         sign10 = "+" if v10 > 0 else ""
-        vol_rows.append(("10日均量", f"{m10:.2f}亿（{sign10}{v10:.1f}%）" if m10 else "N/A", "#e53935" if v10 > 0 else ("#43a047" if v10 < 0 else "#999")))
-        # 5. 均量状态
+        amt_rows.append(("10日均量", f"{m10:.2f}亿（{sign10}{v10:.1f}%）" if m10 else "N/A", "#e53935" if v10 > 0 else ("#43a047" if v10 < 0 else "#999")))
+        # 5. 20日均量
+        m20 = vol.get("ma20_yi")
+        v20 = vol.get("vs_ma20_pct", 0)
+        sign20 = "+" if v20 > 0 else ""
+        amt_rows.append(("20日均量", f"{m20:.2f}亿（{sign20}{v20:.1f}%）" if m20 else "N/A", "#e53935" if v20 > 0 else ("#43a047" if v20 < 0 else "#999")))
+        # 6. 5日10日均量状态
         cs = vol.get("cross_state") or "—"
         cd = vol.get("cross_days", 0)
         if cd and cs in ("金叉", "死叉"):
             cs_str = f"{cs} {cd}天"
         else:
             cs_str = cs
-        vol_rows.append(("均量状态", cs_str, _vol_cross_color(cs_str)))
+        amt_rows.append(("5日10日均量状态", cs_str, _amt_cross_color(cs_str)))
 
-        rows_html = ""
-        for label, value, color in vol_rows:
+        amt_html = ""
+        for label, value, color in amt_rows:
             color_attr = f"color:{color};" if color else ""
-            rows_html += f"""<tr>
+            amt_html += f"""<tr>
                 <td style="color:#888;text-align:left;">{label}</td>
                 <td style="{color_attr}font-weight:bold;text-align:right;">{value}</td>
             </tr>"""
 
         st.html(f"""
         <table style="width:100%;font-size:15px;border-collapse:collapse;">
-            <tbody>{rows_html}</tbody>
+            <tbody>{amt_html}</tbody>
         </table>
         """)
 

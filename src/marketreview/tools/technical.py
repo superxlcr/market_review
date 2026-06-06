@@ -117,27 +117,31 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
       - cross_state: 均量状态（金叉/死叉/多头/空头）
       - cross_days: 金叉/死叉持续天数
     """
-    if df.empty or "vol" not in df.columns:
+    if df.empty or "amount" not in df.columns:
         return {}
 
-    vol_series = df["vol"].astype(float)
-    latest_vol = float(vol_series.iloc[-1])
-    latest_vol_yi = round(latest_vol / 1e8, 2)   # 手 → 亿
+    amount_series = df["amount"].astype(float)
+    latest_amount = float(amount_series.iloc[-1])
+    latest_amount_yi = round(latest_amount / 1e5, 2)   # 千元 → 亿
 
-    ma5 = vol_series.rolling(5).mean()
-    ma10 = vol_series.rolling(10).mean()
+    ma5 = amount_series.rolling(5).mean()
+    ma10 = amount_series.rolling(10).mean()
+    ma20 = amount_series.rolling(20).mean()
 
     latest_ma5 = float(ma5.iloc[-1])
     latest_ma10 = float(ma10.iloc[-1])
+    latest_ma20 = float(ma20.iloc[-1])
 
-    ma5_yi = round(latest_ma5 / 1e8, 2)
-    ma10_yi = round(latest_ma10 / 1e8, 2)
+    ma5_yi = round(latest_ma5 / 1e5, 2)
+    ma10_yi = round(latest_ma10 / 1e5, 2)
+    ma20_yi = round(latest_ma20 / 1e5, 2)
 
-    vs_ma5 = round((latest_vol / latest_ma5 - 1) * 100, 1) if not np.isnan(latest_ma5) else 0
-    vs_ma10 = round((latest_vol / latest_ma10 - 1) * 100, 1) if not np.isnan(latest_ma10) else 0
+    vs_ma5 = round((latest_amount / latest_ma5 - 1) * 100, 1) if not np.isnan(latest_ma5) else 0
+    vs_ma10 = round((latest_amount / latest_ma10 - 1) * 100, 1) if not np.isnan(latest_ma10) else 0
+    vs_ma20 = round((latest_amount / latest_ma20 - 1) * 100, 1) if not np.isnan(latest_ma20) else 0
 
-    # ---- 5-day volume trend ----
-    last5 = vol_series.iloc[-5:].tolist()
+    # ---- 5-day amount trend ----
+    last5 = amount_series.iloc[-5:].tolist()
     if len(last5) >= 5:
         ups = sum(1 for i in range(1, 5) if last5[i] > last5[i-1])
         if ups == 4:
@@ -153,7 +157,7 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
     else:
         trend_5d = "数据不足"
 
-    # ---- 均量交叉检测 (MA5 vs MA10) ----
+    # ---- 均额交叉检测 (MA5 vs MA10) ----
     cross_state = None
     cross_days = 0
 
@@ -186,11 +190,13 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
             cross_days = 0
 
     return {
-        "latest_vol_yi": latest_vol_yi,
+        "latest_amount_yi": latest_amount_yi,
         "ma5_yi": ma5_yi,
         "ma10_yi": ma10_yi,
+        "ma20_yi": ma20_yi,
         "vs_ma5_pct": vs_ma5,
         "vs_ma10_pct": vs_ma10,
+        "vs_ma20_pct": vs_ma20,
         "trend_5d": trend_5d,
         "cross_state": cross_state,
         "cross_days": cross_days,
