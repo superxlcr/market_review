@@ -57,27 +57,72 @@ class DataProvider:
     def _fetch_from_api(self, code: str, start: str, end: str) -> list[dict]:
         """
         Pull daily data from Tushare.  Normalizes field names to cache schema.
-        Override this method to swap data sources.
+        Uses pro_bar() (works with free-tier tokens).
+        Falls back to pro_api().daily() for stocks, index_daily for indices.
         """
-        # Normalize code format: tushare wants 000001.SH / 399006.SZ
+        import time
         ts_code = self._normalize_code(code)
+        asset = self._asset_type(ts_code)
+
+        # Try pro_bar first (works with all token tiers)
         try:
-            df = self._api.daily(
+            df = ts.pro_bar(
                 ts_code=ts_code,
+                asset=asset,
+                freq="D",
                 start_date=start,
                 end_date=end,
-                fields="trade_date,open,high,low,close,vol,amount",
+                adj="qfq",
             )
-            if df is None or df.empty:
-                return []
-            df = df.sort_values("trade_date", ascending=False)
-            # Add adj_factor placeholder (will be populated by adj task later)
-            df["adj_factor"] = 1.0
-            df.rename(columns={"trade_date": "date", "vol": "vol", "amount": "amount"}, inplace=True)
-            return df.to_dict(orient="records")
+            if df is not None and not df.empty:
+                return self._normalize_df(df)
+        except IOError as e:
+            # Rate limit or permission error — log and continue
+            msg = str(e)
+            if "频率" in msg or "超出" in msg:
+                print(f"[DataProvider] pro_bar rate-limited for {ts_code}, trying fallback...")
+            else:
+                print(f"[DataProvider] pro_bar failed for {ts_code}: {msg[:100]}")
+
+        # Fallback: try pro_api endpoints
+        try:
+            if asset == "I":
+                df = self._api.index_daily(ts_code=ts_code, start_date=start, end_date=end)
+            else:
+                df = self._api.daily(
+                    ts_code=ts_code, start_date=start, end_date=end,
+                    fields="trade_date,open,high,low,close,vol,amount",
+                )
+            if df is not None and not df.empty:
+                return self._normalize_df(df)
         except Exception as e:
-            print(f"[DataProvider] fetch failed for {code}: {e}")
-            return []
+            print(f"[DataProvider] fallback API failed for {ts_code}: {e}")
+
+        return []
+
+    @staticmethod
+    def _asset_type(ts_code: str) -> str:
+        """Determine Tushare asset type: I (index) or E (stock)."""
+        code_num = ts_code.split(".")[0]
+        # Index patterns: 000xxx (SSE), 399xxx (SZSE), 880xxx (sector), 999xxx
+        if code_num.startswith(("000", "399", "880", "999")):
+            return "I"
+        return "E"
+
+    @staticmethod
+    def _normalize_df(df) -> list[dict]:
+        """Convert tushare DataFrame to cache-compatible list[dict]."""
+        df = df.sort_values("trade_date", ascending=False)
+        # Normalize: trade_date may be int or str
+        df["trade_date"] = df["trade_date"].astype(str)
+        # Add adj_factor placeholder if missing
+        if "adj_factor" not in df.columns:
+            df["adj_factor"] = 1.0
+        # Keep only needed columns
+        cols = ["trade_date", "open", "high", "low", "close", "vol", "amount", "adj_factor"]
+        df = df[[c for c in cols if c in df.columns]]
+        df.rename(columns={"trade_date": "date"}, inplace=True)
+        return df.to_dict(orient="records")
 
     @staticmethod
     def _normalize_code(code: str) -> str:

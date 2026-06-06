@@ -29,3 +29,4 @@ market_analysis_task:
     - 创业板指技术分析（同上）
     - 综合研判（大盘定性、关键信号、风险提示）
   agent: market_analyst
+  output_file: report.md
