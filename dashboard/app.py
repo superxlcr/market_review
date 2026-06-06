@@ -256,8 +256,8 @@ st.header("📈 市场概览")
 
 
 @st.cache_data(ttl=300)
-def load_market_breadth(trade_date: str):
-    """Fetch total market turnover and up/down ratio from Tushare daily endpoint."""
+def load_market_overview(trade_date: str):
+    """Fetch complete market overview: breadth, exchange breakdown, yesterday, 10-day trend."""
     try:
         import tushare as ts
         token = os.environ.get("TUSHARE_TOKEN", "")
@@ -265,17 +265,98 @@ def load_market_breadth(trade_date: str):
             return None
         ts.set_token(token)
         api = ts.pro_api()
-        daily = api.daily(
-            trade_date=trade_date,
-            fields="ts_code,close,pre_close,amount",
-        )
-        if daily is None or daily.empty:
-            return None
-        up = int(len(daily[daily["close"] > daily["pre_close"]]))
-        down = int(len(daily[daily["close"] < daily["pre_close"]]))
-        flat = int(len(daily[daily["close"] == daily["pre_close"]]))
-        total_yi = float(daily["amount"].sum()) / 1e5  # 千元→亿元
-        return {"up": up, "down": down, "flat": flat, "total_yi": total_yi}
+
+        def _fetch_day(date_str: str):
+            """Fetch market breadth + exchange breakdown for a single trading day."""
+            daily = api.daily(trade_date=date_str, fields="ts_code,close,pre_close,amount")
+            if daily is None or daily.empty:
+                return None
+
+            up = int(len(daily[daily["close"] > daily["pre_close"]]))
+            down = int(len(daily[daily["close"] < daily["pre_close"]]))
+            flat = int(len(daily[daily["close"] == daily["pre_close"]]))
+
+            # Exchange breakdown
+            sh = daily[daily["ts_code"].str.endswith(".SH")]
+            sz = daily[daily["ts_code"].str.endswith(".SZ")]
+            bj = daily[daily["ts_code"].str.endswith(".BJ")]
+
+            total_yi = round(float(daily["amount"].sum()) / 1e5, 0)  # 千元→亿元
+            sh_yi = round(float(sh["amount"].sum()) / 1e5, 0) if len(sh) > 0 else 0
+            sz_yi = round(float(sz["amount"].sum()) / 1e5, 0) if len(sz) > 0 else 0
+            bj_yi = round(float(bj["amount"].sum()) / 1e5, 0) if len(bj) > 0 else 0
+
+            # 涨停/跌停 via stk_limit + daily merge
+            up_limit = down_limit = 0
+            try:
+                limits = api.stk_limit(trade_date=date_str)
+                if limits is not None and not limits.empty:
+                    merged = daily.merge(limits, on="ts_code")
+                    up_limit = int(len(merged[merged["close"] == merged["up_limit"]]))
+                    down_limit = int(len(merged[merged["close"] == merged["down_limit"]]))
+            except Exception:
+                pass
+
+            return {
+                "trade_date": date_str,
+                "up": up, "down": down, "flat": flat,
+                "up_limit": up_limit, "down_limit": down_limit,
+                "total_yi": total_yi,
+                "sh_yi": sh_yi, "sz_yi": sz_yi, "bj_yi": bj_yi,
+            }
+
+        # --- Today ---
+        today = _fetch_day(trade_date)
+        if today is None:
+            return {"error": f"无法获取 {trade_date} 市场数据"}
+
+        # --- Yesterday (walk back calendar days to find previous trading day) ---
+        from datetime import datetime, timedelta
+        dt = datetime.strptime(trade_date, "%Y%m%d")
+        yesterday = None
+        for i in range(1, 10):
+            prev_date = (dt - timedelta(days=i)).strftime("%Y%m%d")
+            result = _fetch_day(prev_date)
+            if result is not None:
+                yesterday = result
+                break
+
+        # --- 10-day trend: find trading days from cache, then fetch each ---
+        cm = CacheManager()
+        index_rows = cm.get_daily("000001.SH", limit=20)
+        trading_dates = sorted(set(
+            r["date"].replace("-", "") for r in index_rows
+        ), reverse=True)
+
+        # Also include today if not in cached dates
+        if trade_date not in trading_dates:
+            trading_dates.insert(0, trade_date)
+
+        trend = []
+        for td in trading_dates:
+            if len(trend) >= 10:
+                break
+            day_data = _fetch_day(td)
+            if day_data is not None:
+                trend.append({
+                    "date": td,
+                    "total_yi": day_data["total_yi"],
+                    "up": day_data["up"],
+                    "down": day_data["down"],
+                })
+        trend.reverse()  # chronological order
+
+        totals = [d["total_yi"] for d in trend]
+        avg_5d = round(sum(totals[-5:]) / min(5, len(totals)), 0) if totals else 0
+        avg_10d = round(sum(totals) / len(totals), 0) if totals else 0
+
+        return {
+            "today": today,
+            "yesterday": yesterday,
+            "trend": trend,
+            "avg_5d": avg_5d,
+            "avg_10d": avg_10d,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -288,60 +369,197 @@ if latest_date:
 else:
     trade_date_str = datetime.now().strftime("%Y%m%d")
 
-breadth = load_market_breadth(trade_date_str)
+overview = load_market_overview(trade_date_str)
 
-breadth_col1, breadth_col2, breadth_col3 = st.columns(3)
+if overview is None:
+    st.info("TUSHARE_TOKEN 未配置，无法加载市场概览")
+elif "error" in overview:
+    st.error(f"市场数据获取失败: {overview['error']}")
+else:
+    today = overview["today"]
+    yesterday = overview["yesterday"]
+    trend = overview["trend"]
 
-with breadth_col1:
-    st.markdown("**涨跌比**")
-    if breadth and "error" not in breadth:
-        up, down, flat = breadth["up"], breadth["down"], breadth["flat"]
-        total_stocks = up + down + flat
-        up_pct = up / total_stocks * 100 if total_stocks else 0
-        st.metric("上涨家数", f"{up}", delta=f"{up_pct:.0f}%")
-        st.caption(f"下跌 {down}  |  平盘 {flat}  |  涨跌比 {up}:{down}")
-    else:
-        st.info("TUSHARE_TOKEN 未配置或数据获取失败")
+    # ======== Row 1: 涨跌比 (left) + 成交额 (right) ========
+    card_left, card_right = st.columns(2)
 
-with breadth_col2:
-    st.markdown("**两市成交额**")
-    if breadth and "error" not in breadth:
-        total_yi = breadth["total_yi"]
-        # Get prev day for delta
-        from datetime import timedelta
-        prev_date = (datetime.strptime(trade_date_str, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-        prev_breadth = load_market_breadth(prev_date)
-        delta_str = None
-        if prev_breadth and "error" not in prev_breadth:
-            prev_yi = prev_breadth["total_yi"]
-            delta_pct = (total_yi / prev_yi - 1) * 100 if prev_yi else 0
-            delta_str = f"{delta_pct:+.1f}%"
-        st.metric(
-            "全市场成交额",
-            f"{total_yi:,.0f} 亿",
-            delta=delta_str,
+    # ---- Card 1: 涨跌数量比 + 市场情绪 ----
+    with card_left:
+        _up = today["up"]
+        _flat = today["flat"]
+        _down = today["down"]
+        _ul = today["up_limit"]
+        _dl = today["down_limit"]
+        _total = _up + _flat + _down
+        _up_pct = _up / _total * 100 if _total else 0
+
+        # Yesterday comparison HTML
+        yest_html = ""
+        if yesterday:
+            _yup, _yflat, _ydown = yesterday["up"], yesterday["flat"], yesterday["down"]
+            _yul, _ydl = yesterday["up_limit"], yesterday["down_limit"]
+            hints = []
+            up_chg = _up - _yup
+            if abs(up_chg) > 50:
+                hints.append(f'上涨家数{"↑" if up_chg > 0 else "↓"}{abs(up_chg)}')
+            dl_chg = _dl - _ydl
+            if dl_chg > 3:
+                hints.append(f'跌停数↑{dl_chg}')
+            hint_str = "  |  ".join(hints) if hints else ""
+            hint_color = "#e53935" if up_chg >= 0 else "#43a047"
+
+            yest_html = f"""
+            <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e0e0e0;font-size:14px;color:#999;">
+                昨日：<span style="color:#e53935;">{_yup}</span>:<span>{_yflat}</span>:<span style="color:#43a047;">{_ydown}</span>
+                涨停 {_yul} | 跌停 {_ydl}
+            </div>
+            <div style="margin-top:2px;font-size:13px;color:{hint_color};">{hint_str}</div>
+            """
+
+        st.html(f"""
+        <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:16px;">
+            <div style="font-size:17px;color:#888;margin-bottom:8px;">涨跌数量比</div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span style="color:#e53935;font-size:34px;font-weight:bold;">{_up}</span>
+                <span style="color:#888;font-size:17px;">涨</span>
+                <span style="color:#9e9e9e;font-size:24px;">:</span>
+                <span style="color:#9e9e9e;font-size:34px;font-weight:bold;">{_flat}</span>
+                <span style="color:#888;font-size:17px;">平</span>
+                <span style="color:#9e9e9e;font-size:24px;">:</span>
+                <span style="color:#43a047;font-size:34px;font-weight:bold;">{_down}</span>
+                <span style="color:#888;font-size:17px;">跌</span>
+            </div>
+            <div style="margin-top:4px;font-size:16px;color:#e53935;font-weight:bold;">
+                市场情绪：涨 {_up_pct:.1f}% 家
+            </div>
+            <div style="margin-top:6px;font-size:16px;">
+                <span style="color:#e53935;">涨停 {_ul}</span>
+                <span style="color:#999;margin:0 8px;">|</span>
+                <span style="color:#43a047;">跌停 {_dl}</span>
+            </div>
+            {yest_html}
+        </div>
+        """)
+
+    # ---- Card 2: 成交额 ----
+    with card_right:
+        total_yi = today["total_yi"]
+        sh_yi = today["sh_yi"]
+        sz_yi = today["sz_yi"]
+        bj_yi = today["bj_yi"]
+
+        delta_html = ""
+        yest_turnover_html = ""
+        if yesterday:
+            prev_yi = yesterday["total_yi"]
+            change = total_yi - prev_yi
+            change_pct = (total_yi / prev_yi - 1) * 100 if prev_yi else 0
+            color = "#e53935" if change >= 0 else "#43a047"
+            sign = "+" if change >= 0 else ""
+            delta_html = f'<span style="color:{color};font-size:16px;">{sign}{change:,.0f}亿（{sign}{change_pct:.1f}%）</span>'
+
+            yest_parts = [f'上证 {yesterday["sh_yi"]:,.0f}亿', f'深证 {yesterday["sz_yi"]:,.0f}亿']
+            if yesterday["bj_yi"] > 0:
+                yest_parts.append(f'北证 {yesterday["bj_yi"]:,.0f}亿')
+
+            yest_turnover_html = f"""
+            <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e0e0e0;font-size:14px;color:#999;">
+                昨日：{yesterday["total_yi"]:,.0f}亿（{" | ".join(yest_parts)}）
+            </div>
+            <div style="margin-top:2px;font-size:16px;color:{color};">
+                {'放量' if change>=0 else '缩量'} {abs(change):,.0f}亿（{sign}{change_pct:.1f}%）
+            </div>
+            """
+
+        exchange_parts = [f'上证 {sh_yi:,.0f}亿', f'深证 {sz_yi:,.0f}亿']
+        if bj_yi > 0:
+            exchange_parts.append(f'北证 {bj_yi:,.0f}亿')
+
+        st.html(f"""
+        <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:16px;">
+            <div style="font-size:17px;color:#888;margin-bottom:8px;">两市成交额（亿元）</div>
+            <div style="font-size:34px;font-weight:bold;">{total_yi:,.0f}<span style="font-size:17px;color:#888;">亿</span></div>
+            <div style="margin-top:4px;">{delta_html}</div>
+            <div style="margin-top:8px;font-size:16px;">
+                {" &nbsp;|&nbsp; ".join(exchange_parts)}
+            </div>
+            {yest_turnover_html}
+        </div>
+        """)
+
+    # ======== Row 2: 10日成交额趋势 ========
+    st.divider()
+
+    if trend:
+        import plotly.graph_objects as go
+        from datetime import datetime
+
+        # Format dates: "20260605" → "06-05"
+        def _fmt_date(date_str: str) -> str:
+            try:
+                return datetime.strptime(date_str, "%Y%m%d").strftime("%m-%d")
+            except Exception:
+                return date_str
+
+        labels = [_fmt_date(d["date"]) for d in trend]
+        amounts = [d["total_yi"] for d in trend]
+
+        # Bar colors: 涨多=红, 跌多=绿
+        bar_colors = ["#e53935" if d.get("up", 0) >= d.get("down", 0) else "#43a047" for d in trend]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=labels, y=amounts, marker_color=bar_colors,
+            text=[f"{a/10000:.2f}万亿" for a in amounts],
+            textposition="outside", textfont=dict(size=12, color="#555"),
+            hovertemplate="%{x}<br>成交额: %{y:,.0f}亿<extra></extra>",
+        ))
+
+        fig.update_layout(
+            template="plotly_white", height=330,
+            margin=dict(l=20, r=20, t=50, b=30),
+            showlegend=False,
+            yaxis_title="成交额（亿元）",
+            xaxis=dict(title="", type="category", tickangle=0),
         )
-        st.caption(f"{total_yi/10000:.2f} 万亿  |  交易日: {trade_date_str}")
-    else:
-        st.info("TUSHARE_TOKEN 未配置或数据获取失败")
+        # Give bar labels breathing room
+        y_min = min(amounts) * 0.85
+        y_max = max(amounts) * 1.18
+        fig.update_yaxes(range=[y_min, y_max])
 
-with breadth_col3:
-    st.markdown("**涨停跌停**")
-    if breadth and "error" not in breadth:
-        try:
-            import tushare as ts
-            token = os.environ.get("TUSHARE_TOKEN", "")
-            ts.set_token(token)
-            api = ts.pro_api()
-            limits = api.limit_list(trade_date=trade_date_str, limit_type="U,D")
-            up_limit = int(len(limits[limits["limit"] == "U"])) if limits is not None and not limits.empty else 0
-            down_limit = int(len(limits[limits["limit"] == "D"])) if limits is not None and not limits.empty else 0
-            st.metric("涨停", f"{up_limit}")
-            st.caption(f"跌停 {down_limit}")
-        except Exception:
-            st.info("涨停跌停数据获取失败")
+        # Chart + avg summary side by side
+        chart_col, info_col = st.columns([5, 1])
+        with chart_col:
+            st.caption("近10日成交额趋势  |  🟥 涨多  🟩 跌多")
+            st.plotly_chart(fig, width="stretch")
+        with info_col:
+            # Today vs 5d/10d average comparison
+            today_yi = today["total_yi"]
+            avg5 = overview["avg_5d"]
+            avg10 = overview["avg_10d"]
+
+            def _vs_tag(val: float, avg: float) -> str:
+                if not avg:
+                    return ""
+                pct = (val / avg - 1) * 100
+                if pct >= 0:
+                    return f'<span style="color:#e53935;font-size:14px;">▲ 高于 {pct:.1f}%</span>'
+                else:
+                    return f'<span style="color:#43a047;font-size:14px;">▼ 低于 {abs(pct):.1f}%</span>'
+
+            vs5_tag = _vs_tag(today_yi, avg5)
+            vs10_tag = _vs_tag(today_yi, avg10)
+
+            st.html(f"""
+            <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:16px;margin-top:30px;">
+                <div style="font-size:16px;color:#888;">5日均量 {vs5_tag}</div>
+                <div style="font-size:26px;font-weight:bold;">{avg5:,.0f}<span style="font-size:13px;color:#888;"> 亿</span></div>
+                <div style="font-size:16px;color:#888;margin-top:12px;">10日均量 {vs10_tag}</div>
+                <div style="font-size:26px;font-weight:bold;">{avg10:,.0f}<span style="font-size:13px;color:#888;"> 亿</span></div>
+            </div>
+            """)
     else:
-        st.info("待数据就绪")
+        st.info("暂无成交额趋势数据")
 
 st.divider()
 
