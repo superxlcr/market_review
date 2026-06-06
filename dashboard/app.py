@@ -221,7 +221,7 @@ def render_index_section(code: str, name: str, end_date: str = None):
     ma_col, vol_col = st.columns([3, 2])
 
     with ma_col:
-        st.markdown("**均线系统**")
+        st.markdown("**均线分析**")
         mas = calc_ma(df)
         ma_periods = [5, 10, 20, 60, 120, 240]
         ma_dirs = {}
