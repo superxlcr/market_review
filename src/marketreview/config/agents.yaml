@@ -10,10 +10,6 @@ market_analyst:
     从均线排列和量能变化识别趋势方向，从KDJ/RSI/BIAS等指标判断短期超买超卖。
     你也会关注权重股对指数的贡献和市场整体宽度，判断今天是"真涨"还是"拉权重出货"。
     你的结论会作为后续板块分析和个股分析的基准环境参考。
-  tools:
-    - get_index_technicals
-    - get_market_breadth
-    - get_index_contribution
-  llm: deepseek/deepseek-v4-pro
+  llm: openai/deepseek-v4-pro
   max_iter: 12
   verbose: true
