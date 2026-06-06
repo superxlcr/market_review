@@ -72,11 +72,9 @@ def get_offset_info(df: pd.DataFrame, period: int):
     if idx < 0:
         return "N/A", None, None, None, None, 0
 
-    # Window size for后续均量
+    # Window size for后续均量: MA5/10不取, 其余统一5天
     if period <= 10:
         window = 1
-    elif period <= 60:
-        window = 3
     else:
         window = 5
 
@@ -300,7 +298,7 @@ def render_index_section(code: str, name: str, end_date: str = None):
             <tbody>{rows_html}</tbody>
         </table>
         """)
-        st.caption("扣抵量: 扣抵日当日量 vs 今日量 | 后续均量: 扣抵日+后续N天窗口均量（MA20/60窗口3天，MA120/240窗口5天，MA5/10无后续窗口）| 红色=安全 绿色=危险 灰色=持平")
+        st.caption("扣抵量: 扣抵日当日量 vs 今日量 | 后续均量: 扣抵日+后续4天窗口均量（MA5/10不适用）| 红色=安全 绿色=危险 灰色=持平")
 
         arrangement = ma_arrangement(df)
         st.markdown(f"**均线排列:** {arrangement}")
@@ -448,6 +446,11 @@ else:
         _dl = today["down_limit"]
         _total = _up + _flat + _down
         _up_pct = _up / _total * 100 if _total else 0
+        _down_pct = _down / _total * 100 if _total else 0
+        if _up >= _down:
+            _sentiment_label, _sentiment_pct, _sentiment_color = "涨", _up_pct, "#e53935"
+        else:
+            _sentiment_label, _sentiment_pct, _sentiment_color = "跌", _down_pct, "#43a047"
 
         # Yesterday comparison HTML
         yest_html = ""
@@ -485,8 +488,8 @@ else:
                 <span style="color:#43a047;font-size:34px;font-weight:bold;">{_down}</span>
                 <span style="color:#888;font-size:17px;">跌</span>
             </div>
-            <div style="margin-top:4px;font-size:16px;color:#e53935;font-weight:bold;">
-                市场情绪：涨 {_up_pct:.1f}% 家
+            <div style="margin-top:4px;font-size:16px;color:{_sentiment_color};font-weight:bold;">
+                市场情绪：{_sentiment_label} {_sentiment_pct:.1f}% 家
             </div>
             <div style="margin-top:6px;font-size:16px;">
                 <span style="color:#e53935;">涨停 {_ul}</span>
