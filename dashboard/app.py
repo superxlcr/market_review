@@ -324,6 +324,8 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     div = kd_div
     div_signal = "—"
     div_color = "#999"
+    ref = _short_date(div.get("reference_date", ""))
+
     if div["type"]:
         parts = []
         if div["kd_divergence"]:
@@ -333,7 +335,6 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         elif div["d_divergence"]:
             parts.append("D")
         which = "/".join(parts)
-        ref = _short_date(div.get("reference_date", ""))
         cmp = _short_date(div.get("divergence_date", ""))
         days_val = div.get("days", 0) or 0
         if days_val > 0:
@@ -344,6 +345,18 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
             div_signal += f"\n{ref} 新高 vs {cmp}" if div["type"] == "顶背离" else f"\n{ref} 新低 vs {cmp}"
         # 顶背离=看跌=绿, 底背离=站稳=红
         div_color = "#2e7d32" if div["type"] == "顶背离" else "#c62828"
+    elif div.get("direction"):
+        days_val = div.get("days", 0) or 0
+        if div["direction"] == "top":
+            div_signal = f"新高不背离"
+            div_color = "#c62828"  # 看多=红
+        else:
+            div_signal = f"新低不背离"
+            div_color = "#2e7d32"  # 看空=绿
+        if days_val > 0:
+            div_signal += f" · {days_val}天"
+        if ref:
+            div_signal += f"\n{ref} 新高" if div["direction"] == "top" else f"\n{ref} 新低"
 
     # Zone color: 超买=看空=绿, 超卖=看多=红
     kd_zone = _kd_zone(k_val)

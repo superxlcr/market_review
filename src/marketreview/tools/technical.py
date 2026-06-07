@@ -421,13 +421,13 @@ def _detect_top_divergence(
 
     return {
         "type": None, "k_divergence": False, "d_divergence": False,
-        "kd_divergence": False,
+        "kd_divergence": False, "direction": "top",
         "reference_date": str(df.iloc[peak_idx]["date"])[:10],
         "reference_price": round(peak_high, 2),
         "reference_k": round(float(peak_k), 1),
         "reference_d": round(float(peak_d), 1),
         "divergence_date": None, "divergence_price": None,
-        "divergence_k": None, "divergence_d": None, "days": None,
+        "divergence_k": None, "divergence_d": None, "days": latest_idx - peak_idx,
     }
 
 
@@ -490,13 +490,13 @@ def _detect_bottom_divergence(
 
     return {
         "type": None, "k_divergence": False, "d_divergence": False,
-        "kd_divergence": False,
+        "kd_divergence": False, "direction": "bottom",
         "reference_date": str(df.iloc[valley_idx]["date"])[:10],
         "reference_price": round(valley_low, 2),
         "reference_k": round(float(valley_k), 1),
         "reference_d": round(float(valley_d), 1),
         "divergence_date": None, "divergence_price": None,
-        "divergence_k": None, "divergence_d": None, "days": None,
+        "divergence_k": None, "divergence_d": None, "days": latest_idx - valley_idx,
     }
 
 
@@ -531,7 +531,7 @@ def detect_kd_divergence(
     if n < 20:
         return {
             "type": None, "k_divergence": False, "d_divergence": False,
-            "kd_divergence": False,
+            "kd_divergence": False, "direction": None,
             "reference_date": None, "reference_price": None,
             "reference_k": None, "reference_d": None,
             "divergence_date": None, "divergence_price": None,
@@ -546,7 +546,7 @@ def detect_kd_divergence(
     if direction is None:
         return {
             "type": None, "k_divergence": False, "d_divergence": False,
-            "kd_divergence": False,
+            "kd_divergence": False, "direction": None,
             "reference_date": None, "reference_price": None,
             "reference_k": None, "reference_d": None,
             "divergence_date": None, "divergence_price": None,
