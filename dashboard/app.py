@@ -24,6 +24,7 @@ from marketreview.tools.technical import (
     calc_kd,
     calc_rsi,
     calc_bias,
+    bias_status,
     detect_kd_divergence,
     detect_rsi_divergence,
     kline_pattern,
@@ -291,7 +292,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
 
     kd = calc_kd(df)
     kd_div = detect_kd_divergence(df, kd["K"], kd["D"])
-    bias = calc_bias(df)
+    bias = calc_bias(df, [10, 20])
 
     k_val = latest_val(kd["K"])
     d_val = latest_val(kd["D"])
@@ -377,22 +378,22 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     # --- KD Card ---
     st.markdown("**KD 指标**")
     st.html(f"""
-    <table style="width:100%;font-size:15px;border-collapse:collapse;">
+    <table style="width:100%;font-size:15px;border-collapse:collapse;table-layout:fixed;">
         <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
-            <th style="text-align:center;">指标</th>
-            <th style="text-align:right;">K</th>
-            <th style="text-align:right;">D</th>
-            <th style="text-align:center;">超买/超卖</th>
-            <th style="text-align:center;">KD 差值</th>
-            <th style="text-align:left;">信号</th>
+            <th style="text-align:center;width:10%;">指标</th>
+            <th style="text-align:center;width:14%;">K</th>
+            <th style="text-align:center;width:14%;">D</th>
+            <th style="text-align:center;width:14%;">超买/超卖</th>
+            <th style="text-align:center;width:8%;">KD 差值</th>
+            <th style="text-align:center;width:40%;">信号</th>
         </tr></thead>
         <tbody><tr>
-            <td style="text-align:center;font-weight:600;">KD(9,3,3)</td>
-            <td style="text-align:right;font-weight:bold;font-size:17px;">{f"{k_val:.2f}" if k_val else "N/A"}</td>
-            <td style="text-align:right;font-weight:bold;font-size:17px;">{f"{d_val:.2f}" if d_val else "N/A"}</td>
+            <td style="text-align:center;font-weight:600;width:10%;">KD(9,3,3)</td>
+            <td style="text-align:center;font-weight:bold;font-size:17px;">{f"{k_val:.2f}" if k_val else "N/A"}</td>
+            <td style="text-align:center;font-weight:bold;font-size:17px;">{f"{d_val:.2f}" if d_val else "N/A"}</td>
             <td style="text-align:center;color:{zone_color};font-weight:bold;">{kd_zone}</td>
             <td style="text-align:center;color:{diff_color};font-weight:bold;font-size:14px;" title="{diff_hint}">{diff_label}</td>
-            <td style="text-align:left;color:{div_color};font-weight:bold;white-space:pre-line;font-size:14px;">{div_signal}</td>
+            <td style="text-align:center;color:{div_color};font-weight:bold;white-space:pre-line;font-size:14px;">{div_signal}</td>
         </tr></tbody>
     </table>
     """)
@@ -465,20 +466,20 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
             rsi_vs_k_color = "#2e7d32"  # 看空=绿
 
     st.html(f"""
-    <table style="width:100%;font-size:15px;border-collapse:collapse;">
+    <table style="width:100%;font-size:15px;border-collapse:collapse;table-layout:fixed;">
         <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
-            <th style="text-align:center;">指标</th>
-            <th style="text-align:right;">RSI</th>
-            <th style="text-align:center;">超买/超卖</th>
-            <th style="text-align:center;">vs KD</th>
-            <th style="text-align:left;">信号</th>
+            <th style="text-align:center;width:10%;">指标</th>
+            <th style="text-align:center;width:28%;">RSI</th>
+            <th style="text-align:center;width:14%;">超买/超卖</th>
+            <th style="text-align:center;width:8%;">vs KD</th>
+            <th style="text-align:center;width:40%;">信号</th>
         </tr></thead>
         <tbody><tr>
-            <td style="text-align:center;font-weight:600;">RSI(9,9,9)</td>
-            <td style="text-align:right;font-weight:bold;font-size:17px;">{f"{rsi_val:.2f}" if rsi_val else "N/A"}</td>
+            <td style="text-align:center;font-weight:600;width:10%;">RSI(9,9,9)</td>
+            <td style="text-align:center;font-weight:bold;font-size:17px;">{f"{rsi_val:.2f}" if rsi_val else "N/A"}</td>
             <td style="text-align:center;color:{rsi_zone_color};font-weight:bold;">{rsi_zone}</td>
             <td style="text-align:center;color:{rsi_vs_k_color};font-weight:bold;">{rsi_vs_k}</td>
-            <td style="text-align:left;color:{rsi_sig_color};font-weight:bold;white-space:pre-line;font-size:14px;">{rsi_signal}</td>
+            <td style="text-align:center;color:{rsi_sig_color};font-weight:bold;white-space:pre-line;font-size:14px;">{rsi_signal}</td>
         </tr></tbody>
     </table>
     """)
@@ -487,18 +488,38 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     else:
         st.caption("RSI 数据不足")
 
-    # --- BIAS row ---
-    if bias is not None:
-        st.markdown("##### 其他指标")
-        ind_cols = st.columns(3)
-        indicators = [
-            ("BIAS(6)", latest_val(bias["BIAS6"]) if "BIAS6" in bias else None, "负乖离=超跌"),
-            ("BIAS(12)", latest_val(bias["BIAS12"]) if "BIAS12" in bias else None, "中长期乖离"),
-            ("BIAS(24)", latest_val(bias["BIAS24"]) if "BIAS24" in bias else None, "长期乖离"),
-        ]
-        for i, (label, val, hint) in enumerate(indicators):
-            with ind_cols[i]:
-                st.metric(label, f"{val:.2f}" if val else "N/A", help=hint)
+    # --- BIAS Card ---
+    st.markdown("**BIAS 乖离率**")
+    binfo = bias_status(bias, [10, 20])
+
+    def _bias_cell(key: str) -> str:
+        entry = binfo.get(key, {})
+        val = entry.get("value")
+        if val is None:
+            return "N/A"
+        s = f"{val:.2f}"
+        if entry.get("status"):
+            s += f' <span style="color:{entry["color"]};font-weight:bold;">({entry["status"]})</span>'
+        return s
+
+    b10_html = _bias_cell("BIAS10")
+    b20_html = _bias_cell("BIAS20")
+
+    st.html(f"""
+    <table style="width:100%;font-size:15px;border-collapse:collapse;table-layout:fixed;">
+        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+            <th style="text-align:center;width:10%;">指标</th>
+            <th style="text-align:center;">10日乖离</th>
+            <th style="text-align:center;">月线乖离(20日)</th>
+        </tr></thead>
+        <tbody><tr>
+            <td style="text-align:center;font-weight:600;width:10%;">BIAS</td>
+            <td style="text-align:center;font-weight:bold;font-size:17px;">{b10_html}</td>
+            <td style="text-align:center;font-weight:bold;font-size:17px;">{b20_html}</td>
+        </tr></tbody>
+    </table>
+    """)
+    st.caption("10日乖离 > 10 短线超买 | < -10 短线超卖 | 月线乖离(20日) > 7 超买 | < -7 超卖")
 
 
 # ------- Page -------

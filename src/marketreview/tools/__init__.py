@@ -8,6 +8,7 @@ from .technical import (
     calc_kdj,
     calc_rsi,
     calc_bias,
+    bias_status,
     kline_pattern,
     build_technical_summary,
     get_offset_info,

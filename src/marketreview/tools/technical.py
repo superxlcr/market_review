@@ -276,6 +276,54 @@ def calc_bias(df: pd.DataFrame, periods: list[int] = None) -> dict[str, list[flo
     return result
 
 
+# BIAS thresholds: (period, threshold, short_label_prefix)
+_BIAS_RULES = {
+    10: (10, "短线超买", "短线超卖"),
+    20: (7,  "超买",    "超卖"),
+}
+
+
+def bias_status(bias_dict: dict, periods: list[int] = None) -> dict:
+    """Return BIAS display info with 超买/超卖 labels and colors.
+
+    Args:
+        bias_dict: output of calc_bias(), e.g. {"BIAS10": [...], "BIAS20": [...]}
+        periods: list of period ints to extract (default [10, 20])
+
+    Returns:
+        {f"BIAS{p}": {"value": float|None, "status": str|None, "color": str}}
+        Color convention: 超买→绿(#2e7d32)=看空, 超卖→红(#c62828)=看多
+    """
+    if periods is None:
+        periods = [10, 20]
+
+    result = {}
+    for p in periods:
+        key = f"BIAS{p}"
+        vals = bias_dict.get(key, [])
+        val = None
+        for v in reversed(vals):
+            if not np.isnan(v):
+                val = round(float(v), 2)
+                break
+
+        rule = _BIAS_RULES.get(p)
+        if val is not None and rule is not None:
+            threshold, over_label, under_label = rule
+            if val > threshold:
+                status, color = over_label, "#2e7d32"
+            elif val < -threshold:
+                status, color = under_label, "#c62828"
+            else:
+                status, color = None, None
+        else:
+            status, color = None, None
+
+        result[key] = {"value": val, "status": status, "color": color}
+
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════════
 # TODO — 新版技术指标（待逐个实现，取代上面的旧版 KDJ/RSI/BIAS）
 # ═══════════════════════════════════════════════════════════════════
