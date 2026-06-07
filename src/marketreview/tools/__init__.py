@@ -4,6 +4,7 @@ from .technical import (
     ma_direction,
     ma_arrangement,
     volume_analysis,
+    calc_kd,
     calc_kdj,
     calc_rsi,
     calc_bias,
@@ -11,4 +12,5 @@ from .technical import (
     build_technical_summary,
     get_offset_info,
     get_ma_role,
+    detect_kd_divergence,
 )

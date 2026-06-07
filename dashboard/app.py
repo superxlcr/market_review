@@ -21,9 +21,10 @@ from marketreview.tools.technical import (
     ma_arrangement,
     ma_direction,
     volume_analysis,
-    calc_kdj,
+    calc_kd,
     calc_rsi,
     calc_bias,
+    detect_kd_divergence,
     kline_pattern,
     get_offset_info,
     get_ma_role,
@@ -249,17 +250,145 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
 
     # --- Row: Technical Indicators ---
     st.markdown("**技术指标**")
-    kdj = calc_kdj(df)
+    kd = calc_kd(df)
+    kd_div = detect_kd_divergence(df, kd["K"], kd["D"])
     rsi6 = calc_rsi(df, 6)
     bias = calc_bias(df)
 
-    ind_cols = st.columns(5)
+    k_val = latest_val(kd["K"])
+    d_val = latest_val(kd["D"])
+
+    # ---- helpers ----
+
+    def _short_date(d: str) -> str:
+        """Normalize date string to MM-DD."""
+        clean = d.replace("-", "").strip()
+        return f"{clean[4:6]}-{clean[6:8]}" if len(clean) >= 8 else d
+
+    def _kd_zone(kv: float | None) -> str:
+        if kv is None:
+            return "N/A"
+        if kv > 80:
+            return "超买区"
+        if kv < 20:
+            return "超卖区"
+        return "常态区"
+
+    # Short-term MA trend (MA5/MA10/MA20)
+    mas = calc_ma(df, [5, 10, 20])
+    def _ma_trend(idx: int) -> str:
+        m5, m10, m20 = mas["MA5"][idx], mas["MA10"][idx], mas["MA20"][idx]
+        if any(np.isnan(v) for v in [m5, m10, m20]):
+            return "盘整"
+        if m5 > m10 > m20:
+            return "多头"
+        elif m5 < m10 < m20:
+            return "空头"
+        return "盘整"
+
+    today_trend = _ma_trend(-1)
+    yesterday_trend = _ma_trend(-2) if len(df) >= 2 else "盘整"
+
+    if today_trend == "盘整" and yesterday_trend == "多头":
+        trend_label = "多头转盘整"
+        trend_color = "#ef6c00"  # orange
+    elif today_trend == "盘整" and yesterday_trend == "空头":
+        trend_label = "空头转盘整"
+        trend_color = "#ef6c00"
+    elif today_trend == "多头":
+        trend_label = "多头趋势"
+        trend_color = "#c62828"  # red
+    elif today_trend == "空头":
+        trend_label = "空头趋势"
+        trend_color = "#2e7d32"  # green
+    else:
+        trend_label = "盘整"
+        trend_color = "#888"
+
+    # KD difference & convergence warning
+    kd_diff = round(abs(k_val - d_val), 1) if k_val is not None and d_val is not None else None
+    if kd_diff is not None and kd_diff >= 20:
+        diff_label = f"差值 {kd_diff:.1f} ⚠"
+        diff_hint = "KD 开口≥20，大概率收敛，注意反向调整"
+        diff_color = "#ef6c00"
+    elif kd_diff is not None:
+        diff_label = f"差值 {kd_diff:.1f}"
+        diff_hint = "KD 开口正常"
+        diff_color = "#888"
+    else:
+        diff_label = "N/A"
+        diff_hint = ""
+        diff_color = "#888"
+
+    # KD divergence signal text
+    div = kd_div
+    div_signal = "—"
+    div_color = "#999"
+    if div["type"]:
+        parts = []
+        if div["kd_divergence"]:
+            parts.append("KD")
+        elif div["k_divergence"]:
+            parts.append("K")
+        elif div["d_divergence"]:
+            parts.append("D")
+        which = "/".join(parts)
+        ref = _short_date(div.get("reference_date", ""))
+        cmp = _short_date(div.get("divergence_date", ""))
+        days_val = div.get("days", 0) or 0
+        if days_val > 0:
+            div_signal = f"{div['type']} · {which} · {days_val}天"
+        else:
+            div_signal = f"{div['type']} · {which}"
+        if ref and cmp:
+            div_signal += f"\n{ref} 新高 vs {cmp}" if div["type"] == "顶背离" else f"\n{ref} 新低 vs {cmp}"
+        # 顶背离=看跌=绿, 底背离=站稳=红
+        div_color = "#2e7d32" if div["type"] == "顶背离" else "#c62828"
+
+    # Zone color: 超买=看空=绿, 超卖=看多=红
+    kd_zone = _kd_zone(k_val)
+    if kd_zone == "超买区":
+        zone_color = "#2e7d32"
+    elif kd_zone == "超卖区":
+        zone_color = "#c62828"
+    else:
+        zone_color = "#888"
+
+    # --- KD Card ---
+    st.html(f"""
+    <div style="font-size:15px;margin-bottom:4px;">
+        短期趋势：<span style="color:{trend_color};font-weight:bold;">{trend_label}</span>
+    </div>
+    <table style="width:100%;font-size:15px;border-collapse:collapse;">
+        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+            <th style="text-align:center;">指标</th>
+            <th style="text-align:right;">K</th>
+            <th style="text-align:right;">D</th>
+            <th style="text-align:center;">超买/超卖</th>
+            <th style="text-align:center;">KD 差值</th>
+            <th style="text-align:left;">信号</th>
+        </tr></thead>
+        <tbody><tr>
+            <td style="text-align:center;font-weight:600;">KD(9,3,3)</td>
+            <td style="text-align:right;font-weight:bold;font-size:17px;">{f"{k_val:.2f}" if k_val else "N/A"}</td>
+            <td style="text-align:right;font-weight:bold;font-size:17px;">{f"{d_val:.2f}" if d_val else "N/A"}</td>
+            <td style="text-align:center;color:{zone_color};font-weight:bold;">{kd_zone}</td>
+            <td style="text-align:center;color:{diff_color};font-weight:bold;font-size:14px;" title="{diff_hint}">{diff_label}</td>
+            <td style="text-align:left;color:{div_color};font-weight:bold;white-space:pre-line;font-size:14px;">{div_signal}</td>
+        </tr></tbody>
+    </table>
+    """)
+    if kd_diff is not None and kd_diff >= 20:
+        st.caption(f"💡 {diff_hint}")
+
+    # --- RSI + BIAS row ---
+    st.markdown("##### 其他指标")
+    ind_cols = st.columns(4)
     indicators = [
-        ("KDJ-K", latest_val(kdj["K"]), None),
-        ("KDJ-D", latest_val(kdj["D"]), None),
-        ("KDJ-J", latest_val(kdj["J"]), "J<0超卖 J>100超买"),
         ("RSI(6)", latest_val(rsi6), "<30超卖 >70超买"),
         ("BIAS(6)", latest_val(bias["BIAS6"]), "负乖离=超跌"),
+        ("BIAS(12)", latest_val(bias["BIAS12"]) if "BIAS12" in bias else None, "中长期乖离"),
+        ("BIAS(24)", latest_val(bias["BIAS24"]) if "BIAS24" in bias else None, "长期乖离"),
     ]
     for i, (label, val, hint) in enumerate(indicators):
         with ind_cols[i]:

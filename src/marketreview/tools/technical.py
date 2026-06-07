@@ -238,6 +238,327 @@ def calc_bias(df: pd.DataFrame, periods: list[int] = None) -> dict[str, list[flo
     return result
 
 
+# ═══════════════════════════════════════════════════════════════════
+# TODO — 新版技术指标（待逐个实现，取代上面的旧版 KDJ/RSI/BIAS）
+# ═══════════════════════════════════════════════════════════════════
+
+def calc_kd(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:
+    """
+    TDX-style KD indicator (K/D only, no J).
+
+    Formula (通达信):
+      收盘RSV = (C - LLV(L,9)) / (HHV(H,9) - LLV(L,9)) * 100
+      K_close = SMA(收盘RSV, 3, 1)        # 辅助平滑线
+      D_close = SMA(K_close, 3, 1)
+      最高RSV = (H - LLV(L,9)) / (HHV(H,9) - LLV(L,9)) * 100
+      K_final = 2/3 * K_close[-1] + 1/3 * 最高RSV
+      D_final = 2/3 * D_close[-1] + 1/3 * K_final
+
+    K_final is driven by high-price RSV but smoothed via close-based reference.
+    Returns {"K": [...], "D": [...]}.
+    """
+    low_n = df["low"].rolling(n).min()
+    high_n = df["high"].rolling(n).max()
+    rng = high_n - low_n
+
+    # Close-based RSV
+    rsv_close = (df["close"] - low_n) / rng.replace(0, np.nan) * 100
+
+    # High-based RSV (for final K line)
+    rsv_high = (df["high"] - low_n) / rng.replace(0, np.nan) * 100
+
+    k_close = np.full(len(df), np.nan)
+    d_close = np.full(len(df), np.nan)
+    k_final = np.full(len(df), np.nan)
+    d_final = np.full(len(df), np.nan)
+
+    # Start from first valid RSV index
+    start = n - 1
+    if start < 0 or start >= len(df):
+        return {"K": [np.nan] * len(df), "D": [np.nan] * len(df)}
+
+    k_close[start] = rsv_close.iloc[start]
+    d_close[start] = k_close[start]
+    k_final[start] = rsv_high.iloc[start]
+    d_final[start] = k_final[start]
+
+    for i in range(start + 1, len(df)):
+        # SMA(X, 3, 1): (1*X + 2*prev) / 3
+        if not np.isnan(rsv_close.iloc[i]):
+            k_close[i] = (rsv_close.iloc[i] + 2 * k_close[i - 1]) / 3
+        else:
+            k_close[i] = k_close[i - 1]
+        d_close[i] = (k_close[i] + 2 * d_close[i - 1]) / 3
+
+        if not np.isnan(rsv_high.iloc[i]):
+            k_final[i] = (rsv_high.iloc[i] + 2 * k_close[i - 1]) / 3
+        else:
+            k_final[i] = k_final[i - 1]
+        d_final[i] = (k_final[i] + 2 * d_close[i - 1]) / 3
+
+    return {"K": k_final.tolist(), "D": d_final.tolist()}
+
+# TODO 2: calc_rsi(df, period=6) → list[float]
+#   - 基于收盘价（确认：现有实现已用 close）
+#   - 比 KD 更敏感，用于超买超卖 + 背离
+#   - 用法：
+#       RSI > 70 超买, RSI < 30 超卖
+#       价格新高 RSI 未新高 → 顶背离
+#       价格新低 RSI 未新低 → 底背离
+
+# TODO 3: calc_wr(df, period=10) → list[float]
+#   - 威廉指数 Williams %R
+#   - 公式：WR = (N日最高价 - 收盘价) / (N日最高价 - N日最低价) × 100
+#   - 值域 0~100，>80 超卖，<20 超买（注意和 KDJ/RSI 相反）
+#   - 用途：评估是否留上影线，主要看指数和行业板块，个股不怎么用
+
+# TODO 4: calc_bias_v2(df, periods=[6,12,24]) → dict[str, list[float]]
+#   - 乖离率，现有实现基本正确，待确认参数和用法细节
+#   - 用途：短期偏离太多会回调，主要看指数和行业板块
+#   - 用法：BIAS 负值大 → 超跌反弹；正值大 → 过热回调
+
+# ============================================================
+# KD Divergence Detection
+# ============================================================
+
+def _ma_trend_at(mas: dict, idx: int) -> str:
+    """Check MA5/MA10/MA20 trend at a given DataFrame index.
+    Returns '多头', '空头', or '缠绕'."""
+    ma5 = mas["MA5"][idx]
+    ma10 = mas["MA10"][idx]
+    ma20 = mas["MA20"][idx]
+    if any(np.isnan(v) for v in [ma5, ma10, ma20]):
+        return "缠绕"
+    if ma5 > ma10 > ma20:
+        return "多头"
+    elif ma5 < ma10 < ma20:
+        return "空头"
+    return "缠绕"
+
+
+def _determine_divergence_direction(
+    mas: dict, latest_idx: int, lookback: int = 20
+) -> str | None:
+    """
+    Determine whether to look for top or bottom divergence.
+
+    Checks today's MA trend first (MA5/MA10/MA20).
+    If today is 缠绕, walks back up to `lookback` days to find the last
+    clear trend.  Returns 'top', 'bottom', or None.
+    """
+    trend = _ma_trend_at(mas, latest_idx)
+    if trend == "多头":
+        return "top"
+    elif trend == "空头":
+        return "bottom"
+
+    for i in range(latest_idx - 1, max(latest_idx - lookback, -1), -1):
+        trend = _ma_trend_at(mas, i)
+        if trend == "多头":
+            return "top"
+        elif trend == "空头":
+            return "bottom"
+
+    return None
+
+
+def _detect_top_divergence(
+    df: pd.DataFrame, k: list[float], d: list[float],
+    latest_idx: int, max_lookback: int = 240,
+) -> dict:
+    """Look for bearish (top) divergence within the current cycle."""
+    # Find cycle start: most recent day with K<20 AND D<20
+    cycle_start = None
+    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
+        kv, dv = k[i], d[i]
+        if not np.isnan(kv) and not np.isnan(dv) and kv < 20 and dv < 20:
+            cycle_start = i
+            break
+
+    if cycle_start is None:
+        cycle_start = max(latest_idx - max_lookback, 0)
+
+    # Find highest HIGH in [cycle_start, latest_idx]
+    peak_idx = cycle_start
+    peak_high = float(df.iloc[cycle_start]["high"])
+    for i in range(cycle_start + 1, latest_idx + 1):
+        hi = float(df.iloc[i]["high"])
+        if not np.isnan(hi) and hi > peak_high:
+            peak_high = hi
+            peak_idx = i
+
+    peak_k = k[peak_idx]
+    peak_d = d[peak_idx]
+
+    # Walk back from peak to find lower price + higher KD
+    for i in range(peak_idx - 1, cycle_start - 1, -1):
+        hi = float(df.iloc[i]["high"])
+        ki, di = k[i], d[i]
+        if np.isnan(hi) or np.isnan(ki) or np.isnan(di):
+            continue
+        if hi >= peak_high:
+            continue
+
+        k_div = ki > peak_k
+        d_div = di > peak_d
+
+        if k_div or d_div:
+            return {
+                "type": "顶背离",
+                "k_divergence": k_div,
+                "d_divergence": d_div,
+                "kd_divergence": k_div and d_div,
+                "reference_date": str(df.iloc[peak_idx]["date"])[:10],
+                "reference_price": round(peak_high, 2),
+                "reference_k": round(float(peak_k), 1),
+                "reference_d": round(float(peak_d), 1),
+                "divergence_date": str(df.iloc[i]["date"])[:10],
+                "divergence_price": round(hi, 2),
+                "divergence_k": round(float(ki), 1),
+                "divergence_d": round(float(di), 1),
+                "days": latest_idx - peak_idx,
+            }
+
+    return {
+        "type": None, "k_divergence": False, "d_divergence": False,
+        "kd_divergence": False,
+        "reference_date": str(df.iloc[peak_idx]["date"])[:10],
+        "reference_price": round(peak_high, 2),
+        "reference_k": round(float(peak_k), 1),
+        "reference_d": round(float(peak_d), 1),
+        "divergence_date": None, "divergence_price": None,
+        "divergence_k": None, "divergence_d": None, "days": None,
+    }
+
+
+def _detect_bottom_divergence(
+    df: pd.DataFrame, k: list[float], d: list[float],
+    latest_idx: int, max_lookback: int = 240,
+) -> dict:
+    """Look for bullish (bottom) divergence within the current cycle."""
+    # Find cycle start: most recent day with K>80 AND D>80
+    cycle_start = None
+    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
+        kv, dv = k[i], d[i]
+        if not np.isnan(kv) and not np.isnan(dv) and kv > 80 and dv > 80:
+            cycle_start = i
+            break
+
+    if cycle_start is None:
+        cycle_start = max(latest_idx - max_lookback, 0)
+
+    # Find lowest LOW in [cycle_start, latest_idx]
+    valley_idx = cycle_start
+    valley_low = float(df.iloc[cycle_start]["low"])
+    for i in range(cycle_start + 1, latest_idx + 1):
+        lo = float(df.iloc[i]["low"])
+        if not np.isnan(lo) and lo < valley_low:
+            valley_low = lo
+            valley_idx = i
+
+    valley_k = k[valley_idx]
+    valley_d = d[valley_idx]
+
+    # Walk back from valley to find higher price + lower KD
+    for i in range(valley_idx - 1, cycle_start - 1, -1):
+        lo = float(df.iloc[i]["low"])
+        ki, di = k[i], d[i]
+        if np.isnan(lo) or np.isnan(ki) or np.isnan(di):
+            continue
+        if lo <= valley_low:
+            continue
+
+        k_div = ki < valley_k
+        d_div = di < valley_d
+
+        if k_div or d_div:
+            return {
+                "type": "底背离",
+                "k_divergence": k_div,
+                "d_divergence": d_div,
+                "kd_divergence": k_div and d_div,
+                "reference_date": str(df.iloc[valley_idx]["date"])[:10],
+                "reference_price": round(valley_low, 2),
+                "reference_k": round(float(valley_k), 1),
+                "reference_d": round(float(valley_d), 1),
+                "divergence_date": str(df.iloc[i]["date"])[:10],
+                "divergence_price": round(lo, 2),
+                "divergence_k": round(float(ki), 1),
+                "divergence_d": round(float(di), 1),
+                "days": latest_idx - valley_idx,
+            }
+
+    return {
+        "type": None, "k_divergence": False, "d_divergence": False,
+        "kd_divergence": False,
+        "reference_date": str(df.iloc[valley_idx]["date"])[:10],
+        "reference_price": round(valley_low, 2),
+        "reference_k": round(float(valley_k), 1),
+        "reference_d": round(float(valley_d), 1),
+        "divergence_date": None, "divergence_price": None,
+        "divergence_k": None, "divergence_d": None, "days": None,
+    }
+
+
+def detect_kd_divergence(
+    df: pd.DataFrame,
+    k: list[float],
+    d: list[float],
+    max_lookback: int = 240,
+    trend_lookback: int = 20,
+) -> dict[str, Any]:
+    """
+    Detect KD divergence for the latest trading day.
+
+    Steps:
+      1. Determine direction via MA5/MA10/MA20 trend.
+         - 多头 → look for top divergence
+         - 空头 → look for bottom divergence
+         - 缠绕 → walk back up to trend_lookback days.
+      2. Find cycle boundary (last K<20&D<20 for top, last K>80&D>80 for bottom).
+      3. Within cycle, locate the price extreme (highest high / lowest low).
+      4. Walk back from extreme day to find earlier day with less extreme price
+         but more extreme KD → divergence.
+
+    Returns dict:
+      type: "顶背离" | "底背离" | None
+      k_divergence, d_divergence, kd_divergence: bool
+      reference_date, reference_price, reference_k, reference_d
+      divergence_date, divergence_price, divergence_k, divergence_d
+      days: int | None
+    """
+    n = len(df)
+    if n < 20:
+        return {
+            "type": None, "k_divergence": False, "d_divergence": False,
+            "kd_divergence": False,
+            "reference_date": None, "reference_price": None,
+            "reference_k": None, "reference_d": None,
+            "divergence_date": None, "divergence_price": None,
+            "divergence_k": None, "divergence_d": None, "days": None,
+        }
+
+    mas = calc_ma(df, [5, 10, 20])
+    latest_idx = n - 1
+
+    direction = _determine_divergence_direction(mas, latest_idx, trend_lookback)
+
+    if direction is None:
+        return {
+            "type": None, "k_divergence": False, "d_divergence": False,
+            "kd_divergence": False,
+            "reference_date": None, "reference_price": None,
+            "reference_k": None, "reference_d": None,
+            "divergence_date": None, "divergence_price": None,
+            "divergence_k": None, "divergence_d": None, "days": None,
+        }
+
+    if direction == "top":
+        return _detect_top_divergence(df, k, d, latest_idx, max_lookback)
+    else:
+        return _detect_bottom_divergence(df, k, d, latest_idx, max_lookback)
+
+
 def kline_pattern(df: pd.DataFrame) -> dict[str, Any]:
     """
     Analyze latest candle's bull/bear power.
@@ -348,9 +669,13 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
     latest_ma5 = float([v for v in mas["MA5"] if not np.isnan(v)][-1]) if any(not np.isnan(v) for v in mas["MA5"]) else None
 
     # Latest indicator values
-    kdj = calc_kdj(df)
+    kd = calc_kd(df)
     rsi6 = calc_rsi(df, 6)
     bias = calc_bias(df)
+
+    k_latest = round(float([v for v in kd["K"] if not np.isnan(v)][-1]), 1)
+    d_latest = round(float([v for v in kd["D"] if not np.isnan(v)][-1]), 1)
+    divergence = detect_kd_divergence(df, kd["K"], kd["D"])
 
     return {
         "code": code,
@@ -364,9 +689,9 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
                 for p in [5, 10, 20, 60, 120, 240] if any(not np.isnan(v) for v in mas[f"MA{p}"])},
         "volume": volume_analysis(df),
         "kline_pattern": kline_pattern(df),
-        "kdj_k": round(float([v for v in kdj["K"] if not np.isnan(v)][-1]), 1),
-        "kdj_d": round(float([v for v in kdj["D"] if not np.isnan(v)][-1]), 1),
-        "kdj_j": round(float([v for v in kdj["J"] if not np.isnan(v)][-1]), 1),
+        "kd_k": k_latest,
+        "kd_d": d_latest,
+        "kd_divergence": divergence,
         "rsi6": round(float([v for v in rsi6 if not np.isnan(v)][-1]), 1),
         "bias6": round(float([v for v in bias["BIAS6"] if not np.isnan(v)][-1]), 2),
     }
