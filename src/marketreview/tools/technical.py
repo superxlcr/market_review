@@ -214,16 +214,54 @@ def calc_kdj(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:
     return {"K": k.tolist(), "D": d.tolist(), "J": j.tolist()}
 
 
-def calc_rsi(df: pd.DataFrame, period: int = 6) -> list[float]:
-    """Compute RSI for given period."""
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0)
-    loss = (-delta).clip(lower=0)
-    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.tolist()
+def calc_rsi(df: pd.DataFrame, periods: tuple[int, ...] = (9, 9, 9)) -> dict[str, list[float]]:
+    """
+    TDX-style RSI.  Formula (通达信):
+
+        LC := REF(CLOSE, 1)
+        UP := MAX(CLOSE - LC, 0)
+        ABS := ABS(CLOSE - LC)
+        RSI := SMA(UP, N, 1) / SMA(ABS, N, 1) * 100
+
+    where SMA(X, N, 1) = (X + (N-1) * prev) / N (new-value weight = 1/N).
+
+    Default (9,9,9) → three identical lines with period 9.
+    Returns {f"RSI{n}": [...values...]}.
+    """
+    close = df["close"]
+    lc = close.shift(1)
+    diff = close - lc
+    up = diff.clip(lower=0)       # MAX(CLOSE-LC, 0)
+    abs_diff = diff.abs()          # ABS(CLOSE-LC)
+
+    result = {}
+    for p_idx, n in enumerate(periods, 1):
+        sma_up = np.full(len(df), np.nan)
+        sma_abs = np.full(len(df), np.nan)
+        rsi = np.full(len(df), np.nan)
+
+        # seed: simple average of first n valid bars
+        seed_start = 1  # first diff is at index 1
+        seed_end = min(seed_start + n, len(df))
+        if seed_end > seed_start:
+            sma_up[seed_end - 1] = up.iloc[seed_start:seed_end].mean()
+            sma_abs[seed_end - 1] = abs_diff.iloc[seed_start:seed_end].mean()
+            if sma_abs[seed_end - 1] != 0:
+                rsi[seed_end - 1] = sma_up[seed_end - 1] / sma_abs[seed_end - 1] * 100
+            else:
+                rsi[seed_end - 1] = 50.0
+
+        for j in range(seed_end, len(df)):
+            sma_up[j] = (up.iloc[j] + (n - 1) * sma_up[j - 1]) / n
+            sma_abs[j] = (abs_diff.iloc[j] + (n - 1) * sma_abs[j - 1]) / n
+            if sma_abs[j] != 0:
+                rsi[j] = sma_up[j] / sma_abs[j] * 100
+            else:
+                rsi[j] = rsi[j - 1]
+
+        result[f"RSI{p_idx}"] = rsi.tolist()
+
+    return result
 
 
 def calc_bias(df: pd.DataFrame, periods: list[int] = None) -> dict[str, list[float]]:
@@ -559,6 +597,175 @@ def detect_kd_divergence(
         return _detect_bottom_divergence(df, k, d, latest_idx, max_lookback)
 
 
+# ============================================================
+# RSI Divergence Detection  (cycle boundary = 50, price = close)
+# ============================================================
+
+def _rsi_detect_top_divergence(
+    df: pd.DataFrame, rsi: list[float],
+    latest_idx: int, max_lookback: int = 240,
+) -> dict:
+    """RSI bearish (top) divergence — close-based, cycle resets at RSI < 50."""
+    # Cycle start: most recent day with RSI < 50
+    cycle_start = None
+    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
+        rv = rsi[i]
+        if not np.isnan(rv) and rv < 50:
+            cycle_start = i
+            break
+
+    if cycle_start is None:
+        cycle_start = max(latest_idx - max_lookback, 0)
+
+    # Find highest CLOSE in [cycle_start, latest_idx]
+    peak_idx = cycle_start
+    peak_close = float(df.iloc[cycle_start]["close"])
+    for i in range(cycle_start + 1, latest_idx + 1):
+        cl = float(df.iloc[i]["close"])
+        if not np.isnan(cl) and cl > peak_close:
+            peak_close = cl
+            peak_idx = i
+
+    peak_rsi = rsi[peak_idx]
+
+    for i in range(peak_idx - 1, cycle_start - 1, -1):
+        cl = float(df.iloc[i]["close"])
+        ri = rsi[i]
+        if np.isnan(cl) or np.isnan(ri):
+            continue
+        if cl >= peak_close:
+            continue
+
+        rsi_div = ri > peak_rsi
+        if rsi_div:
+            return {
+                "type": "顶背离",
+                "rsi_divergence": True,
+                "reference_date": str(df.iloc[peak_idx]["date"])[:10],
+                "reference_price": round(peak_close, 2),
+                "reference_rsi": round(float(peak_rsi), 1),
+                "divergence_date": str(df.iloc[i]["date"])[:10],
+                "divergence_price": round(cl, 2),
+                "divergence_rsi": round(float(ri), 1),
+                "days": latest_idx - peak_idx,
+            }
+
+    return {
+        "type": None, "rsi_divergence": False, "direction": "top",
+        "reference_date": str(df.iloc[peak_idx]["date"])[:10],
+        "reference_price": round(peak_close, 2),
+        "reference_rsi": round(float(peak_rsi), 1),
+        "divergence_date": None, "divergence_price": None,
+        "divergence_rsi": None, "days": latest_idx - peak_idx,
+    }
+
+
+def _rsi_detect_bottom_divergence(
+    df: pd.DataFrame, rsi: list[float],
+    latest_idx: int, max_lookback: int = 240,
+) -> dict:
+    """RSI bullish (bottom) divergence — close-based, cycle resets at RSI > 50."""
+    # Cycle start: most recent day with RSI > 50
+    cycle_start = None
+    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
+        rv = rsi[i]
+        if not np.isnan(rv) and rv > 50:
+            cycle_start = i
+            break
+
+    if cycle_start is None:
+        cycle_start = max(latest_idx - max_lookback, 0)
+
+    # Find lowest CLOSE in [cycle_start, latest_idx]
+    valley_idx = cycle_start
+    valley_close = float(df.iloc[cycle_start]["close"])
+    for i in range(cycle_start + 1, latest_idx + 1):
+        cl = float(df.iloc[i]["close"])
+        if not np.isnan(cl) and cl < valley_close:
+            valley_close = cl
+            valley_idx = i
+
+    valley_rsi = rsi[valley_idx]
+
+    for i in range(valley_idx - 1, cycle_start - 1, -1):
+        cl = float(df.iloc[i]["close"])
+        ri = rsi[i]
+        if np.isnan(cl) or np.isnan(ri):
+            continue
+        if cl <= valley_close:
+            continue
+
+        rsi_div = ri < valley_rsi
+        if rsi_div:
+            return {
+                "type": "底背离",
+                "rsi_divergence": True,
+                "reference_date": str(df.iloc[valley_idx]["date"])[:10],
+                "reference_price": round(valley_close, 2),
+                "reference_rsi": round(float(valley_rsi), 1),
+                "divergence_date": str(df.iloc[i]["date"])[:10],
+                "divergence_price": round(cl, 2),
+                "divergence_rsi": round(float(ri), 1),
+                "days": latest_idx - valley_idx,
+            }
+
+    return {
+        "type": None, "rsi_divergence": False, "direction": "bottom",
+        "reference_date": str(df.iloc[valley_idx]["date"])[:10],
+        "reference_price": round(valley_close, 2),
+        "reference_rsi": round(float(valley_rsi), 1),
+        "divergence_date": None, "divergence_price": None,
+        "divergence_rsi": None, "days": latest_idx - valley_idx,
+    }
+
+
+def detect_rsi_divergence(
+    df: pd.DataFrame,
+    rsi: list[float],
+    max_lookback: int = 240,
+    trend_lookback: int = 20,
+) -> dict[str, Any]:
+    """
+    Detect RSI divergence for the latest trading day.
+
+    Same direction-determination logic as KD (MA5/MA10/MA20 trend).
+    Key differences from KD:
+      - Compares **close** prices (not high/low).
+      - Cycle boundary is RSI crossing **50** (not 20/80).
+
+    Returns same dict structure as detect_kd_divergence(), with
+    ``rsi_divergence`` instead of k_divergence/d_divergence/kd_divergence.
+    """
+    n = len(df)
+    if n < 20:
+        return {
+            "type": None, "rsi_divergence": False, "direction": None,
+            "reference_date": None, "reference_price": None,
+            "reference_rsi": None,
+            "divergence_date": None, "divergence_price": None,
+            "divergence_rsi": None, "days": None,
+        }
+
+    mas = calc_ma(df, [5, 10, 20])
+    latest_idx = n - 1
+
+    direction = _determine_divergence_direction(mas, latest_idx, trend_lookback)
+
+    if direction is None:
+        return {
+            "type": None, "rsi_divergence": False, "direction": None,
+            "reference_date": None, "reference_price": None,
+            "reference_rsi": None,
+            "divergence_date": None, "divergence_price": None,
+            "divergence_rsi": None, "days": None,
+        }
+
+    if direction == "top":
+        return _rsi_detect_top_divergence(df, rsi, latest_idx, max_lookback)
+    else:
+        return _rsi_detect_bottom_divergence(df, rsi, latest_idx, max_lookback)
+
+
 def kline_pattern(df: pd.DataFrame) -> dict[str, Any]:
     """
     Analyze latest candle's bull/bear power.
@@ -670,12 +877,15 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
 
     # Latest indicator values
     kd = calc_kd(df)
-    rsi6 = calc_rsi(df, 6)
+    rsi = calc_rsi(df)
     bias = calc_bias(df)
 
     k_latest = round(float([v for v in kd["K"] if not np.isnan(v)][-1]), 1)
     d_latest = round(float([v for v in kd["D"] if not np.isnan(v)][-1]), 1)
-    divergence = detect_kd_divergence(df, kd["K"], kd["D"])
+    kd_divergence = detect_kd_divergence(df, kd["K"], kd["D"])
+    rsi1 = [v for v in rsi["RSI1"] if not np.isnan(v)]
+    rsi_latest = round(float(rsi1[-1]), 1) if rsi1 else None
+    rsi_divergence = detect_rsi_divergence(df, rsi["RSI1"])
 
     return {
         "code": code,
@@ -691,7 +901,8 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
         "kline_pattern": kline_pattern(df),
         "kd_k": k_latest,
         "kd_d": d_latest,
-        "kd_divergence": divergence,
-        "rsi6": round(float([v for v in rsi6 if not np.isnan(v)][-1]), 1),
+        "kd_divergence": kd_divergence,
+        "rsi": rsi_latest,
+        "rsi_divergence": rsi_divergence,
         "bias6": round(float([v for v in bias["BIAS6"] if not np.isnan(v)][-1]), 2),
     }

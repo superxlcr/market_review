@@ -25,6 +25,7 @@ from marketreview.tools.technical import (
     calc_rsi,
     calc_bias,
     detect_kd_divergence,
+    detect_rsi_divergence,
     kline_pattern,
     get_offset_info,
     get_ma_role,
@@ -252,7 +253,6 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     st.markdown("**技术指标**")
     kd = calc_kd(df)
     kd_div = detect_kd_divergence(df, kd["K"], kd["D"])
-    rsi6 = calc_rsi(df, 6)
     bias = calc_bias(df)
 
     k_val = latest_val(kd["K"])
@@ -394,19 +394,105 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     if kd_diff is not None and kd_diff >= 20:
         st.caption(f"💡 {diff_hint}")
 
-    # --- RSI + BIAS row ---
-    st.markdown("##### 其他指标")
-    ind_cols = st.columns(4)
-    indicators = [
-        ("RSI(6)", latest_val(rsi6), "<30超卖 >70超买"),
-        ("BIAS(6)", latest_val(bias["BIAS6"]), "负乖离=超跌"),
-        ("BIAS(12)", latest_val(bias["BIAS12"]) if "BIAS12" in bias else None, "中长期乖离"),
-        ("BIAS(24)", latest_val(bias["BIAS24"]) if "BIAS24" in bias else None, "长期乖离"),
-    ]
-    for i, (label, val, hint) in enumerate(indicators):
-        with ind_cols[i]:
-            st.metric(label, f"{val:.2f}" if val else "N/A",
-                     help=hint)
+    # --- RSI Card ---
+    st.markdown("##### RSI 指标")
+    rsi_all = calc_rsi(df)
+    rsi_vals = rsi_all["RSI1"]  # all three identical at (9,9,9)
+    rsi_val = latest_val(rsi_vals)
+    rsi_div = detect_rsi_divergence(df, rsi_vals)
+
+    # RSI zone
+    def _rsi_zone(rv: float | None) -> str:
+        if rv is None:
+            return "N/A"
+        if rv > 70:
+            return "超买区"
+        if rv < 30:
+            return "超卖区"
+        return "常态区"
+
+    rsi_zone = _rsi_zone(rsi_val)
+    # 超买=看空=绿, 超卖=看多=红
+    if rsi_zone == "超买区":
+        rsi_zone_color = "#2e7d32"
+    elif rsi_zone == "超卖区":
+        rsi_zone_color = "#c62828"
+    else:
+        rsi_zone_color = "#888"
+
+    # RSI divergence signal
+    rdiv = rsi_div
+    rsi_signal = "—"
+    rsi_sig_color = "#999"
+    rref = _short_date(rdiv.get("reference_date", ""))
+    if rdiv["type"]:
+        rcmp = _short_date(rdiv.get("divergence_date", ""))
+        days_val = rdiv.get("days", 0) or 0
+        rsi_signal = f"{rdiv['type']}"
+        if days_val > 0:
+            rsi_signal += f" · {days_val}天"
+        if rref and rcmp:
+            rsi_signal += f"\n{rref} 新高 vs {rcmp}" if rdiv["type"] == "顶背离" else f"\n{rref} 新低 vs {rcmp}"
+        rsi_sig_color = "#2e7d32" if rdiv["type"] == "顶背离" else "#c62828"
+    elif rdiv.get("direction"):
+        days_val = rdiv.get("days", 0) or 0
+        if rdiv["direction"] == "top":
+            rsi_signal = "新高不背离"
+            rsi_sig_color = "#c62828"
+        else:
+            rsi_signal = "新低不背离"
+            rsi_sig_color = "#2e7d32"
+        if days_val > 0:
+            rsi_signal += f" · {days_val}天"
+        if rref:
+            rsi_signal += f"\n{rref} 新高" if rdiv["direction"] == "top" else f"\n{rref} 新低"
+
+    # RSI vs K comparison — only meaningful in matching trend
+    rsi_vs_k = "—"
+    rsi_vs_k_color = "#999"
+    if rsi_val is not None and k_val is not None:
+        if today_trend == "多头" and rsi_val > k_val:
+            rsi_vs_k = "强度充足"
+            rsi_vs_k_color = "#c62828"  # 看多=红
+        elif today_trend == "空头" and rsi_val < k_val:
+            rsi_vs_k = "强度不足"
+            rsi_vs_k_color = "#2e7d32"  # 看空=绿
+
+    st.html(f"""
+    <table style="width:100%;font-size:15px;border-collapse:collapse;">
+        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+            <th style="text-align:center;">指标</th>
+            <th style="text-align:right;">RSI</th>
+            <th style="text-align:center;">超买/超卖</th>
+            <th style="text-align:center;">vs KD</th>
+            <th style="text-align:left;">信号</th>
+        </tr></thead>
+        <tbody><tr>
+            <td style="text-align:center;font-weight:600;">RSI(9,9,9)</td>
+            <td style="text-align:right;font-weight:bold;font-size:17px;">{f"{rsi_val:.2f}" if rsi_val else "N/A"}</td>
+            <td style="text-align:center;color:{rsi_zone_color};font-weight:bold;">{rsi_zone}</td>
+            <td style="text-align:center;color:{rsi_vs_k_color};font-weight:bold;">{rsi_vs_k}</td>
+            <td style="text-align:left;color:{rsi_sig_color};font-weight:bold;white-space:pre-line;font-size:14px;">{rsi_signal}</td>
+        </tr></tbody>
+    </table>
+    """)
+    if rsi_val is not None:
+        st.caption("RSI > 70 超买 | RSI < 30 超卖 | 背离周期边界 = 50 | 多头 RSI>K=强度充足 | 空头 RSI<K=强度不足")
+    else:
+        st.caption("RSI 数据不足")
+
+    # --- BIAS row ---
+    if bias is not None:
+        st.markdown("##### 其他指标")
+        ind_cols = st.columns(3)
+        indicators = [
+            ("BIAS(6)", latest_val(bias["BIAS6"]) if "BIAS6" in bias else None, "负乖离=超跌"),
+            ("BIAS(12)", latest_val(bias["BIAS12"]) if "BIAS12" in bias else None, "中长期乖离"),
+            ("BIAS(24)", latest_val(bias["BIAS24"]) if "BIAS24" in bias else None, "长期乖离"),
+        ]
+        for i, (label, val, hint) in enumerate(indicators):
+            with ind_cols[i]:
+                st.metric(label, f"{val:.2f}" if val else "N/A", help=hint)
 
 
 # ------- Page -------

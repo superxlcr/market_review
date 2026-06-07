@@ -13,4 +13,5 @@ from .technical import (
     get_offset_info,
     get_ma_role,
     detect_kd_divergence,
+    detect_rsi_divergence,
 )
