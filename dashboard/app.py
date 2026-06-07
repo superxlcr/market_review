@@ -251,6 +251,44 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
 
     # --- Row: Technical Indicators ---
     st.markdown("**技术指标**")
+
+    # Short-term trend (shared by KD & RSI)
+    mas = calc_ma(df, [5, 10, 20])
+    def _ma_trend(idx: int) -> str:
+        m5, m10, m20 = mas["MA5"][idx], mas["MA10"][idx], mas["MA20"][idx]
+        if any(np.isnan(v) for v in [m5, m10, m20]):
+            return "盘整"
+        if m5 > m10 > m20:
+            return "多头"
+        elif m5 < m10 < m20:
+            return "空头"
+        return "盘整"
+
+    today_trend = _ma_trend(-1)
+    yesterday_trend = _ma_trend(-2) if len(df) >= 2 else "盘整"
+
+    if today_trend == "盘整" and yesterday_trend == "多头":
+        trend_label = "多头转盘整"
+        trend_color = "#ef6c00"
+    elif today_trend == "盘整" and yesterday_trend == "空头":
+        trend_label = "空头转盘整"
+        trend_color = "#ef6c00"
+    elif today_trend == "多头":
+        trend_label = "多头趋势"
+        trend_color = "#c62828"
+    elif today_trend == "空头":
+        trend_label = "空头趋势"
+        trend_color = "#2e7d32"
+    else:
+        trend_label = "盘整"
+        trend_color = "#888"
+
+    st.html(f"""
+    <div style="font-size:14px;margin-bottom:6px;color:#888;">
+        短期趋势（MA5/MA10/MA20）：<span style="color:{trend_color};font-weight:bold;">{trend_label}</span>
+    </div>
+    """)
+
     kd = calc_kd(df)
     kd_div = detect_kd_divergence(df, kd["K"], kd["D"])
     bias = calc_bias(df)
@@ -273,37 +311,6 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         if kv < 20:
             return "超卖区"
         return "常态区"
-
-    # Short-term MA trend (MA5/MA10/MA20)
-    mas = calc_ma(df, [5, 10, 20])
-    def _ma_trend(idx: int) -> str:
-        m5, m10, m20 = mas["MA5"][idx], mas["MA10"][idx], mas["MA20"][idx]
-        if any(np.isnan(v) for v in [m5, m10, m20]):
-            return "盘整"
-        if m5 > m10 > m20:
-            return "多头"
-        elif m5 < m10 < m20:
-            return "空头"
-        return "盘整"
-
-    today_trend = _ma_trend(-1)
-    yesterday_trend = _ma_trend(-2) if len(df) >= 2 else "盘整"
-
-    if today_trend == "盘整" and yesterday_trend == "多头":
-        trend_label = "多头转盘整"
-        trend_color = "#ef6c00"  # orange
-    elif today_trend == "盘整" and yesterday_trend == "空头":
-        trend_label = "空头转盘整"
-        trend_color = "#ef6c00"
-    elif today_trend == "多头":
-        trend_label = "多头趋势"
-        trend_color = "#c62828"  # red
-    elif today_trend == "空头":
-        trend_label = "空头趋势"
-        trend_color = "#2e7d32"  # green
-    else:
-        trend_label = "盘整"
-        trend_color = "#888"
 
     # KD difference & convergence warning
     kd_diff = round(abs(k_val - d_val), 1) if k_val is not None and d_val is not None else None
@@ -368,10 +375,8 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         zone_color = "#888"
 
     # --- KD Card ---
+    st.markdown("**KD 指标**")
     st.html(f"""
-    <div style="font-size:15px;margin-bottom:4px;">
-        短期趋势：<span style="color:{trend_color};font-weight:bold;">{trend_label}</span>
-    </div>
     <table style="width:100%;font-size:15px;border-collapse:collapse;">
         <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
             <th style="text-align:center;">指标</th>
@@ -391,11 +396,12 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         </tr></tbody>
     </table>
     """)
+    st.caption("K > 80 超买 | K < 20 超卖 | 背离周期边界 = 20 / 80 | |K-D| ≥ 20 大概率收敛")
     if kd_diff is not None and kd_diff >= 20:
         st.caption(f"💡 {diff_hint}")
 
     # --- RSI Card ---
-    st.markdown("##### RSI 指标")
+    st.markdown("**RSI 指标**")
     rsi_all = calc_rsi(df)
     rsi_vals = rsi_all["RSI1"]  # all three identical at (9,9,9)
     rsi_val = latest_val(rsi_vals)
