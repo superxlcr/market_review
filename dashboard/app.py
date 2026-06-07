@@ -278,12 +278,15 @@ if _query_date:
     _raw_date = _query_date
 else:
     _raw_date = _service.get_latest_trade_date()
-    if not _raw_date:
-        _raw_date = datetime.now().strftime("%Y%m%d")
 # Normalize to consistent formats (handle both YYYYMMDD and YYYY-MM-DD inputs)
 _raw_clean = _raw_date.replace("-", "")
 _display_date = f"{_raw_clean[:4]}-{_raw_clean[4:6]}-{_raw_clean[6:8]}"
 _trade_date_yyyymmdd = _raw_clean
+
+# Validate: if user passed an explicit date that is not a trading day, error out
+if _query_date and not _service.is_trading_day(_trade_date_yyyymmdd):
+    st.error(f"**{_display_date} 不是交易日**，请检查日期后重试。")
+    st.stop()
 
 st.title(f"📊 A股复盘 Dashboard — {_display_date}")
 st.caption("Agent 1 — 大盘分析")

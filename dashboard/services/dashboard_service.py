@@ -26,6 +26,12 @@ class DashboardService:
     def is_configured(self) -> bool:
         return bool(os.environ.get("TUSHARE_TOKEN", ""))
 
+    # ---- trading day validation ----
+
+    def is_trading_day(self, trade_date: str) -> bool:
+        """Check if a given date (YYYYMMDD) has market data."""
+        return self._dp.get_market_breadth(trade_date) is not None
+
     # ---- index K-line ----
 
     def get_index_data(self, code: str, lookback: int = 360,
@@ -44,9 +50,19 @@ class DashboardService:
     # ---- latest trade date ----
 
     def get_latest_trade_date(self) -> str:
-        """Return latest available trading date (YYYYMMDD), fallback to today."""
-        raw = self._dp.get_latest_trade_date("000001.SH")
-        return raw if raw else datetime.now().strftime("%Y%m%d")
+        """
+        Walk back from today to find the nearest trading day with data.
+
+        Tries up to 15 calendar days back. Each candidate is checked via
+        get_market_breadth() — if Tushare returns data, it's a trading day.
+        This is authoritative regardless of what's in cache.
+        """
+        today = datetime.now()
+        for i in range(15):
+            candidate = (today - timedelta(days=i)).strftime("%Y%m%d")
+            if self._dp.get_market_breadth(candidate) is not None:
+                return candidate
+        return today.strftime("%Y%m%d")
 
     # ---- market overview ----
 
