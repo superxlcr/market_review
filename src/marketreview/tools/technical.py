@@ -400,21 +400,36 @@ def _determine_divergence_direction(
     return None
 
 
+def _find_kd_cycle_start(
+    k: list[float], d: list[float],
+    latest_idx: int, direction: str, max_lookback: int = 240,
+) -> int:
+    """Find the cycle-start index using KD extreme thresholds.
+
+    - direction='top'  → most recent day with K<20 AND D<20
+    - direction='bottom' → most recent day with K>80 AND D>80
+
+    Falls back to latest_idx - max_lookback if no extreme found,
+    clamped to >= 0.
+    """
+    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
+        kv, dv = k[i], d[i]
+        if np.isnan(kv) or np.isnan(dv):
+            continue
+        if direction == "top" and kv < 20 and dv < 20:
+            return i
+        if direction == "bottom" and kv > 80 and dv > 80:
+            return i
+
+    return max(latest_idx - max_lookback, 0)
+
+
 def _detect_top_divergence(
     df: pd.DataFrame, k: list[float], d: list[float],
     latest_idx: int, max_lookback: int = 240,
 ) -> dict:
     """Look for bearish (top) divergence within the current cycle."""
-    # Find cycle start: most recent day with K<20 AND D<20
-    cycle_start = None
-    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
-        kv, dv = k[i], d[i]
-        if not np.isnan(kv) and not np.isnan(dv) and kv < 20 and dv < 20:
-            cycle_start = i
-            break
-
-    if cycle_start is None:
-        cycle_start = max(latest_idx - max_lookback, 0)
+    cycle_start = _find_kd_cycle_start(k, d, latest_idx, "top", max_lookback)
 
     # Find highest HIGH in [cycle_start, latest_idx]
     peak_idx = cycle_start
@@ -474,16 +489,7 @@ def _detect_bottom_divergence(
     latest_idx: int, max_lookback: int = 240,
 ) -> dict:
     """Look for bullish (bottom) divergence within the current cycle."""
-    # Find cycle start: most recent day with K>80 AND D>80
-    cycle_start = None
-    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
-        kv, dv = k[i], d[i]
-        if not np.isnan(kv) and not np.isnan(dv) and kv > 80 and dv > 80:
-            cycle_start = i
-            break
-
-    if cycle_start is None:
-        cycle_start = max(latest_idx - max_lookback, 0)
+    cycle_start = _find_kd_cycle_start(k, d, latest_idx, "bottom", max_lookback)
 
     # Find lowest LOW in [cycle_start, latest_idx]
     valley_idx = cycle_start
@@ -603,19 +609,16 @@ def detect_kd_divergence(
 
 def _rsi_detect_top_divergence(
     df: pd.DataFrame, rsi: list[float],
+    k: list[float], d: list[float],
     latest_idx: int, max_lookback: int = 240,
 ) -> dict:
-    """RSI bearish (top) divergence — close-based, cycle resets at RSI < 50."""
-    # Cycle start: most recent day with RSI < 50
-    cycle_start = None
-    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
-        rv = rsi[i]
-        if not np.isnan(rv) and rv < 50:
-            cycle_start = i
-            break
+    """RSI bearish (top) divergence — close-based.
 
-    if cycle_start is None:
-        cycle_start = max(latest_idx - max_lookback, 0)
+    - Interval:   reuses KD's cycle_start (K<20 & D<20).
+    - Extreme:    highest CLOSE within [cycle_start, latest_idx].
+    - Walk-back:  from peak back, stop at RSI < 50 boundary.
+    """
+    cycle_start = _find_kd_cycle_start(k, d, latest_idx, "top", max_lookback)
 
     # Find highest CLOSE in [cycle_start, latest_idx]
     peak_idx = cycle_start
@@ -628,7 +631,15 @@ def _rsi_detect_top_divergence(
 
     peak_rsi = rsi[peak_idx]
 
+    # Walk back from peak, stop at RSI < 50 boundary
+    rsi_50_idx = cycle_start
     for i in range(peak_idx - 1, cycle_start - 1, -1):
+        rv = rsi[i]
+        if not np.isnan(rv) and rv < 50:
+            rsi_50_idx = i
+            break
+
+    for i in range(peak_idx - 1, rsi_50_idx - 1, -1):
         cl = float(df.iloc[i]["close"])
         ri = rsi[i]
         if np.isnan(cl) or np.isnan(ri):
@@ -636,8 +647,7 @@ def _rsi_detect_top_divergence(
         if cl >= peak_close:
             continue
 
-        rsi_div = ri > peak_rsi
-        if rsi_div:
+        if ri > peak_rsi:
             return {
                 "type": "顶背离",
                 "rsi_divergence": True,
@@ -662,19 +672,16 @@ def _rsi_detect_top_divergence(
 
 def _rsi_detect_bottom_divergence(
     df: pd.DataFrame, rsi: list[float],
+    k: list[float], d: list[float],
     latest_idx: int, max_lookback: int = 240,
 ) -> dict:
-    """RSI bullish (bottom) divergence — close-based, cycle resets at RSI > 50."""
-    # Cycle start: most recent day with RSI > 50
-    cycle_start = None
-    for i in range(latest_idx, max(latest_idx - max_lookback, -1), -1):
-        rv = rsi[i]
-        if not np.isnan(rv) and rv > 50:
-            cycle_start = i
-            break
+    """RSI bullish (bottom) divergence — close-based.
 
-    if cycle_start is None:
-        cycle_start = max(latest_idx - max_lookback, 0)
+    - Interval:   reuses KD's cycle_start (K>80 & D>80).
+    - Extreme:    lowest CLOSE within [cycle_start, latest_idx].
+    - Walk-back:  from valley back, stop at RSI > 50 boundary.
+    """
+    cycle_start = _find_kd_cycle_start(k, d, latest_idx, "bottom", max_lookback)
 
     # Find lowest CLOSE in [cycle_start, latest_idx]
     valley_idx = cycle_start
@@ -687,7 +694,15 @@ def _rsi_detect_bottom_divergence(
 
     valley_rsi = rsi[valley_idx]
 
+    # Walk back from valley, stop at RSI > 50 boundary
+    rsi_50_idx = cycle_start
     for i in range(valley_idx - 1, cycle_start - 1, -1):
+        rv = rsi[i]
+        if not np.isnan(rv) and rv > 50:
+            rsi_50_idx = i
+            break
+
+    for i in range(valley_idx - 1, rsi_50_idx - 1, -1):
         cl = float(df.iloc[i]["close"])
         ri = rsi[i]
         if np.isnan(cl) or np.isnan(ri):
@@ -695,8 +710,7 @@ def _rsi_detect_bottom_divergence(
         if cl <= valley_close:
             continue
 
-        rsi_div = ri < valley_rsi
-        if rsi_div:
+        if ri < valley_rsi:
             return {
                 "type": "底背离",
                 "rsi_divergence": True,
@@ -722,16 +736,16 @@ def _rsi_detect_bottom_divergence(
 def detect_rsi_divergence(
     df: pd.DataFrame,
     rsi: list[float],
+    k: list[float],
+    d: list[float],
     max_lookback: int = 240,
     trend_lookback: int = 20,
 ) -> dict[str, Any]:
     """
     Detect RSI divergence for the latest trading day.
 
-    Same direction-determination logic as KD (MA5/MA10/MA20 trend).
-    Key differences from KD:
-      - Compares **close** prices (not high/low).
-      - Cycle boundary is RSI crossing **50** (not 20/80).
+    Reuses KD's cycle interval (K<20/K>80) for extreme finding,
+    then compares **close** prices with RSI 50 as walk-back boundary.
 
     Returns same dict structure as detect_kd_divergence(), with
     ``rsi_divergence`` instead of k_divergence/d_divergence/kd_divergence.
@@ -761,9 +775,9 @@ def detect_rsi_divergence(
         }
 
     if direction == "top":
-        return _rsi_detect_top_divergence(df, rsi, latest_idx, max_lookback)
+        return _rsi_detect_top_divergence(df, rsi, k, d, latest_idx, max_lookback)
     else:
-        return _rsi_detect_bottom_divergence(df, rsi, latest_idx, max_lookback)
+        return _rsi_detect_bottom_divergence(df, rsi, k, d, latest_idx, max_lookback)
 
 
 def kline_pattern(df: pd.DataFrame) -> dict[str, Any]:
@@ -885,7 +899,7 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
     kd_divergence = detect_kd_divergence(df, kd["K"], kd["D"])
     rsi1 = [v for v in rsi["RSI1"] if not np.isnan(v)]
     rsi_latest = round(float(rsi1[-1]), 1) if rsi1 else None
-    rsi_divergence = detect_rsi_divergence(df, rsi["RSI1"])
+    rsi_divergence = detect_rsi_divergence(df, rsi["RSI1"], kd["K"], kd["D"])
 
     return {
         "code": code,

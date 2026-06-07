@@ -405,7 +405,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     rsi_all = calc_rsi(df)
     rsi_vals = rsi_all["RSI1"]  # all three identical at (9,9,9)
     rsi_val = latest_val(rsi_vals)
-    rsi_div = detect_rsi_divergence(df, rsi_vals)
+    rsi_div = detect_rsi_divergence(df, rsi_vals, kd["K"], kd["D"])
 
     # RSI zone
     def _rsi_zone(rv: float | None) -> str:

@@ -32,7 +32,8 @@
       "Bash(repo forall -c git log *)",
       "Bash(repo forall -c git status *)",
       "WebFetch(domain:tushare.pro)",
-      "Bash(rm -f \"i:/AIcode/marketreview/,\")"
+      "Bash(rm -f \"i:/AIcode/marketreview/,\")",
+      "Read(C:\\Users\\*\\AppData\\Local\\Temp\\claude\\i--AIcode-marketreview\\**)"
     ],
     "ask": [
       "Bash(git add *)",
