@@ -10,7 +10,7 @@ import json
 
 from ..data.data_provider import DataProvider
 from .technical import build_technical_summary
-from .contribution import compute_index_contribution, INDEX_WEIGHTS
+from .contribution import build_index_contribution
 
 
 # Singleton — initialised at crew startup
@@ -91,23 +91,10 @@ class GetIndexContributionTool(BaseTool):
         if _data_provider is None:
             return json.dumps({"error": "DataProvider未初始化"}, ensure_ascii=False)
 
-        weights = INDEX_WEIGHTS.get(index_code, {}).get("weight_codes", [])
-        if not weights:
-            return json.dumps({"error": f"无 {index_code} 权重数据"}, ensure_ascii=False)
-
-        items = []
-        for code, name, weight in weights:
-            rows = _data_provider.get_daily(code, lookback_days=2)
-            if len(rows) >= 2:
-                prev_close = rows[1]["close"]
-                latest_close = rows[0]["close"]
-                change_pct = round((latest_close / prev_close - 1) * 100, 2)
-            else:
-                change_pct = 0
-            items.append({
-                "code": code, "name": name, "weight_pct": weight,
-                "change_pct": change_pct,
-            })
-
-        result = compute_index_contribution(index_code, items)
+        result = build_index_contribution(index_code, trade_date=None, dp=_data_provider)
+        if result is None:
+            return json.dumps(
+                {"error": f"无法获取 {index_code} 权重贡献数据"},
+                ensure_ascii=False,
+            )
         return json.dumps(result, ensure_ascii=False, indent=2)
