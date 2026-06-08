@@ -1,66 +1,136 @@
 """
-Weight contribution analysis for indices and sectors (§4.4).
-Only used by Agent 1 (index) and Agent 2 (sector). Agent 3 does not use this.
+Index weight contribution analysis.
+
+Computes how much each constituent stock contributed to the index's daily
+point change.  Used by Dashboard (display) and Agent 1 (LLM analysis).
+
+Contribution formula (derivation):
+  Let W_i = stock i's weight in the index (percentage, e.g. 3.12)
+  Let R_i = stock i's daily return (percentage, e.g. +3.30)
+  Let C   = index closing price
+
+  Index daily return (%) approx Sigma (W_i / 100) x (R_i / 100)   ... in decimal
+                          = Sigma W_i x R_i / 10000           ... in percentage
+
+  Contribution of stock i in points:
+    contrib_i = (W_i / 100) x (R_i / 100) x C
+              = W_i x R_i x C / 10000  <- used in the code below
 """
 
-import pandas as pd
-import numpy as np
-from .technical import rows_to_df
+from datetime import datetime, timedelta
+from ..data.data_provider import DataProvider
 
 
-# Simplified top-10 weights for SSE Composite (上证) and ChiNext (创业板)
-# In production this should come from a config or be fetched dynamically.
-INDEX_WEIGHTS = {
-    "000001.SH": {
-        "weight_codes": [
-            ("600519.SH", "贵州茅台", 5.2),
-            ("601398.SH", "工商银行", 3.1),
-            ("601939.SH", "建设银行", 2.4),
-            ("601288.SH", "农业银行", 2.3),
-            ("601857.SH", "中国石油", 2.0),
-            ("601988.SH", "中国银行", 1.9),
-            ("600036.SH", "招商银行", 1.8),
-            ("601628.SH", "中国人寿", 1.6),
-            ("600028.SH", "中国石化", 1.5),
-            ("601318.SH", "中国平安", 1.4),
-        ]
-    },
-    "399006.SZ": {
-        "weight_codes": [
-            ("300750.SZ", "宁德时代", 15.2),
-            ("300059.SZ", "东方财富", 7.1),
-            ("300760.SZ", "迈瑞医疗", 5.8),
-            ("300124.SZ", "汇川技术", 4.5),
-            ("300274.SZ", "阳光电源", 3.8),
-            ("300015.SZ", "爱尔眼科", 3.2),
-            ("300014.SZ", "亿纬锂能", 2.9),
-            ("300122.SZ", "智飞生物", 2.5),
-            ("300450.SZ", "先导智能", 2.1),
-            ("300408.SZ", "三环集团", 1.8),
-        ]
-    },
-}
+# TODO: L1 industries where the L1 name is specific enough - use L1 directly.
+# For all other industries, the more granular L2 name is shown.
+# Add/remove codes here as needed based on real-world observation.
+L1_OVERRIDE_L1 = {"801780.SI"}  # 银行 -> "银行" is sufficient
 
 
-def compute_index_contribution(index_code: str, weight_rows: list[dict]) -> dict:
+def pick_industry_label(l1_code: str, l1_name: str, l2_name: str) -> str:
+    """Choose the display label for a stock's industry (L1 or L2)."""
+    if l1_code in L1_OVERRIDE_L1:
+        return l1_name
+    return l2_name
+
+
+def build_index_contribution(
+    index_code: str,
+    trade_date: str,
+    dp: DataProvider,
+    top_n: int = 5,
+) -> dict | None:
     """
-    Compute weighted contribution of top constituents to index movement.
+    Build contribution analysis for an index on a given trading date.
 
-    weight_rows: list of {code, name, weight_pct, change_pct} for each constituent.
-    Returns {total_contribution, constituents: [{name, weight_pct, change_pct, contribution}]}
+    Args:
+        index_code:  '000001.SH' or '399006.SZ'
+        trade_date:  YYYYMMDD or YYYY-MM-DD
+        dp:          DataProvider instance (single entry point for all data)
+        top_n:       number of top gainers/losers to return (default 5)
+
+    Returns:
+        {
+          "index": {close, pre_close, chg_pts, chg_pct},
+          "gainers": [{code, name, industry, weight, chg_pct, contrib}],
+          "losers":  [{code, name, industry, weight, chg_pct, contrib}],
+        }
+        or None if index/weight data is unavailable.
     """
-    total = 0.0
+    trade_date = trade_date.replace("-", "")
+
+    # 1. Index OHLC
+    idx_rows = dp.get_daily(index_code, end_date=trade_date, lookback_days=2)
+    if not idx_rows or len(idx_rows) < 2:
+        return None
+    latest = idx_rows[0]
+    prev = idx_rows[1]
+    close = float(latest["close"])
+    pre_close = float(prev["close"])
+    chg_pts = round(close - pre_close, 2)
+    chg_pct = round((close / pre_close - 1) * 100, 2)
+
+    # 2. Constituent weights
+    weights = dp.get_index_weights(index_code, trade_date)
+    if not weights:
+        return None
+
+    # 3. Stock prices for all constituents
+    all_codes = [w["con_code"] for w in weights]
+    prices = dp.get_daily_batch(all_codes, trade_date)
+
+    # 4. Compute contribution for each constituent
     items = []
-    for wr in weight_rows:
-        contrib = wr["weight_pct"] * wr.get("change_pct", 0) / 100
-        total += contrib
+    for w in weights:
+        code = w["con_code"]
+        p = prices.get(code)
+        if p is None:
+            continue
+        chg = p["change_pct"]
+        # contrib = weight% x chg% x index_close / 10000
+        contrib = round(w["weight"] * chg * close / 10000, 2)
         items.append({
-            "name": wr["name"],
-            "weight_pct": wr["weight_pct"],
-            "change_pct": wr.get("change_pct", 0),
-            "contribution": round(contrib, 4),
+            "code": code,
+            "weight": round(w["weight"], 2),
+            "chg_pct": chg,
+            "contrib": contrib,
         })
+
+    if not items:
+        return None
+
+    # Sort by contribution descending (largest positive = top gainer,
+    # largest negative = top loser)
+    items.sort(key=lambda x: x["contrib"], reverse=True)
+
+    gainers = items[:top_n]
+    losers = items[-top_n:][::-1]  # most negative first
+
+    # 5. Industry labels (only for the displayed 2*top_n stocks)
+    display_codes = [g["code"] for g in gainers] + [l["code"] for l in losers]
+    industries = dp.get_stock_industries(display_codes)
+
+    def _attach_name_industry(item: dict) -> dict:
+        ind = industries.get(item["code"], {})
+        l1_code = ind.get("l1_code", "")
+        l1_name = ind.get("l1_name", "")
+        l2_name = ind.get("l2_name", "")
+        return {
+            "code": item["code"],
+            "name": ind.get("name", item["code"]),
+            "industry": pick_industry_label(l1_code, l1_name, l2_name),
+            "weight": item["weight"],
+            "chg_pct": item["chg_pct"],
+            "contrib": item["contrib"],
+        }
+
     return {
-        "total_contribution": round(total, 2),
-        "constituents": sorted(items, key=lambda x: abs(x["contribution"]), reverse=True),
+        "index": {
+            "close": close,
+            "pre_close": pre_close,
+            "chg_pts": chg_pts,
+            "chg_pct": chg_pct,
+        },
+        "gainers": [_attach_name_industry(g) for g in gainers],
+        "losers": [_attach_name_industry(l) for l in losers],
     }
