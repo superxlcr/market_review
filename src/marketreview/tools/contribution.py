@@ -141,9 +141,9 @@ def build_index_contribution(
         l3_name = ind.get("l3_name", "")
         return {
             "code": item["code"],
-            "name": ind.get("name", item["code"]),
+            "name": ind.get("name") or "N/A",
             "industry": pick_industry_label(l1_code, l1_name,
-                                            l2_code, l2_name, l3_name),
+                                            l2_code, l2_name, l3_name) or "N/A",
             "weight": item["weight"],
             "chg_pct": item["chg_pct"],
             "contrib": item["contrib"],
