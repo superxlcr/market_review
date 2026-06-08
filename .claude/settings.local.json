@@ -34,7 +34,10 @@
       "WebFetch(domain:tushare.pro)",
       "Bash(rm -f \"i:/AIcode/marketreview/,\")",
       "Read(C:\\Users\\*\\AppData\\Local\\Temp\\claude\\i--AIcode-marketreview\\**)",
-      "WebFetch(domain:localhost)"
+      "WebFetch(domain:localhost)",
+      "Read(//c/Users/superxlcr/.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0/skills/brainstorming/**)",
+      "Read(//c/Users/superxlcr/.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0/skills/subagent-driven-development/**)",
+      "Read(//c/Users/superxlcr/**)"
     ],
     "ask": [
       "Bash(git add *)",
