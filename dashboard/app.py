@@ -566,7 +566,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
                     <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:14px;">
                         <th style="text-align:left;">代码</th>
                         <th style="text-align:left;">名称</th>
-                        <th style="text-align:left;">行业(L1/L2/L3)</th>
+                        <th style="text-align:left;">行业</th>
                         <th style="text-align:right;">权重%</th>
                         <th style="text-align:right;">涨幅%</th>
                         <th style="text-align:right;">贡献</th>
@@ -600,7 +600,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
                     <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:14px;">
                         <th style="text-align:left;">代码</th>
                         <th style="text-align:left;">名称</th>
-                        <th style="text-align:left;">行业(L1/L2/L3)</th>
+                        <th style="text-align:left;">行业</th>
                         <th style="text-align:right;">权重%</th>
                         <th style="text-align:right;">跌幅%</th>
                         <th style="text-align:right;">贡献</th>
