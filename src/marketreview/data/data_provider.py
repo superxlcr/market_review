@@ -168,16 +168,25 @@ class DataProvider:
             # Cache is current enough
             return self.cache.get_index_weights(index_code, cached_wd)
 
-        # Fetch from Tushare
+        # Fetch from Tushare — API requires month-end-ish dates
+        # (last trading day of a month).  Start from the prior month's
+        # last calendar day and step back up to 7 days in case it falls
+        # on a weekend/holiday.
         import time
-        try:
-            df = self._api.index_weight(
-                index_code=self._normalize_code(index_code),
-                trade_date=trade_date,
-            )
-        except Exception as e:
-            print(f"[DataProvider] index_weight failed for {index_code} @ {trade_date}: {e}")
-            return None
+        query_dt = prior_month
+        df = None
+        for offset in range(7):
+            qd = (query_dt - timedelta(days=offset)).strftime("%Y%m%d")
+            try:
+                df = self._api.index_weight(
+                    index_code=self._normalize_code(index_code),
+                    trade_date=qd,
+                )
+            except Exception as e:
+                print(f"[DataProvider] index_weight failed for {index_code} @ {qd}: {e}")
+                return None
+            if df is not None and not df.empty:
+                break
 
         if df is None or df.empty:
             return None
@@ -215,14 +224,15 @@ class DataProvider:
         end_date = end_date.replace("-", "")
         result = {}
 
-        # ---- check cache for each code ----
+        # ---- check cache for each code (need 2 rows for pre_close) ----
         missing = []
         for code in codes:
-            rows = self.cache.get_daily(code, start=end_date, end=end_date, limit=1)
-            if rows:
+            rows = self.cache.get_daily(code, end=end_date, limit=2)
+            if len(rows) >= 2:
                 r = rows[0]
+                prev = rows[1]
                 close = float(r["close"])
-                pre = float(r.get("pre_close", close))
+                pre = float(prev["close"])
                 chg = round((close / pre - 1) * 100, 2) if pre else 0.0
                 result[code] = {"close": close, "pre_close": pre, "change_pct": chg}
             else:
@@ -238,9 +248,19 @@ class DataProvider:
                 fields="ts_code,close,pre_close,open,high,low,vol,amount",
             )
             if df is not None and not df.empty:
-                # Normalize: ts_code -> code, trade_date -> date
-                df = df.rename(columns={"ts_code": "code", "trade_date": "date"})
-                df["date"] = df["date"].astype(str)
+                # Use pre_close from API result BEFORE upserting to cache
+                # (cache schema does not store pre_close)
+                df = df.rename(columns={"ts_code": "code"})
+                for _, r in df.iterrows():
+                    code = r["code"]
+                    if code in missing:
+                        close_val = float(r["close"])
+                        pre_val = float(r["pre_close"])
+                        chg = round((close_val / pre_val - 1) * 100, 2) if pre_val else 0.0
+                        result[code] = {"close": close_val, "pre_close": pre_val, "change_pct": chg}
+
+                # Upsert to cache (without pre_close, which isn't in schema)
+                df["date"] = end_date
                 if "adj_factor" not in df.columns:
                     df["adj_factor"] = 1.0
                 cols = ["code", "date", "open", "high", "low", "close",
@@ -250,16 +270,6 @@ class DataProvider:
         except Exception as e:
             print(f"[DataProvider] get_daily_batch fetch failed for {end_date}: {e}")
             return result
-
-        # ---- re-check cache for previously-missing codes ----
-        for code in missing:
-            rows = self.cache.get_daily(code, start=end_date, end=end_date, limit=1)
-            if rows:
-                r = rows[0]
-                close = float(r["close"])
-                pre = float(r.get("pre_close", close))
-                chg = round((close / pre - 1) * 100, 2) if pre else 0.0
-                result[code] = {"close": close, "pre_close": pre, "change_pct": chg}
 
         return result
 
