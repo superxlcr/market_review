@@ -320,6 +320,31 @@ class DataProvider:
 
         return cached
 
+    def is_trading_day(self, trade_date: str) -> bool:
+        """
+        Check if a date (YYYYMMDD) is a trading day via Tushare trade_cal API.
+        Falls back to weekday check if API is unavailable.
+        """
+        import time
+        trade_date = trade_date.replace("-", "")
+        try:
+            df = self._api.trade_cal(
+                exchange="SSE",
+                start_date=trade_date,
+                end_date=trade_date,
+            )
+            if df is not None and not df.empty:
+                return int(df.iloc[0]["is_open"]) == 1
+        except Exception:
+            pass
+
+        # Fallback: basic weekday check (Mon-Fri)
+        try:
+            dt = datetime.strptime(trade_date, "%Y%m%d")
+            return dt.weekday() < 5
+        except Exception:
+            return False
+
     # ------- internal -------
 
     def _fetch_from_api(self, code: str, start: str, end: str) -> list[dict]:

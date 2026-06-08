@@ -29,8 +29,8 @@ class DashboardService:
     # ---- trading day validation ----
 
     def is_trading_day(self, trade_date: str) -> bool:
-        """Check if a given date (YYYYMMDD) has market data."""
-        return self._dp.get_market_breadth(trade_date) is not None
+        """Check if a given date (YYYYMMDD) is a trading day (via trade_cal API)."""
+        return self._dp.is_trading_day(trade_date)
 
     # ---- index K-line ----
 

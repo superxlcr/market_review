@@ -14,6 +14,13 @@ st.markdown(PAGE_CSS, unsafe_allow_html=True)
 st.title("📋 个股追踪")
 st.caption("Agent 3 — 个股技术分析 & 持仓管理")
 
+# ── Date indicator ──
+_td = st.session_state.get("trade_date")
+if _td:
+    st.markdown(f"📅 当前日期：<span style='color:#e53935;font-weight:bold;'>{_td[:4]}-{_td[4:6]}-{_td[6:8]}</span>", unsafe_allow_html=True)
+else:
+    st.warning("⚠️ 尚未选择日期，请前往「控制台」设置")
+
 st.divider()
 
 # ── Filters / Summary Bar ──

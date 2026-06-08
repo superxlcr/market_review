@@ -23,9 +23,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 pg = st.navigation([
-    st.Page("pages/00_市场全景.py", title="市场全景", icon="📊", default=True),
-    st.Page("pages/01_板块分析.py", title="板块分析", icon="🏭"),
-    st.Page("pages/02_个股追踪.py", title="个股追踪", icon="📋"),
+    st.Page("pages/00_控制台.py", title="控制台", icon="🎛️", default=True),
+    st.Page("pages/01_市场全景.py", title="市场全景", icon="📊"),
+    st.Page("pages/02_板块分析.py", title="板块分析", icon="🏭"),
+    st.Page("pages/03_个股追踪.py", title="个股追踪", icon="📋"),
 ])
 
 pg.run()

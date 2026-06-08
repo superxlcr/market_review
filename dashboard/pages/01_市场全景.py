@@ -616,23 +616,19 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
 # ======== Init DashboardService ========
 _service = DashboardService()
 
-# Resolve trade date: query param ?date=YYYYMMDD, or latest from cache
-_query_date = st.query_params.get("date", None)
-if _query_date:
-    _raw_date = _query_date
-else:
-    _raw_date = _service.get_latest_trade_date()
-# Normalize to consistent formats (handle both YYYYMMDD and YYYY-MM-DD inputs)
-_raw_clean = _raw_date.replace("-", "")
-_display_date = f"{_raw_clean[:4]}-{_raw_clean[4:6]}-{_raw_clean[6:8]}"
-_trade_date_yyyymmdd = _raw_clean
+# Resolve trade date: session_state (from 控制台) > latest from cache
+_trade_date_yyyymmdd = st.session_state.get("trade_date")
+if not _trade_date_yyyymmdd:
+    _trade_date_yyyymmdd = _service.get_latest_trade_date()
+    if _trade_date_yyyymmdd:
+        _trade_date_yyyymmdd = _trade_date_yyyymmdd.replace("-", "")
+    else:
+        st.error("无可用数据，请先在控制台选择日期并运行数据采集。")
+        st.stop()
 
-# Validate: if user passed an explicit date that is not a trading day, error out
-if _query_date and not _service.is_trading_day(_trade_date_yyyymmdd):
-    st.error(f"**{_display_date} 不是交易日**，请检查日期后重试。")
-    st.stop()
+_display_date = f"{_trade_date_yyyymmdd[:4]}-{_trade_date_yyyymmdd[4:6]}-{_trade_date_yyyymmdd[6:8]}"
 
-st.title(f"📊 A股复盘 Dashboard — {_display_date}")
+st.title(f"📊 市场全景 — {_display_date}")
 st.caption("Agent 1 — 大盘分析")
 
 # ============ 市场概览 ============
