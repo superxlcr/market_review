@@ -120,3 +120,22 @@ class DashboardService:
             "avg_5d": avg_5d,
             "avg_10d": avg_10d,
         }
+
+    # ---- index contribution ----
+
+    def get_index_contribution(
+        self, index_code: str, trade_date: str | None = None
+    ) -> dict | None:
+        """
+        Fetch index weight contribution analysis.
+
+        Delegates to build_index_contribution() in contribution.py.
+        Returns {index, gainers, losers} or None.
+        """
+        try:
+            # Lazy import to avoid circular dependency at module level
+            from marketreview.tools.contribution import build_index_contribution
+            return build_index_contribution(index_code, trade_date, self._dp)
+        except Exception as e:
+            print(f"[DashboardService] get_index_contribution failed: {e}")
+            return None
