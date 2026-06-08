@@ -530,13 +530,15 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         st.caption("暂无权重贡献数据")
     else:
         idx = contrib["index"]
-        # Summary line
+        # Summary line — colored per convention (red=up, green=down)
         chg_sign = "+" if idx["chg_pts"] >= 0 else ""
         chg_color = "#e53935" if idx["chg_pts"] >= 0 else "#43a047"
-        st.caption(
-            f"指数收盘 {idx['close']:.2f} ｜ "
-            f"涨跌 {chg_sign}{idx['chg_pts']:.2f} 点 "
-            f"({chg_sign}{idx['chg_pct']:.2f}%)"
+        st.markdown(
+            f'指数收盘 <span style="color:{chg_color};font-weight:bold;font-size:18px;">'
+            f'{idx["close"]:.2f}</span> ｜ '
+            f'涨跌 <span style="color:{chg_color};font-weight:bold;font-size:18px;">'
+            f'{chg_sign}{idx["chg_pts"]:.2f} 点 ({chg_sign}{idx["chg_pct"]:.2f}%)</span>',
+            unsafe_allow_html=True,
         )
 
         left_col, right_col = st.columns(2)
@@ -544,7 +546,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         # --- 领涨 Top 5 ---
         with left_col:
             st.markdown(
-                '<span style="color:#e53935;font-size:16px;font-weight:bold;">'
+                '<span style="color:#e53935;font-size:19px;font-weight:bold;">'
                 '🔥 领涨 Top 5</span>',
                 unsafe_allow_html=True,
             )
@@ -552,7 +554,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
                 rows_html = ""
                 for g in contrib["gainers"]:
                     rows_html += f"""<tr>
-                        <td style="color:#888;font-size:13px;">{g['code']}</td>
+                        <td style="color:#888;font-size:16px;">{g['code']}</td>
                         <td style="font-weight:600;">{g['name']}</td>
                         <td style="color:#888;">{g['industry']}</td>
                         <td style="text-align:right;">{g['weight']:.2f}</td>
@@ -560,8 +562,8 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
                         <td style="text-align:right;color:#e53935;font-weight:bold;">+{g['contrib']:.2f}</td>
                     </tr>"""
                 st.html(f"""
-                <table style="width:100%;font-size:14px;border-collapse:collapse;">
-                    <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:12px;">
+                <table style="width:100%;font-size:17px;border-collapse:collapse;">
+                    <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:14px;">
                         <th style="text-align:left;">代码</th>
                         <th style="text-align:left;">名称</th>
                         <th style="text-align:left;">行业</th>
@@ -578,7 +580,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         # --- 领跌 Top 5 ---
         with right_col:
             st.markdown(
-                '<span style="color:#43a047;font-size:16px;font-weight:bold;">'
+                '<span style="color:#43a047;font-size:19px;font-weight:bold;">'
                 '❄️ 领跌 Top 5</span>',
                 unsafe_allow_html=True,
             )
@@ -586,7 +588,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
                 rows_html = ""
                 for l in contrib["losers"]:
                     rows_html += f"""<tr>
-                        <td style="color:#888;font-size:13px;">{l['code']}</td>
+                        <td style="color:#888;font-size:16px;">{l['code']}</td>
                         <td style="font-weight:600;">{l['name']}</td>
                         <td style="color:#888;">{l['industry']}</td>
                         <td style="text-align:right;">{l['weight']:.2f}</td>
@@ -594,8 +596,8 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
                         <td style="text-align:right;color:#43a047;font-weight:bold;">{l['contrib']:.2f}</td>
                     </tr>"""
                 st.html(f"""
-                <table style="width:100%;font-size:14px;border-collapse:collapse;">
-                    <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:12px;">
+                <table style="width:100%;font-size:17px;border-collapse:collapse;">
+                    <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:14px;">
                         <th style="text-align:left;">代码</th>
                         <th style="text-align:left;">名称</th>
                         <th style="text-align:left;">行业</th>
