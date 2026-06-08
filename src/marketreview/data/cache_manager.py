@@ -130,7 +130,7 @@ class CacheManager:
     def get_stock_industries(self, codes: list[str]) -> dict[str, dict]:
         """
         Return industry info for given ts_codes.
-        Returns {ts_code: {name, l1_code, l1_name, l2_code, l2_name, l3_name}}.
+        Returns {ts_code: {name, l1_code, l1_name, l2_code, l2_name, l3_code, l3_name}}.
         Only returns rows that exist in cache — caller must handle misses.
         """
         if not codes:
@@ -138,7 +138,7 @@ class CacheManager:
         placeholders = ",".join(["?" for _ in codes])
         with self._get_conn() as conn:
             rows = conn.execute(
-                f"""SELECT ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_name
+                f"""SELECT ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_code, l3_name
                     FROM stock_industry_cache
                     WHERE ts_code IN ({placeholders})""",
                 codes,
@@ -148,12 +148,12 @@ class CacheManager:
     def upsert_stock_industries(self, rows: list[dict]):
         """
         Batch upsert industry rows.
-        Each row: {ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_name}.
+        Each row: {ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_code, l3_name}.
         """
         sql = """
             INSERT OR REPLACE INTO stock_industry_cache
-                (ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_name)
-            VALUES (:ts_code, :name, :l1_code, :l1_name, :l2_code, :l2_name, :l3_name)
+                (ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_code, l3_name)
+            VALUES (:ts_code, :name, :l1_code, :l1_name, :l2_code, :l2_name, :l3_code, :l3_name)
         """
         with self._get_conn() as conn:
             conn.executemany(sql, rows)

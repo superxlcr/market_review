@@ -31,5 +31,11 @@ CREATE TABLE IF NOT EXISTS stock_industry_cache (
     l1_name   TEXT,
     l2_code   TEXT,
     l2_name   TEXT,
+    l3_code   TEXT,
     l3_name   TEXT
 );
+
+-- Migration: add l3_code column to existing tables
+-- SQLite does not support IF NOT EXISTS for ALTER TABLE, so ignore errors
+-- if the column already exists.
+-- ALTER TABLE stock_industry_cache ADD COLUMN l3_code TEXT;

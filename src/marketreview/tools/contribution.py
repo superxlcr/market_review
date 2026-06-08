@@ -24,8 +24,8 @@ from ..data.data_provider import DataProvider
 # Industry label override logic:
 #   默认 → L2
 #   命中 L1_OVERRIDE_L1 (by L1 code) → L1 name
-#   命中 L3_OVERRIDE_L3 (by L2 code) → L3 name
-# L3 没有独立 code，用 L2 code 做键是最小粒度（L3 是 L2 的细分）。
+#   命中 L3_OVERRIDE_L3 (by L3 code) → L3 name
+# L3 override 现在直接用 l3_code 做键，粒度最精确。
 
 L1_OVERRIDE_L1 = {
     "801780.SI",  # 银行     -> "银行" is sufficient
@@ -35,23 +35,22 @@ L1_OVERRIDE_L1 = {
 }
 
 L3_OVERRIDE_L3 = {
-    "801078.SI",  # 自动化设备 -> L3 e.g. "机器人" / "工控设备" > L2 "自动化设备"
-    "801081.SI",  # 半导体    -> L3 e.g. "数字芯片设计" > L2 "半导体"
-    "801083.SI",  # 元件      -> L3 e.g. "被动元件" > L2 "元件"
-    "801056.SI",  # 能源金属   -> L3 e.g. "锂" > L2 "能源金属"
-    "801054.SI",  # 小金属    -> L3 e.g. "钨" > L2 "小金属"
-    "801055.SI",  # 工业金属   -> L3 e.g. "铜" > L2 "工业金属"
-    "801735.SI",  # 光伏设备   -> L3 e.g. "逆变器" > L2 "光伏设备"
+    "850781.SI",  # 机器人     (L2=自动化设备)
+    "850814.SI",  # 数字芯片设计 (L2=半导体)
+    "850823.SI",  # 被动元件    (L2=元件)
+    "850543.SI",  # 锂         (L2=能源金属)
+    "850542.SI",  # 钨         (L2=小金属)
+    "857353.SI",  # 逆变器     (L2=光伏设备)
 }
 
 
 def pick_industry_label(l1_code: str, l1_name: str,
                         l2_code: str, l2_name: str,
-                        l3_name: str = "") -> str:
+                        l3_code: str = "", l3_name: str = "") -> str:
     """Choose the display label for a stock's industry (L1 / L2 / L3)."""
     if l1_code in L1_OVERRIDE_L1:
         return l1_name
-    if l2_code in L3_OVERRIDE_L3:
+    if l3_code in L3_OVERRIDE_L3:
         return l3_name or l2_name  # fall back to L2 if L3 is empty
     return l2_name
 
@@ -138,12 +137,14 @@ def build_index_contribution(
         l1_name = ind.get("l1_name", "")
         l2_code = ind.get("l2_code", "")
         l2_name = ind.get("l2_name", "")
+        l3_code = ind.get("l3_code", "")
         l3_name = ind.get("l3_name", "")
         return {
             "code": item["code"],
             "name": ind.get("name") or "N/A",
             "industry": pick_industry_label(l1_code, l1_name,
-                                            l2_code, l2_name, l3_name) or "N/A",
+                                            l2_code, l2_name,
+                                            l3_code, l3_name) or "N/A",
             "weight": item["weight"],
             "chg_pct": item["chg_pct"],
             "contrib": item["contrib"],

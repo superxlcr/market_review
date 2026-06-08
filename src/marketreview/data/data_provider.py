@@ -307,6 +307,7 @@ class DataProvider:
                         "l1_name": r.get("l1_name", ""),
                         "l2_code": r.get("l2_code", ""),
                         "l2_name": r.get("l2_name", ""),
+                        "l3_code": r.get("l3_code", ""),
                         "l3_name": r.get("l3_name", ""),
                     }
                     new_rows.append(row)
