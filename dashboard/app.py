@@ -521,6 +521,94 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     """)
     st.caption("10日乖离 > 10 短线超买 | < -10 短线超卖 | 月线乖离(20日) > 7 超买 | < -7 超卖")
 
+    # --- 权重贡献 ---
+    st.divider()
+    st.markdown("**权重贡献**")
+    contrib = service.get_index_contribution(code, end_date)
+
+    if contrib is None:
+        st.caption("暂无权重贡献数据")
+    else:
+        idx = contrib["index"]
+        # Summary line
+        chg_sign = "+" if idx["chg_pts"] >= 0 else ""
+        chg_color = "#e53935" if idx["chg_pts"] >= 0 else "#43a047"
+        st.caption(
+            f"指数收盘 {idx['close']:.2f} ｜ "
+            f"涨跌 {chg_sign}{idx['chg_pts']:.2f} 点 "
+            f"({chg_sign}{idx['chg_pct']:.2f}%)"
+        )
+
+        left_col, right_col = st.columns(2)
+
+        # --- 领涨 Top 5 ---
+        with left_col:
+            st.markdown(
+                '<span style="color:#e53935;font-size:16px;font-weight:bold;">'
+                '🔥 领涨 Top 5</span>',
+                unsafe_allow_html=True,
+            )
+            if contrib["gainers"]:
+                rows_html = ""
+                for g in contrib["gainers"]:
+                    rows_html += f"""<tr>
+                        <td style="color:#888;font-size:13px;">{g['code']}</td>
+                        <td style="font-weight:600;">{g['name']}</td>
+                        <td style="color:#888;">{g['industry']}</td>
+                        <td style="text-align:right;">{g['weight']:.2f}</td>
+                        <td style="text-align:right;color:#e53935;font-weight:bold;">+{g['chg_pct']:.2f}</td>
+                        <td style="text-align:right;color:#e53935;font-weight:bold;">+{g['contrib']:.2f}</td>
+                    </tr>"""
+                st.html(f"""
+                <table style="width:100%;font-size:14px;border-collapse:collapse;">
+                    <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:12px;">
+                        <th style="text-align:left;">代码</th>
+                        <th style="text-align:left;">名称</th>
+                        <th style="text-align:left;">行业</th>
+                        <th style="text-align:right;">权重%</th>
+                        <th style="text-align:right;">涨幅%</th>
+                        <th style="text-align:right;">贡献</th>
+                    </tr></thead>
+                    <tbody>{rows_html}</tbody>
+                </table>
+                """)
+            else:
+                st.caption("无数据")
+
+        # --- 领跌 Top 5 ---
+        with right_col:
+            st.markdown(
+                '<span style="color:#43a047;font-size:16px;font-weight:bold;">'
+                '❄️ 领跌 Top 5</span>',
+                unsafe_allow_html=True,
+            )
+            if contrib["losers"]:
+                rows_html = ""
+                for l in contrib["losers"]:
+                    rows_html += f"""<tr>
+                        <td style="color:#888;font-size:13px;">{l['code']}</td>
+                        <td style="font-weight:600;">{l['name']}</td>
+                        <td style="color:#888;">{l['industry']}</td>
+                        <td style="text-align:right;">{l['weight']:.2f}</td>
+                        <td style="text-align:right;color:#43a047;font-weight:bold;">{l['chg_pct']:.2f}</td>
+                        <td style="text-align:right;color:#43a047;font-weight:bold;">{l['contrib']:.2f}</td>
+                    </tr>"""
+                st.html(f"""
+                <table style="width:100%;font-size:14px;border-collapse:collapse;">
+                    <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:12px;">
+                        <th style="text-align:left;">代码</th>
+                        <th style="text-align:left;">名称</th>
+                        <th style="text-align:left;">行业</th>
+                        <th style="text-align:right;">权重%</th>
+                        <th style="text-align:right;">跌幅%</th>
+                        <th style="text-align:right;">贡献</th>
+                    </tr></thead>
+                    <tbody>{rows_html}</tbody>
+                </table>
+                """)
+            else:
+                st.caption("无数据")
+
 
 # ------- Page -------
 
