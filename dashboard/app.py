@@ -850,7 +850,7 @@ with st.expander("📈 上证指数 000001.SH", expanded=True):
 st.divider()
 
 # ============ 创业板指 ============
-with st.expander("📉 创业板指 399006.SZ", expanded=False):
+with st.expander("📉 创业板指 399006.SZ", expanded=True):
     render_index_section(_service, "399006.SZ", "创业板指", end_date=_trade_date_yyyymmdd)
 
 # ============ Agent 1 分析报告 ============
