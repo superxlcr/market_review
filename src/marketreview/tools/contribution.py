@@ -21,19 +21,31 @@ from datetime import datetime, timedelta
 from ..data.data_provider import DataProvider
 
 
-# TODO: L1 industries where the L1 name is specific enough - use L1 directly.
-# For all other industries, the more granular L2 name is shown.
-# Add/remove codes here as needed based on real-world observation.
+# Industry label override logic:
+#   默认 → L2
+#   命中 L1_OVERRIDE_L1  → L1（行业大类辨识度足够高）
+#   命中 L3_OVERRIDE_L3  → L3（三级子行业更直观）
+# 两组集合按键都是 L1 code，后续可根据实际效果随时增减。
+
 L1_OVERRIDE_L1 = {
-    "801780.SI",  # 银行    -> "银行" is sufficient
-    "801960.SI",  # 石油石化 -> "石油石化" is sufficient
+    "801780.SI",  # 银行     -> "银行" is sufficient
+    "801960.SI",  # 石油石化  -> "石油石化" is sufficient
+    "801950.SI",  # 煤炭     -> "煤炭" is sufficient
+}
+
+L3_OVERRIDE_L3 = {
+    "801890.SI",  # 机械设备  -> L3 e.g. "机器人" > L2 "自动化设备"
+    "801080.SI",  # 电子     -> L3 e.g. "数字芯片设计" > L2 "半导体"
 }
 
 
-def pick_industry_label(l1_code: str, l1_name: str, l2_name: str) -> str:
-    """Choose the display label for a stock's industry (L1 or L2)."""
+def pick_industry_label(l1_code: str, l1_name: str, l2_name: str,
+                        l3_name: str = "") -> str:
+    """Choose the display label for a stock's industry (L1 / L2 / L3)."""
     if l1_code in L1_OVERRIDE_L1:
         return l1_name
+    if l1_code in L3_OVERRIDE_L3:
+        return l3_name or l2_name  # fall back to L2 if L3 is empty
     return l2_name
 
 
@@ -118,10 +130,11 @@ def build_index_contribution(
         l1_code = ind.get("l1_code", "")
         l1_name = ind.get("l1_name", "")
         l2_name = ind.get("l2_name", "")
+        l3_name = ind.get("l3_name", "")
         return {
             "code": item["code"],
             "name": ind.get("name", item["code"]),
-            "industry": pick_industry_label(l1_code, l1_name, l2_name),
+            "industry": pick_industry_label(l1_code, l1_name, l2_name, l3_name),
             "weight": item["weight"],
             "chg_pct": item["chg_pct"],
             "contrib": item["contrib"],
