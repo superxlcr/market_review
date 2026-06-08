@@ -37,7 +37,8 @@
       "WebFetch(domain:localhost)",
       "Read(//c/Users/superxlcr/.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0/skills/brainstorming/**)",
       "Read(//c/Users/superxlcr/.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0/skills/subagent-driven-development/**)",
-      "Read(//c/Users/superxlcr/**)"
+      "Read(//c/Users/superxlcr/**)",
+      "Bash(python -c ' *)"
     ],
     "ask": [
       "Bash(git add *)",
