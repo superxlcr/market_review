@@ -199,6 +199,70 @@ class DataProvider:
         self.cache.upsert_index_weights(index_code, weight_date, rows)
         return self.cache.get_index_weights(index_code, weight_date)
 
+    def get_daily_batch(self, codes: list[str],
+                         end_date: str) -> dict[str, dict]:
+        """
+        Return close/pre_close/change_pct for a batch of stocks on a single day.
+
+        Checks tushare_cache first for each code.  Missing codes are fetched
+        from tushare via a single api.daily() call (one round-trip for all
+        stocks on that day).  Fetched data is upserted into the shared cache
+        so future calls benefit.
+
+        Returns {ts_code: {close, pre_close, change_pct}} for all codes that
+        have data.  Stocks with no data on end_date are omitted.
+        """
+        end_date = end_date.replace("-", "")
+        result = {}
+
+        # ---- check cache for each code ----
+        missing = []
+        for code in codes:
+            rows = self.cache.get_daily(code, start=end_date, end=end_date, limit=1)
+            if rows:
+                r = rows[0]
+                close = float(r["close"])
+                pre = float(r.get("pre_close", close))
+                chg = round((close / pre - 1) * 100, 2) if pre else 0.0
+                result[code] = {"close": close, "pre_close": pre, "change_pct": chg}
+            else:
+                missing.append(code)
+
+        if not missing:
+            return result
+
+        # ---- fetch missing from Tushare (one call for all stocks on end_date) ----
+        try:
+            df = self._api.daily(
+                trade_date=end_date,
+                fields="ts_code,close,pre_close,open,high,low,vol,amount",
+            )
+            if df is not None and not df.empty:
+                # Normalize: ts_code -> code, trade_date -> date
+                df = df.rename(columns={"ts_code": "code", "trade_date": "date"})
+                df["date"] = df["date"].astype(str)
+                if "adj_factor" not in df.columns:
+                    df["adj_factor"] = 1.0
+                cols = ["code", "date", "open", "high", "low", "close",
+                        "vol", "amount", "adj_factor"]
+                df = df[[c for c in cols if c in df.columns]]
+                self.cache.upsert_daily_bulk(df.to_dict(orient="records"))
+        except Exception as e:
+            print(f"[DataProvider] get_daily_batch fetch failed for {end_date}: {e}")
+            return result
+
+        # ---- re-check cache for previously-missing codes ----
+        for code in missing:
+            rows = self.cache.get_daily(code, start=end_date, end=end_date, limit=1)
+            if rows:
+                r = rows[0]
+                close = float(r["close"])
+                pre = float(r.get("pre_close", close))
+                chg = round((close / pre - 1) * 100, 2) if pre else 0.0
+                result[code] = {"close": close, "pre_close": pre, "change_pct": chg}
+
+        return result
+
     # ------- internal -------
 
     def _fetch_from_api(self, code: str, start: str, end: str) -> list[dict]:
