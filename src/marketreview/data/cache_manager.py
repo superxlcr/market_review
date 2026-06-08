@@ -74,3 +74,104 @@ class CacheManager:
                 "SELECT 1 FROM tushare_cache WHERE code = ? LIMIT 1", [code]
             ).fetchone()
         return row is not None
+
+    # ------- index_weight_cache -------
+
+    def upsert_index_weights(self, index_code: str, weight_date: str,
+                              rows: list[dict]):
+        """
+        Batch upsert index weight rows.
+        Each row: {con_code, weight}
+        weight_date is the official publication date (from API trade_date field).
+        """
+        sql = """
+            INSERT OR REPLACE INTO index_weight_cache
+                (index_code, con_code, weight_date, weight)
+            VALUES (?, ?, ?, ?)
+        """
+        with self._get_conn() as conn:
+            conn.executemany(sql, [
+                (index_code, r["con_code"], weight_date, r["weight"])
+                for r in rows
+            ])
+            conn.commit()
+
+    def get_latest_weight_date(self, index_code: str,
+                                trade_date: str) -> str | None:
+        """
+        Return the latest weight_date <= trade_date for an index.
+        Returns None if no cache exists.
+        """
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT MAX(weight_date) as d FROM index_weight_cache
+                   WHERE index_code = ? AND weight_date <= ?""",
+                [index_code, trade_date],
+            ).fetchone()
+        return row["d"] if row and row["d"] else None
+
+    def get_index_weights(self, index_code: str,
+                           weight_date: str) -> list[dict]:
+        """
+        Return all constituent weights for a given index_code + weight_date.
+        Returns list of {con_code, weight}.
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT con_code, weight FROM index_weight_cache
+                   WHERE index_code = ? AND weight_date = ?
+                   ORDER BY weight DESC""",
+                [index_code, weight_date],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------- stock_industry_cache -------
+
+    def get_stock_industries(self, codes: list[str]) -> dict[str, dict]:
+        """
+        Return industry info for given ts_codes.
+        Returns {ts_code: {name, l1_code, l1_name, l2_code, l2_name, l3_name}}.
+        Only returns rows that exist in cache — caller must handle misses.
+        """
+        if not codes:
+            return {}
+        placeholders = ",".join(["?" for _ in codes])
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                f"""SELECT ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_name
+                    FROM stock_industry_cache
+                    WHERE ts_code IN ({placeholders})""",
+                codes,
+            ).fetchall()
+        return {r["ts_code"]: dict(r) for r in rows}
+
+    def upsert_stock_industries(self, rows: list[dict]):
+        """
+        Batch upsert industry rows.
+        Each row: {ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_name}.
+        """
+        sql = """
+            INSERT OR REPLACE INTO stock_industry_cache
+                (ts_code, name, l1_code, l1_name, l2_code, l2_name, l3_name)
+            VALUES (:ts_code, :name, :l1_code, :l1_name, :l2_code, :l2_name, :l3_name)
+        """
+        with self._get_conn() as conn:
+            conn.executemany(sql, rows)
+            conn.commit()
+
+    # ------- batch daily upsert -------
+
+    def upsert_daily_bulk(self, rows: list[dict]):
+        """
+        Bulk upsert daily K-line rows from a full-market fetch.
+        Each row: {code, date, open, high, low, close, vol, amount, adj_factor}.
+        Uses executemany for efficiency with large datasets (~5000+ rows).
+        """
+        sql = """
+            INSERT OR REPLACE INTO tushare_cache
+                (code, date, open, high, low, close, vol, amount, adj_factor)
+            VALUES (:code, :date, :open, :high, :low, :close, :vol, :amount, :adj_factor)
+        """
+        with self._get_conn() as conn:
+            conn.executemany(sql, rows)
+            conn.commit()
