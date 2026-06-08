@@ -378,8 +378,8 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     # --- KD Card ---
     st.markdown("**KD 指标**")
     st.html(f"""
-    <table style="width:100%;font-size:15px;border-collapse:collapse;table-layout:fixed;">
-        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+    <table style="width:100%;font-size:18px;border-collapse:collapse;table-layout:fixed;">
+        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:16px;">
             <th style="text-align:center;width:10%;">指标</th>
             <th style="text-align:center;width:14%;">K</th>
             <th style="text-align:center;width:14%;">D</th>
@@ -389,11 +389,11 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         </tr></thead>
         <tbody><tr>
             <td style="text-align:center;font-weight:600;width:10%;">KD(9,3,3)</td>
-            <td style="text-align:center;font-weight:bold;font-size:17px;">{f"{k_val:.2f}" if k_val else "N/A"}</td>
-            <td style="text-align:center;font-weight:bold;font-size:17px;">{f"{d_val:.2f}" if d_val else "N/A"}</td>
+            <td style="text-align:center;font-weight:bold;font-size:20px;">{f"{k_val:.2f}" if k_val else "N/A"}</td>
+            <td style="text-align:center;font-weight:bold;font-size:20px;">{f"{d_val:.2f}" if d_val else "N/A"}</td>
             <td style="text-align:center;color:{zone_color};font-weight:bold;">{kd_zone}</td>
-            <td style="text-align:center;color:{diff_color};font-weight:bold;font-size:14px;" title="{diff_hint}">{diff_label}</td>
-            <td style="text-align:center;color:{div_color};font-weight:bold;white-space:pre-line;font-size:14px;">{div_signal}</td>
+            <td style="text-align:center;color:{diff_color};font-weight:bold;font-size:17px;" title="{diff_hint}">{diff_label}</td>
+            <td style="text-align:center;color:{div_color};font-weight:bold;white-space:pre-line;font-size:17px;">{div_signal}</td>
         </tr></tbody>
     </table>
     """)
@@ -466,8 +466,8 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
             rsi_vs_k_color = "#2e7d32"  # 看空=绿
 
     st.html(f"""
-    <table style="width:100%;font-size:15px;border-collapse:collapse;table-layout:fixed;">
-        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+    <table style="width:100%;font-size:18px;border-collapse:collapse;table-layout:fixed;">
+        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:16px;">
             <th style="text-align:center;width:10%;">指标</th>
             <th style="text-align:center;width:28%;">RSI</th>
             <th style="text-align:center;width:14%;">超买/超卖</th>
@@ -476,10 +476,10 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         </tr></thead>
         <tbody><tr>
             <td style="text-align:center;font-weight:600;width:10%;">RSI(9,9,9)</td>
-            <td style="text-align:center;font-weight:bold;font-size:17px;">{f"{rsi_val:.2f}" if rsi_val else "N/A"}</td>
+            <td style="text-align:center;font-weight:bold;font-size:20px;">{f"{rsi_val:.2f}" if rsi_val else "N/A"}</td>
             <td style="text-align:center;color:{rsi_zone_color};font-weight:bold;">{rsi_zone}</td>
             <td style="text-align:center;color:{rsi_vs_k_color};font-weight:bold;">{rsi_vs_k}</td>
-            <td style="text-align:center;color:{rsi_sig_color};font-weight:bold;white-space:pre-line;font-size:14px;">{rsi_signal}</td>
+            <td style="text-align:center;color:{rsi_sig_color};font-weight:bold;white-space:pre-line;font-size:17px;">{rsi_signal}</td>
         </tr></tbody>
     </table>
     """)
@@ -506,16 +506,16 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     b20_html = _bias_cell("BIAS20")
 
     st.html(f"""
-    <table style="width:100%;font-size:15px;border-collapse:collapse;table-layout:fixed;">
-        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+    <table style="width:100%;font-size:18px;border-collapse:collapse;table-layout:fixed;">
+        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:16px;">
             <th style="text-align:center;width:10%;">指标</th>
             <th style="text-align:center;">10日乖离</th>
             <th style="text-align:center;">月线乖离(20日)</th>
         </tr></thead>
         <tbody><tr>
             <td style="text-align:center;font-weight:600;width:10%;">BIAS</td>
-            <td style="text-align:center;font-weight:bold;font-size:17px;">{b10_html}</td>
-            <td style="text-align:center;font-weight:bold;font-size:17px;">{b20_html}</td>
+            <td style="text-align:center;font-weight:bold;font-size:20px;">{b10_html}</td>
+            <td style="text-align:center;font-weight:bold;font-size:20px;">{b20_html}</td>
         </tr></tbody>
     </table>
     """)
