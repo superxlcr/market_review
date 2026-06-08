@@ -34,6 +34,8 @@ L1_OVERRIDE_L1 = {
     "801750.SI",  # 计算机   -> "计算机" is sufficient
     "801150.SI",  # 医药生物  -> "医药生物" is sufficient
     "801790.SI",  # 非银金融  -> "非银金融" is sufficient
+    "801120.SI",  # 食品饮料  -> "食品饮料" is sufficient
+    "801890.SI",  # 机械设备  -> "机械设备" is sufficient
 }
 
 L3_OVERRIDE_L3 = {
@@ -67,7 +69,7 @@ def build_index_contribution(
     index_code: str,
     trade_date: str,
     dp: DataProvider,
-    top_n: int = 5,
+    top_n: int = 10,
 ) -> dict | None:
     """
     Build contribution analysis for an index on a given trading date.
@@ -76,7 +78,7 @@ def build_index_contribution(
         index_code:  '000001.SH' or '399006.SZ'
         trade_date:  YYYYMMDD or YYYY-MM-DD
         dp:          DataProvider instance (single entry point for all data)
-        top_n:       number of top gainers/losers to return (default 5)
+        top_n:       number of top gainers/losers to return (default 10)
 
     Returns:
         {

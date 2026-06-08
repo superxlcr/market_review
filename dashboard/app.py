@@ -543,11 +543,11 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
 
         left_col, right_col = st.columns(2)
 
-        # --- 领涨 Top 5 ---
+        # --- 领涨 Top 10 ---
         with left_col:
             st.markdown(
                 '<span style="color:#e53935;font-size:19px;font-weight:bold;">'
-                '🔥 领涨 Top 5</span>',
+                '🔥 领涨 Top 10</span>',
                 unsafe_allow_html=True,
             )
             if contrib["gainers"]:
@@ -577,11 +577,11 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
             else:
                 st.caption("无数据")
 
-        # --- 领跌 Top 5 ---
+        # --- 领跌 Top 10 ---
         with right_col:
             st.markdown(
                 '<span style="color:#43a047;font-size:19px;font-weight:bold;">'
-                '❄️ 领跌 Top 5</span>',
+                '❄️ 领跌 Top 10</span>',
                 unsafe_allow_html=True,
             )
             if contrib["losers"]:
