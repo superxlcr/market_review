@@ -24,7 +24,10 @@ from ..data.data_provider import DataProvider
 # TODO: L1 industries where the L1 name is specific enough - use L1 directly.
 # For all other industries, the more granular L2 name is shown.
 # Add/remove codes here as needed based on real-world observation.
-L1_OVERRIDE_L1 = {"801780.SI"}  # 银行 -> "银行" is sufficient
+L1_OVERRIDE_L1 = {
+    "801780.SI",  # 银行    -> "银行" is sufficient
+    "801960.SI",  # 石油石化 -> "石油石化" is sufficient
+}
 
 
 def pick_industry_label(l1_code: str, l1_name: str, l2_name: str) -> str:
