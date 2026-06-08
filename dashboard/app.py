@@ -668,7 +668,7 @@ else:
         st.html(f"""
         <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:16px;">
             <div style="font-size:17px;color:#888;margin-bottom:8px;">两市成交额（亿元）</div>
-            <div style="font-size:34px;font-weight:bold;">{total_yi:,.0f}<span style="font-size:17px;color:#888;">亿</span></div>
+            <div style="font-size:34px;font-weight:bold;">{total_yi:,.0f}<span style="font-size:17px;color:#888;"> 亿</span></div>
             <div style="margin-top:4px;">{delta_html}</div>
             <div style="margin-top:8px;font-size:16px;">
                 {" &nbsp;|&nbsp; ".join(exchange_parts)}

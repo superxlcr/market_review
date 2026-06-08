@@ -38,13 +38,11 @@ class DashboardService:
                        end_date: str | None = None):
         """
         Load K-line data for an index symbol.
-        Returns a DataFrame (date ASC), optionally truncated to end_date.
+        Returns a DataFrame (date ASC).  `end_date` is passed through to
+        DataProvider.get_daily() so the cache check is date-aware.
         """
-        rows = self._dp.get_daily(code, lookback_days=lookback)
+        rows = self._dp.get_daily(code, end_date=end_date, lookback_days=lookback)
         df = rows_to_df(rows)
-        if end_date and not df.empty:
-            cutoff = end_date.replace("-", "")
-            df = df[df["date"].str.replace("-", "") <= cutoff]
         return df
 
     # ---- latest trade date ----
@@ -90,7 +88,7 @@ class DashboardService:
                 break
 
         # 10-day trend — find last 10 trading days up to trade_date
-        index_rows = self._dp.get_daily("000001.SH", lookback_days=360)
+        index_rows = self._dp.get_daily("000001.SH", end_date=trade_date, lookback_days=360)
         all_trading_dates = sorted(set(
             r["date"].replace("-", "") for r in index_rows
         ), reverse=True)

@@ -18,41 +18,62 @@ class DataProvider:
     # ------- public API (called by agent tools) -------
 
     def get_daily(
-        self, code: str, lookback_days: int = 120
+        self, code: str, end_date: str = None, lookback_days: int = 120
     ) -> list[dict]:
         """
-        Return recent daily K-line rows (date DESC) for `code`.
-        Tries cache first; fetches missing range from tushare and writes cache.
-        Checks both count AND freshness — stale cache triggers a re-fetch.
+        Return recent daily K-line rows (date DESC) for `code`, ending at `end_date`.
+
+        Args:
+            code: Stock/index code like '000001.SH'.
+            end_date: Latest date to include (YYYYMMDD or YYYY-MM-DD).
+                      Defaults to today.
+            lookback_days: Approximate number of trading days to return.
+
+        Checks cache first: if the cached data already covers `end_date` with
+        enough history, returns directly.  Otherwise fetches the missing range
+        from Tushare, upserts into cache, and returns.
         """
-        cached = self.cache.get_daily(code, limit=lookback_days)
-        today = datetime.now()
-        if len(cached) >= lookback_days:
-            latest_cached = cached[0]["date"].replace("-", "")  # handle both YYYYMMDD and YYYY-MM-DD
-            latest_dt = datetime.strptime(latest_cached, "%Y%m%d")
-            if (today - latest_dt).days <= 5:   # cache is recent enough
-                return cached[:lookback_days]
-            # Cache is stale — fall through to fetch
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y%m%d")
+        end_date = end_date.replace("-", "")
+        end_dt = datetime.strptime(end_date, "%Y%m%d")
 
-        # Determine fetch range
-        end_date = today.strftime("%Y%m%d")
-        desired_start = (today - timedelta(days=lookback_days * 2)).strftime("%Y%m%d")
-        if cached:
-            oldest = cached[-1]["date"].replace("-", "")
-            # If cached data doesn't go back far enough (e.g. MA240 upgrade),
-            # extend the fetch window to cover the full desired range
-            if desired_start < oldest:
-                start_date = desired_start
+        # ---- check whether cache covers the requested end_date ----
+        latest_cached = self.cache.get_latest_date(code)
+
+        if latest_cached:
+            latest_clean = latest_cached.replace("-", "")
+            if latest_clean >= end_date:
+                # Cache has data up to (or beyond) our end_date.
+                # Verify there are enough rows.
+                cached = self.cache.get_daily(code, end=end_date, limit=lookback_days)
+                if len(cached) >= lookback_days:
+                    return cached
+                # latest date is covered but not enough rows → need more history
+
+        # ---- fetch missing range from Tushare ----
+        desired_start = (end_dt - timedelta(days=lookback_days * 2)).strftime("%Y%m%d")
+
+        if latest_cached:
+            latest_clean = latest_cached.replace("-", "")
+            if latest_clean < end_date:
+                # Missing recent data: fetch from day after latest cached
+                api_start = (datetime.strptime(latest_clean, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
+                api_end = end_date
             else:
-                start_date = (datetime.strptime(oldest, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                # Have recent data but need more history → widen the window
+                api_start = desired_start
+                api_end = end_date
         else:
-            start_date = desired_start
+            # No cache at all → fetch full window
+            api_start = desired_start
+            api_end = end_date
 
-        fetched = self._fetch_from_api(code, start_date, end_date)
+        fetched = self._fetch_from_api(code, api_start, api_end)
         if fetched:
             self.cache.upsert_daily(code, fetched)
 
-        return self.cache.get_daily(code, limit=lookback_days)
+        return self.cache.get_daily(code, end=end_date, limit=lookback_days)
 
     def get_latest_trade_date(self, code: str) -> str | None:
         """Return latest available trading date for a code."""
