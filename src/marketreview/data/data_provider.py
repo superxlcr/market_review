@@ -263,6 +263,52 @@ class DataProvider:
 
         return result
 
+    def get_stock_industries(self, codes: list[str]) -> dict[str, dict]:
+        """
+        Return Shenwan 3-level industry classification for given ts_codes.
+
+        Checks stock_industry_cache first.  Missing codes are fetched from
+        tushare index_member_all (one API call per missing code) and cached.
+
+        Returns {ts_code: {name, l1_code, l1_name, l2_code, l2_name, l3_name}}.
+        Codes without industry data are omitted from the result.
+        """
+        if not codes:
+            return {}
+
+        # Check cache
+        cached = self.cache.get_stock_industries(codes)
+        missing = [c for c in codes if c not in cached]
+
+        if not missing:
+            return cached
+
+        # Fetch missing codes from Tushare
+        new_rows = []
+        for code in missing:
+            try:
+                df = self._api.index_member_all(ts_code=code, is_new="Y")
+                if df is not None and not df.empty:
+                    r = df.iloc[0]
+                    row = {
+                        "ts_code": r["ts_code"],
+                        "name": r.get("name", ""),
+                        "l1_code": r.get("l1_code", ""),
+                        "l1_name": r.get("l1_name", ""),
+                        "l2_code": r.get("l2_code", ""),
+                        "l2_name": r.get("l2_name", ""),
+                        "l3_name": r.get("l3_name", ""),
+                    }
+                    new_rows.append(row)
+                    cached[code] = row
+            except Exception as e:
+                print(f"[DataProvider] index_member_all failed for {code}: {e}")
+
+        if new_rows:
+            self.cache.upsert_stock_industries(new_rows)
+
+        return cached
+
     # ------- internal -------
 
     def _fetch_from_api(self, code: str, start: str, end: str) -> list[dict]:
