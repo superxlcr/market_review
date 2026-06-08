@@ -138,6 +138,67 @@ class DataProvider:
             print(f"[DataProvider] get_market_breadth failed for {trade_date}: {e}")
             return None
 
+    def get_index_weights(self, index_code: str,
+                           trade_date: str) -> list[dict] | None:
+        """
+        Return all constituent weights for the given index as of trade_date.
+
+        Uses the latest official weight publication whose weight_date
+        is <= trade_date.  Index weights are published monthly (month-end)
+        and take effect the following month.  The method checks cache first;
+        if the cached weight_date is from before the prior month-end, it
+        re-fetches from tushare to pick up any new publication.
+
+        Returns list of {con_code, weight} sorted by weight DESC, or None.
+        """
+        trade_date = trade_date.replace("-", "")
+        td = datetime.strptime(trade_date, "%Y%m%d")
+
+        # Expected weight date: published at the end of the month *before*
+        # the month containing trade_date.
+        # e.g. trade_date="20260608" → prior_month_end = "20260531"
+        #      the cached weight_date should be >= "202605"
+        prior_month = (td.replace(day=1) - timedelta(days=1))
+        expected_ym = prior_month.strftime("%Y%m")  # "202605"
+
+        # Check cache
+        cached_wd = self.cache.get_latest_weight_date(index_code, trade_date)
+
+        if cached_wd and cached_wd[:6] >= expected_ym:
+            # Cache is current enough
+            return self.cache.get_index_weights(index_code, cached_wd)
+
+        # Fetch from Tushare
+        import time
+        try:
+            df = self._api.index_weight(
+                index_code=self._normalize_code(index_code),
+                trade_date=trade_date,
+            )
+        except Exception as e:
+            print(f"[DataProvider] index_weight failed for {index_code} @ {trade_date}: {e}")
+            return None
+
+        if df is None or df.empty:
+            return None
+
+        # Normalize: the API returns 'trade_date' — rename to weight_date for storage
+        weight_date = str(df["trade_date"].iloc[0])
+
+        # If cache already has this exact weight_date, no need to re-insert
+        if cached_wd == weight_date:
+            return self.cache.get_index_weights(index_code, weight_date)
+
+        rows = []
+        for _, r in df.iterrows():
+            rows.append({
+                "con_code": r["con_code"],
+                "weight": float(r["weight"]),
+            })
+
+        self.cache.upsert_index_weights(index_code, weight_date, rows)
+        return self.cache.get_index_weights(index_code, weight_date)
+
     # ------- internal -------
 
     def _fetch_from_api(self, code: str, start: str, end: str) -> list[dict]:
