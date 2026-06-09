@@ -1,54 +1,75 @@
-# Marketreview Crew
+# A股复盘系统
 
-Welcome to the Marketreview Crew project, powered by [crewAI](https://crewai.com). This template is designed to help you set up a multi-agent AI system with ease, leveraging the powerful and flexible framework provided by crewAI. Our goal is to enable your agents to collaborate effectively on complex tasks, maximizing their collective intelligence and capabilities.
+基于 Streamlit 的 A 股市场复盘仪表盘，多维度分析市场全景、行业板块与个股追踪。
 
-## Installation
+## 环境要求
 
-Ensure you have Python >=3.10 <3.14 installed on your system. This project uses [UV](https://docs.astral.sh/uv/) for dependency management and package handling, offering a seamless setup and execution experience.
-
-First, if you haven't already, install uv:
+- Python >= 3.10
+- [uv](https://docs.astral.sh/uv/) 包管理器
 
 ```bash
 pip install uv
 ```
 
-Next, navigate to your project directory and install the dependencies:
+## 快速开始
 
-(Optional) Lock the dependencies and install them by using the CLI command:
-```bash
-crewai install
-```
-### Customizing
-
-**Add your `OPENAI_API_KEY` into the `.env` file**
-
-- Modify `src/marketreview/config/agents.yaml` to define your agents
-- Modify `src/marketreview/config/tasks.yaml` to define your tasks
-- Modify `src/marketreview/crew.py` to add your own logic, tools and specific args
-- Modify `src/marketreview/main.py` to add custom inputs for your agents and tasks
-
-## Running the Project
-
-To kickstart your crew of AI agents and begin task execution, run this from the root folder of your project:
+### 1. 安装依赖
 
 ```bash
-$ crewai run
+uv sync
 ```
 
-This command initializes the marketReview Crew, assembling the agents and assigning them tasks as defined in your configuration.
+### 2. 配置环境变量
 
-This example, unmodified, will run the create a `report.md` file with the output of a research on LLMs in the root folder.
+```bash
+cp .env.example .env
+```
 
-## Understanding Your Crew
+编辑 `.env` 文件，填入你的 API Key：
 
-The marketReview Crew is composed of multiple AI agents, each with unique roles, goals, and tools. These agents collaborate on a series of tasks, defined in `config/tasks.yaml`, leveraging their collective skills to achieve complex objectives. The `config/agents.yaml` file outlines the capabilities and configurations of each agent in your crew.
+```env
+# LLM API（DeepSeek V4 Pro）
+OPENAI_API_KEY=你的-deepseek-api-key
+OPENAI_API_BASE=https://api.deepseek.com/v1
 
-## Support
+# Tushare Pro（A股行情数据）
+TUSHARE_TOKEN=你的-tushare-token
+```
 
-For support, questions, or feedback regarding the Marketreview Crew or crewAI.
-- Visit our [documentation](https://docs.crewai.com)
-- Reach out to us through our [GitHub repository](https://github.com/joaomdmoura/crewai)
-- [Join our Discord](https://discord.com/invite/X4JWnZnxPb)
-- [Chat with our docs](https://chatg.pt/DWjSBZn)
+> Tushare Token 可在 [tushare.pro](https://tushare.pro) 注册获取。
 
-Let's create wonders together with the power and simplicity of crewAI.
+### 3. 启动仪表盘
+
+双击 `start-dashboard.bat`，或终端运行：
+
+```bash
+.\start-dashboard.bat
+```
+
+浏览器打开 [http://localhost:8501](http://localhost:8501) 即可使用。
+
+## 页面导航
+
+| 页面 | 说明 |
+|------|------|
+| 🎛️ **控制台** | 统一入口，选择交易日，全局生效 |
+| 📊 **市场全景** | 大盘涨跌、成交额、K 线图、指数贡献 |
+| 🏭 **板块分析** | 行业板块排名、赚钱效应、仓位策略 |
+| 📋 **个股追踪** | 自选股技术分析、持仓管理 |
+
+## 项目结构
+
+```
+marketreview/
+├── dashboard/           # Streamlit 前端
+│   ├── app.py           # 入口（多页导航）
+│   ├── pages/           # 各功能页面
+│   └── services/        # 数据服务层
+├── src/marketreview/    # 核心逻辑
+│   ├── data/            # 数据提供层（Tushare 封装）
+│   ├── tools/           # 分析工具（技术指标、指数贡献等）
+│   └── rendering/       # 渲染样式
+├── data/                # 本地数据
+├── .env.example         # 环境变量模板
+└── start-dashboard.bat  # 一键启动
+```
