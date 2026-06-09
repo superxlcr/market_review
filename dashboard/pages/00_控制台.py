@@ -13,11 +13,14 @@ from services.dashboard_service import DashboardService
 
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
-# ── Date input styling ──
+# ── Layout & styling ──
 st.markdown("""
 <style>
+/* Date input */
 div[data-testid="stDateInput"] {
-    max-width: 240px;
+    max-width: 230px;
+    display: inline-block !important;
+    vertical-align: bottom !important;
 }
 div[data-testid="stDateInput"] input {
     border: 2px solid #1976d2 !important;
@@ -30,10 +33,22 @@ div[data-testid="stDateInput"] input {
 div[data-testid="stDateInput"] input:hover {
     border-color: #1565c0 !important;
 }
+/* Button: inline with date input */
+div[data-testid="stFormSubmitButton"] {
+    display: inline-block !important;
+    vertical-align: bottom !important;
+    margin-left: 6px !important;
+}
 /* Hide form border */
 div[data-testid="stForm"] {
     border: none !important;
     padding: 0 !important;
+}
+/* Collapse the wrapper blocks so inline works */
+div[data-testid="stForm"] div[data-testid="stElementContainer"]:has(div[data-testid="stDateInput"]),
+div[data-testid="stForm"] div[data-testid="stElementContainer"]:has(div[data-testid="stFormSubmitButton"]) {
+    display: inline-block !important;
+    vertical-align: bottom !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -43,7 +58,7 @@ st.caption("选择交易日，应用到全部页面")
 
 _service = DashboardService()
 
-# ── Default date: session_state > latest trading day ──
+# ── Default date ──
 _default_str = st.session_state.get("trade_date")
 if _default_str:
     _default_date = datetime.strptime(_default_str, "%Y%m%d")
@@ -66,26 +81,16 @@ if _current:
 
 st.markdown("---")
 
-# ── Form: date picker + apply button (batched, no auto-rerun on pick) ──
+# ── Form: no columns, CSS inline layout ──
 with st.form("ctrl_form", clear_on_submit=False):
-    c1, c2 = st.columns([3, 1])
-
-    with c1:
-        selected_date = st.date_input(
-            "📅 选择交易日",
-            value=_default_date,
-            max_value=datetime.now(),
-            format="YYYY-MM-DD",
-            key="ctrl_date_picker",
-        )
-
-    with c2:
-        st.markdown("")  # small spacer
-        apply_btn = st.form_submit_button(
-            "▶ 应用",
-            type="primary",
-            use_container_width=True,
-        )
+    selected_date = st.date_input(
+        "📅 选择交易日",
+        value=_default_date,
+        max_value=datetime.now(),
+        format="YYYY-MM-DD",
+        key="ctrl_date_picker",
+    )
+    apply_btn = st.form_submit_button("✅ 应用", type="primary")
 
 # ── Handle form submit ──
 if apply_btn:

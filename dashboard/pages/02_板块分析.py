@@ -11,15 +11,16 @@ from rendering.styles import PAGE_CSS
 
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
+# ── Date guard ──
+_td = st.session_state.get("trade_date")
+if not _td:
+    st.warning("⚠️ 尚未选择日期，请前往「控制台」设置")
+    st.stop()
+
 st.title("🏭 板块分析")
 st.caption("Agent 2 — 行业赚钱效应 & 仓位策略")
 
-# ── Date indicator ──
-_td = st.session_state.get("trade_date")
-if _td:
-    st.markdown(f"📅 当前日期：<span style='color:#e53935;font-weight:bold;'>{_td[:4]}-{_td[4:6]}-{_td[6:8]}</span>", unsafe_allow_html=True)
-else:
-    st.warning("⚠️ 尚未选择日期，请前往「控制台」设置")
+st.markdown(f"📅 当前日期：<span style='color:#e53935;font-weight:bold;'>{_td[:4]}-{_td[4:6]}-{_td[6:8]}</span>", unsafe_allow_html=True)
 
 st.divider()
 

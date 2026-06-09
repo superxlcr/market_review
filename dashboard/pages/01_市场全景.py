@@ -616,15 +616,11 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
 # ======== Init DashboardService ========
 _service = DashboardService()
 
-# Resolve trade date: session_state (from 控制台) > latest from cache
+# ── Date guard ──
 _trade_date_yyyymmdd = st.session_state.get("trade_date")
 if not _trade_date_yyyymmdd:
-    _trade_date_yyyymmdd = _service.get_latest_trade_date()
-    if _trade_date_yyyymmdd:
-        _trade_date_yyyymmdd = _trade_date_yyyymmdd.replace("-", "")
-    else:
-        st.error("无可用数据，请先在控制台选择日期并运行数据采集。")
-        st.stop()
+    st.warning("⚠️ 尚未选择日期，请前往「控制台」设置")
+    st.stop()
 
 _display_date = f"{_trade_date_yyyymmdd[:4]}-{_trade_date_yyyymmdd[4:6]}-{_trade_date_yyyymmdd[6:8]}"
 
