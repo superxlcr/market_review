@@ -5,6 +5,9 @@ Agent 2 — 板块分析页面（占位符）
 import streamlit as st
 import sys
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 from rendering.styles import PAGE_CSS

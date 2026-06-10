@@ -45,9 +45,15 @@ class DataProvider:
             latest_clean = latest_cached.replace("-", "")
             if latest_clean >= end_date:
                 # Cache has data up to (or beyond) our end_date.
-                # Verify there are enough rows.
                 cached = self.cache.get_daily(code, end=end_date, limit=lookback_days)
-                if len(cached) >= lookback_days:
+                # Verify the first cached row is actually close to end_date.
+                # `latest_clean >= end_date` only means there is SOME data
+                # at or past end_date — but after the `date <= end_date` filter
+                # the first row could be days earlier if end_date itself is missing.
+                if (
+                    len(cached) >= lookback_days
+                    and cached[0]["date"] >= (end_dt - timedelta(days=7)).strftime("%Y%m%d")
+                ):
                     return cached
                 # latest date is covered but not enough rows → need more history
 
@@ -228,7 +234,9 @@ class DataProvider:
         missing = []
         for code in codes:
             rows = self.cache.get_daily(code, end=end_date, limit=2)
-            if len(rows) >= 2:
+            # Must verify the first row is actually for end_date, otherwise
+            # cache may return yesterday's data and the chg_pct would be stale.
+            if len(rows) >= 2 and rows[0]["date"] == end_date:
                 r = rows[0]
                 prev = rows[1]
                 close = float(r["close"])
