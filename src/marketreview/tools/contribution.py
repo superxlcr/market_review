@@ -65,6 +65,20 @@ def pick_industry_label(l1_code: str, l1_name: str,
     return l2_name
 
 
+def pick_industry_code(l1_code: str, l2_code: str,
+                       l3_code: str = "") -> str:
+    """Return the industry code that matches pick_industry_label's choice.
+
+    This is the code corresponding to whichever level was selected for
+    display — used when aggregating by industry for drill-down purposes.
+    """
+    if l1_code in L1_OVERRIDE_L1:
+        return l1_code
+    if l3_code in L3_OVERRIDE_L3:
+        return l3_code or l2_code
+    return l2_code
+
+
 def build_index_contribution(
     index_code: str,
     trade_date: str,
@@ -155,6 +169,7 @@ def build_index_contribution(
             "industry": pick_industry_label(l1_code, l1_name,
                                             l2_code, l2_name,
                                             l3_code, l3_name) or "N/A",
+            "industry_code": pick_industry_code(l1_code, l2_code, l3_code),
             "weight": item["weight"],
             "chg_pct": item["chg_pct"],
             "contrib": item["contrib"],
@@ -170,3 +185,82 @@ def build_index_contribution(
         "gainers": [_attach_name_industry(g) for g in gainers],
         "losers": [_attach_name_industry(l) for l in losers],
     }
+
+
+def build_industry_frequency(
+    index_code: str,
+    trade_dates: list[str],
+    dp: DataProvider,
+    top_n: int = 10,
+    min_days: int = 3,
+    min_contrib_pct: float = 0.10,
+) -> dict | None:
+    """
+    Count how often each industry appears in top-N gainers/losers
+    across multiple trading dates.
+
+    A day only counts if the sum of contribution points for all stocks
+    from that industry reaches min_contrib_pct of the day's total top-N
+    contribution.  This auto-adapts to market conditions: on high-vol
+    days the absolute bar is higher, on quiet days lower.
+
+    Args:
+        index_code:  '000001.SH' or '399006.SZ'
+        trade_dates: list of YYYYMMDD strings, sorted most-recent-first
+        dp:          DataProvider instance
+        top_n:       top-N to consider per day (default 10)
+        min_days:    only include industries appearing ≥ min_days (default 3)
+        min_contrib_pct: min fraction of total top-N contrib (default 0.10 = 10%)
+
+    Returns:
+        {
+          "gainers": [{industry, code, days}, ...],  # sorted by days DESC
+          "losers":  [{industry, code, days}, ...],
+        }
+        or None if no contribution data is available for any date.
+    """
+    from collections import Counter
+
+    gainer_counter: Counter[tuple[str, str]] = Counter()
+    loser_counter: Counter[tuple[str, str]] = Counter()
+
+    for td in trade_dates:
+        contrib = build_index_contribution(index_code, td, dp, top_n=top_n)
+        if contrib is None:
+            continue
+        # Total contribution of all top-N gainers/losers for the day.
+        total_gainer_contrib = sum(abs(g["contrib"]) for g in contrib["gainers"])
+        total_loser_contrib = sum(abs(l["contrib"]) for l in contrib["losers"])
+
+        # Group by industry per day: sum the contribution for each.
+        day_gainers: dict[tuple[str, str], float] = {}
+        day_losers: dict[tuple[str, str], float] = {}
+        for g in contrib["gainers"]:
+            key = (g["industry"], g.get("industry_code", ""))
+            day_gainers[key] = day_gainers.get(key, 0) + abs(g["contrib"])
+        for l in contrib["losers"]:
+            key = (l["industry"], l.get("industry_code", ""))
+            day_losers[key] = day_losers.get(key, 0) + abs(l["contrib"])
+
+        # Count day if industry share reaches threshold.
+        for key, total in day_gainers.items():
+            if total_gainer_contrib > 0 and total / total_gainer_contrib >= min_contrib_pct:
+                gainer_counter[key] += 1
+        for key, total in day_losers.items():
+            if total_loser_contrib > 0 and total / total_loser_contrib >= min_contrib_pct:
+                loser_counter[key] += 1
+
+    def _build_result(counter: Counter) -> list[dict]:
+        return [
+            {"industry": ind, "code": code, "days": count}
+            for (ind, code), count in counter.most_common()
+            if count >= min_days
+        ]
+
+    gainers = _build_result(gainer_counter)
+    losers = _build_result(loser_counter)
+
+    if not gainers and not losers:
+        return None
+
+    return {"gainers": gainers, "losers": losers}

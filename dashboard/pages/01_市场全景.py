@@ -610,6 +610,68 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
             else:
                 st.caption("无数据")
 
+        # --- 近5日行业频次（出现 ≥3 天） ---
+        freq = service.get_industry_frequency(code, end_date)
+        if freq and (freq["gainers"] or freq["losers"]):
+            st.markdown("---")
+            st.caption("近 5 个交易日行业频次统计（同日贡献占比 ≥10% 才计数，出现 ≥3 天才展示）")
+
+            f_left, f_right = st.columns(2)
+
+            with f_left:
+                st.markdown(
+                    '<span style="color:#e53935;font-size:16px;font-weight:bold;">'
+                    '🔥 频繁领涨行业</span>',
+                    unsafe_allow_html=True,
+                )
+                if freq["gainers"]:
+                    rows = ""
+                    for item in freq["gainers"]:
+                        rows += f"""<tr>
+                            <td style="color:#888;font-size:14px;">{item['code']}</td>
+                            <td style="font-weight:600;">{item['industry']}</td>
+                            <td style="text-align:center;color:#e53935;font-weight:bold;">{item['days']}天</td>
+                        </tr>"""
+                    st.html(f"""
+                    <table style="width:100%;font-size:16px;border-collapse:collapse;">
+                        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+                            <th style="text-align:left;">代码</th>
+                            <th style="text-align:left;">行业</th>
+                            <th style="text-align:center;">出现天数</th>
+                        </tr></thead>
+                        <tbody>{rows}</tbody>
+                    </table>
+                    """)
+                else:
+                    st.caption("无行业满足 ≥3 天")
+
+            with f_right:
+                st.markdown(
+                    '<span style="color:#43a047;font-size:16px;font-weight:bold;">'
+                    '❄️ 频繁领跌行业</span>',
+                    unsafe_allow_html=True,
+                )
+                if freq["losers"]:
+                    rows = ""
+                    for item in freq["losers"]:
+                        rows += f"""<tr>
+                            <td style="color:#888;font-size:14px;">{item['code']}</td>
+                            <td style="font-weight:600;">{item['industry']}</td>
+                            <td style="text-align:center;color:#43a047;font-weight:bold;">{item['days']}天</td>
+                        </tr>"""
+                    st.html(f"""
+                    <table style="width:100%;font-size:16px;border-collapse:collapse;">
+                        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+                            <th style="text-align:left;">代码</th>
+                            <th style="text-align:left;">行业</th>
+                            <th style="text-align:center;">出现天数</th>
+                        </tr></thead>
+                        <tbody>{rows}</tbody>
+                    </table>
+                    """)
+                else:
+                    st.caption("无行业满足 ≥3 天")
+
 
 # ------- Page -------
 

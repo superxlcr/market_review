@@ -139,3 +139,35 @@ class DashboardService:
         except Exception as e:
             print(f"[DashboardService] get_index_contribution failed: {e}")
             return None
+
+    # ---- industry frequency (cross-date aggregation) ----
+
+    def get_recent_trading_dates(self, end_date: str, count: int = 5) -> list[str]:
+        """
+        Return the last `count` trading dates up to and including `end_date`.
+
+        Uses cached index daily data to determine which dates are trading days.
+        Returns dates in YYYYMMDD format, most-recent-first.
+        """
+        index_rows = self._dp.get_daily("000001.SH", end_date=end_date, lookback_days=360)
+        all_dates = sorted(set(
+            r["date"].replace("-", "") for r in index_rows
+        ), reverse=True)
+        return [d for d in all_dates if d <= end_date.replace("-", "")][:count]
+
+    def get_industry_frequency(
+        self, index_code: str, trade_date: str
+    ) -> dict | None:
+        """
+        Count industry appearances in top-10 gainers/losers over the last 5
+        trading days.  Only returns industries that appear ≥ 3 days.
+        """
+        try:
+            from marketreview.tools.contribution import build_industry_frequency
+            dates = self.get_recent_trading_dates(trade_date, count=5)
+            if len(dates) < 3:
+                return None
+            return build_industry_frequency(index_code, dates, self._dp, top_n=10, min_days=3)
+        except Exception as e:
+            print(f"[DashboardService] get_industry_frequency failed: {e}")
+            return None
