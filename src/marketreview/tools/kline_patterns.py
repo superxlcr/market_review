@@ -161,8 +161,13 @@ def detect_bullish_engulfing_shadow(
       1. 昨：有长上影线
       2. 今：收阳线
       3. 今：收盘价 ≥ 昨最高价（阳线实体覆盖了昨长上影线区域）
+      4. 短期趋势非多头（均线多头时在高档，偏中性，不触发）
     """
     if len(df) < 2:
+        return None
+
+    # ④ 均线多头时（高档）偏中性，不触发
+    if _short_term_trend(df) == "多头":
         return None
 
     prev = df.iloc[-2]
@@ -194,7 +199,7 @@ def detect_bullish_engulfing_shadow(
         "direction": "短线偏多",
         "note": (
             "也称仙人指路，如果明日K线下跌，则形态意义打折扣；"
-            "下跌或回调中出现，偏多解读；上涨高点出现，偏中性解读；"
+            "下跌或回调中出现，偏多解读；"
             "后续放量增强有效性，缩量偏多力度存疑"
         ),
     }
@@ -241,8 +246,7 @@ def detect_bearish_engulfing_shadow(
         "name": "空头吞影线",
         "direction": "短线偏空",
         "note": (
-            "下影线本是洗盘/落底信号（如单针探底），被阴线吃掉则可能是诱多骗线；"
-            "短线偏空解读"
+            "下影线本是洗盘/落底信号（如单针探底），被阴线吃掉则可能是诱多骗线"
         ),
     }
 
@@ -349,13 +353,89 @@ def detect_neck_inside(
 #  Main Entry Point
 # ──────────────────────────────────────────────────────
 
-# Registry of all pattern detectors (append new ones here).
-_PATTERN_DETECTORS = [
-    detect_bullish_engulfing_shadow,
-    detect_bearish_engulfing_shadow,
-    detect_neck_above,
-    detect_neck_inside,
-]
+
+
+# Helpers shared across detectors
+
+
+def _short_term_trend(df: pd.DataFrame) -> str:
+    """Determine short-term trend from MA5/MA10/MA20.
+
+    Returns "多头" (MA5 > MA10 > MA20), "空头" (MA5 < MA10 < MA20),
+    or "盘整" (everything else).
+    """
+    from .technical import calc_ma
+
+    mas = calc_ma(df, [5, 10, 20])
+    vals = {}
+    for period in [5, 10, 20]:
+        key = f"MA{period}"
+        arr = mas[key]
+        # Get latest non-NaN
+        vals[key] = next(
+            (float(v) for v in reversed(arr) if not np.isnan(v)), None
+        )
+
+    m5, m10, m20 = vals.get("MA5"), vals.get("MA10"), vals.get("MA20")
+    if m5 is None or m10 is None or m20 is None:
+        return "盘整"
+    if m5 > m10 > m20:
+        return "多头"
+    if m5 < m10 < m20:
+        return "空头"
+    return "盘整"
+
+
+# ──────────────────────────────────────────────────────
+#  More pattern detectors
+# ──────────────────────────────────────────────────────
+
+
+def detect_spinning_top(
+    df: pd.DataFrame, obj_type: str = "index",
+) -> dict[str, Any] | None:
+    """检测纺锤线（上影线型）。
+
+    条件:
+      1. 今：长上影线（上影线 ≥ 实体 × 2）
+      2. 今：实体很小（body_pct < 30%）
+      3. + 短期多头 → 高档纺锤线 → 偏空
+      4. + 短期空头 → 低档纺锤线 → 偏多
+      盘整时不触发。
+    """
+    if len(df) < 20:
+        return None
+
+    curr = df.iloc[-1]
+    shape = _candle_shape(
+        float(curr["open"]), float(curr["high"]),
+        float(curr["low"]), float(curr["close"]),
+    )
+
+    # ① 长上影线
+    if not shape["has_long_upper"]:
+        return None
+
+    # ② 实体很小
+    if shape["body_pct"] >= 30:
+        return None
+
+    # ③ 确定高档/低档
+    trend = _short_term_trend(df)
+    if trend == "多头":
+        return {
+            "name": "高档纺锤线",
+            "direction": "偏空",
+            "note": "在上涨之后出现，已经出现空方的进攻苗头和多方不是那么再有强烈持续上攻的念头",
+        }
+    elif trend == "空头":
+        return {
+            "name": "低档纺锤线",
+            "direction": "偏多",
+            "note": "在下跌之后才出现，多方在这K线当中有试探和抵抗的表现",
+        }
+    else:
+        return None
 
 
 def detect_patterns(
@@ -385,3 +465,13 @@ def detect_patterns(
             continue
 
     return results
+
+
+# Registry of all pattern detectors (append new ones here).
+_PATTERN_DETECTORS = [
+    detect_bullish_engulfing_shadow,
+    detect_bearish_engulfing_shadow,
+    detect_neck_above,
+    detect_neck_inside,
+    detect_spinning_top,
+]
