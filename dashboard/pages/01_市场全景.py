@@ -628,7 +628,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         freq = service.get_industry_frequency(code, end_date)
         if freq and (freq["gainers"] or freq["losers"]):
             st.markdown("---")
-            st.caption("近 5 个交易日行业频次统计（同日贡献占比 ≥10% 才计数，出现 ≥3 天才展示）")
+            st.caption("近 5 个交易日行业频次统计（同日贡献占比 ≥10% 或出现 ≥2 次即计数，出现 ≥3 天才展示）")
 
             f_left, f_right = st.columns(2)
 

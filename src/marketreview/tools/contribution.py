@@ -205,23 +205,26 @@ def build_industry_frequency(
     top_n: int = 10,
     min_days: int = 3,
     min_contrib_pct: float = 0.10,
+    min_occurrence: int = 2,
 ) -> dict | None:
     """
     Count how often each industry appears in top-N gainers/losers
     across multiple trading dates.
 
-    A day only counts if the sum of contribution points for all stocks
-    from that industry reaches min_contrib_pct of the day's total top-N
-    contribution.  This auto-adapts to market conditions: on high-vol
-    days the absolute bar is higher, on quiet days lower.
+    A day counts for an industry if EITHER of these is true:
+      a) The sum of contribution points from that industry reaches
+         min_contrib_pct of the day's total top-N contribution.
+      b) The industry appears at least min_occurrence times among
+         the day's top-N (captures breadth / sector-wide resonance).
 
     Args:
-        index_code:  '000001.SH' or '399006.SZ'
-        trade_dates: list of YYYYMMDD strings, sorted most-recent-first
-        dp:          DataProvider instance
-        top_n:       top-N to consider per day (default 10)
-        min_days:    only include industries appearing ≥ min_days (default 3)
+        index_code:     '000001.SH' or '399006.SZ'
+        trade_dates:    list of YYYYMMDD strings, sorted most-recent-first
+        dp:             DataProvider instance
+        top_n:          top-N to consider per day (default 10)
+        min_days:       only include industries appearing ≥ min_days (default 3)
         min_contrib_pct: min fraction of total top-N contrib (default 0.10 = 10%)
+        min_occurrence:  min number of stocks in top-N to count a day (default 2)
 
     Returns:
         {
@@ -243,22 +246,36 @@ def build_industry_frequency(
         total_gainer_contrib = sum(abs(g["contrib"]) for g in contrib["gainers"])
         total_loser_contrib = sum(abs(l["contrib"]) for l in contrib["losers"])
 
-        # Group by industry per day: sum the contribution for each.
-        day_gainers: dict[tuple[str, str], float] = {}
-        day_losers: dict[tuple[str, str], float] = {}
+        # Group by industry per day: sum the contribution AND count occurrences.
+        day_gainers: dict[tuple[str, str], dict] = {}
+        day_losers: dict[tuple[str, str], dict] = {}
         for g in contrib["gainers"]:
             key = (g["industry"], g.get("industry_code", ""))
-            day_gainers[key] = day_gainers.get(key, 0) + abs(g["contrib"])
+            entry = day_gainers.setdefault(key, {"contrib": 0.0, "count": 0})
+            entry["contrib"] += abs(g["contrib"])
+            entry["count"] += 1
         for l in contrib["losers"]:
             key = (l["industry"], l.get("industry_code", ""))
-            day_losers[key] = day_losers.get(key, 0) + abs(l["contrib"])
+            entry = day_losers.setdefault(key, {"contrib": 0.0, "count": 0})
+            entry["contrib"] += abs(l["contrib"])
+            entry["count"] += 1
 
-        # Count day if industry share reaches threshold.
-        for key, total in day_gainers.items():
-            if total_gainer_contrib > 0 and total / total_gainer_contrib >= min_contrib_pct:
+        # Count day if industry meets EITHER criterion.
+        for key, entry in day_gainers.items():
+            contrib_ok = (
+                total_gainer_contrib > 0
+                and entry["contrib"] / total_gainer_contrib >= min_contrib_pct
+            )
+            occur_ok = entry["count"] >= min_occurrence
+            if contrib_ok or occur_ok:
                 gainer_counter[key] += 1
-        for key, total in day_losers.items():
-            if total_loser_contrib > 0 and total / total_loser_contrib >= min_contrib_pct:
+        for key, entry in day_losers.items():
+            contrib_ok = (
+                total_loser_contrib > 0
+                and entry["contrib"] / total_loser_contrib >= min_contrib_pct
+            )
+            occur_ok = entry["count"] >= min_occurrence
+            if contrib_ok or occur_ok:
                 loser_counter[key] += 1
 
     def _build_result(counter: Counter) -> list[dict]:
