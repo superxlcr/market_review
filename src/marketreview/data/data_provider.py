@@ -20,7 +20,8 @@ from .cache_manager import CacheManager
 
 _PAGE_SIZE = 5000          # Tushare API page limit
 _CHUNK_DAYS = 30           # calendar days per date-range chunk (~20 trading days)
-_HISTORY_DAYS = 360        # calendar days of history to backfill
+_FETCH_DAYS = 1000         # calendar days to FETCH (~670 trading days)
+_CHECK_DAYS = 500          # calendar days to REQUIRE in cache (tighter, leaves headroom)
 MAX_PAGES_PER_CHUNK = 30   # safety cap per chunk: ~150k records max
 
 # Indices tracked by the dashboard (api.daily doesn't return index data,
@@ -53,27 +54,32 @@ class DataProvider:
 
     def ensure_data_loaded(
         self, end_date: str, progress_cb=None,
-        history_days: int = _HISTORY_DAYS,
     ) -> dict:
         """
         Ensure tushare_cache has raw K-line + adj_factor for all stocks.
 
-        Only fetches what's missing — never re-fetches data already cached.
-        Splits date ranges into ~30-day chunks to stay under Tushare's
-        per-query record limit (~100k).
+        Fetches _FETCH_DAYS of history for new/missing ranges, but only
+        requires _CHECK_DAYS of coverage to consider cache complete.
+        This gives generous MA240 data while avoiding re-fetches when
+        switching dates.
 
         Returns {"status": "ok"|"error", "elapsed": float, "chunks": int}
         """
         end_date = end_date.replace("-", "")
         end_dt = datetime.strptime(end_date, "%Y%m%d")
-        start_dt = end_dt - timedelta(days=history_days)
-        wanted_start = start_dt.strftime("%Y%m%d")
+        fetch_start_dt = end_dt - timedelta(days=_FETCH_DAYS)
+        fetch_start = fetch_start_dt.strftime("%Y%m%d")
+        check_start_dt = end_dt - timedelta(days=_CHECK_DAYS)
+        check_start = check_start_dt.strftime("%Y%m%d")
 
         # ── Determine what date ranges are missing ──
         missing_ranges: list[tuple[str, str]] = []
 
         proxy_latest = self.cache.get_latest_date(_PROXY_CODE)
         proxy_earliest = self.cache.get_earliest_date(_PROXY_CODE)
+        print(f"[DataProvider] ensure_data_loaded({end_date}): "
+              f"fetch_start={fetch_start} check_start={check_start} "
+              f"proxy_latest={proxy_latest} proxy_earliest={proxy_earliest}")
 
         if proxy_latest:
             proxy_latest_clean = proxy_latest.replace("-", "")
@@ -82,20 +88,21 @@ class DataProvider:
                 missing_ranges.append((_next_day(proxy_latest_clean), end_date))
         else:
             # No cache at all — full backfill
-            missing_ranges.append((wanted_start, end_date))
+            missing_ranges.append((fetch_start, end_date))
 
         if proxy_earliest and proxy_latest:
             proxy_earliest_clean = proxy_earliest.replace("-", "")
-            # Gap at head (not enough history)?
-            if proxy_earliest_clean > wanted_start:
+            # Gap at head? Use check_start (360d) not fetch_start (500d)
+            # so we don't re-fetch just because we're a few days short of 500.
+            if proxy_earliest_clean > check_start:
                 missing_ranges.append(
-                    (wanted_start, _yesterday(proxy_earliest_clean))
+                    (fetch_start, _yesterday(proxy_earliest_clean))
                 )
 
         # ── If nothing missing, just verify indices ──
         if not missing_ranges:
             idx_missing = self._ensure_indices_loaded(
-                wanted_start, end_date, progress_cb
+                fetch_start, end_date, progress_cb
             )
             return {
                 "status": "ok", "elapsed": 0.0,
@@ -129,7 +136,7 @@ class DataProvider:
                     progress_cb("chunk", chunk_idx, total_chunks)
 
         # ── Load index data ──
-        idx_chunks = self._ensure_indices_loaded(wanted_start, end_date, progress_cb)
+        idx_chunks = self._ensure_indices_loaded(fetch_start, end_date, progress_cb)
 
         if progress_cb:
             progress_cb("done", 0, 0)
@@ -143,6 +150,35 @@ class DataProvider:
             "adj_pages": adj_pages_total,
             "index_chunks": idx_chunks,
         }
+
+    def check_cache_coverage(self, end_date: str) -> bool:
+        """
+        Return True if cache already covers `end_date` with at least
+        _CHECK_DAYS of history — no API calls needed.
+        Useful for deciding whether to show a loading spinner.
+        """
+        end_date = end_date.replace("-", "")
+        end_dt = datetime.strptime(end_date, "%Y%m%d")
+        check_start = (end_dt - timedelta(days=_CHECK_DAYS)).strftime("%Y%m%d")
+
+        proxy_latest = self.cache.get_latest_date(_PROXY_CODE)
+        if not proxy_latest or proxy_latest.replace("-", "") < end_date:
+            return False
+
+        proxy_earliest = self.cache.get_earliest_date(_PROXY_CODE)
+        if not proxy_earliest or proxy_earliest.replace("-", "") > check_start:
+            return False
+
+        # Spot-check indices too
+        for idx_code in _TRACKED_INDICES:
+            il = self.cache.get_latest_date(idx_code)
+            if not il or il.replace("-", "") < end_date:
+                return False
+            ie = self.cache.get_earliest_date(idx_code)
+            if not ie or ie.replace("-", "") > check_start:
+                return False
+
+        return True
 
     def _fetch_chunk(self, chunk_start: str, chunk_end: str
                      ) -> tuple[int, int]:

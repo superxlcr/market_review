@@ -108,6 +108,12 @@ if apply_btn:
 # ── Phase 2: execute data loading (when pending_load_date is set) ──
 _pending = st.session_state.pop("pending_load_date", None)
 if _pending:
+    # Quick check — if cache already covers this date, skip the spinner
+    if _service.check_cache_coverage(_pending):
+        st.session_state.trade_date = _pending
+        st.cache_data.clear()
+        st.rerun()
+
     with st.status(f"正在加载 {_pending[:4]}-{_pending[4:6]}-{_pending[6:8]} 市场数据...", expanded=True) as status:
         _total_chunks = [None]  # mutable box for closure
         def _progress(phase: str, current: int, total: int | None):

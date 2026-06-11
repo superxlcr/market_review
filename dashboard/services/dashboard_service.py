@@ -46,6 +46,12 @@ class DashboardService:
         """Convert raw (不复权) DataFrame to qfq (前复权) for display."""
         return DataProvider.raw_to_qfq(df)
 
+    # ---- cache coverage check ----
+
+    def check_cache_coverage(self, trade_date: str) -> bool:
+        """Return True if cache already covers this date (no loading needed)."""
+        return self._dp.check_cache_coverage(trade_date)
+
     # ---- trading day validation ----
 
     def is_trading_day(self, trade_date: str) -> bool:
