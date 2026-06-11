@@ -100,7 +100,21 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         """)
 
         st.markdown("**K线形态**")
-        st.info("🚧 TODO — 形态识别逻辑待后续讨论确定")
+        patterns = service.get_kline_patterns(df)
+        if patterns:
+            for p in patterns:
+                dir_color = "#e53935" if "偏多" in p["direction"] else "#43a047"
+                st.html(f"""
+                <div style="padding:8px 12px;margin:4px 0;
+                    border-left:4px solid {dir_color};
+                    background:{dir_color}0a;border-radius:4px;">
+                    <span style="font-weight:bold;font-size:16px;color:{dir_color};">
+                    {p['name']} — {p['direction']}</span>
+                    <br><span style="font-size:13px;color:#666;">{p['note']}</span>
+                </div>
+                """)
+        else:
+            st.caption("无明确多空意义")
 
     st.divider()
 

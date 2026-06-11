@@ -155,6 +155,21 @@ class DashboardService:
         ), reverse=True)
         return [d for d in all_dates if d <= end_date.replace("-", "")][:count]
 
+    # ---- K-line pattern detection ----
+
+    def get_kline_patterns(self, df) -> list[dict]:
+        """
+        Run all K-line pattern detectors and return matched patterns.
+        The caller provides the DataFrame (already loaded via get_index_data).
+        Returns a list of dicts: [{name, direction, note}, ...]
+        """
+        try:
+            from marketreview.tools.kline_patterns import detect_patterns
+            return detect_patterns(df, obj_type="index")
+        except Exception as e:
+            print(f"[DashboardService] get_kline_patterns failed: {e}")
+            return []
+
     def get_industry_frequency(
         self, index_code: str, trade_date: str
     ) -> dict | None:
