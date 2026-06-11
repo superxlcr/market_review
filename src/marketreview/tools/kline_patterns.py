@@ -191,11 +191,58 @@ def detect_bullish_engulfing_shadow(
 
     return {
         "name": "多头吞影线",
-        "direction": "偏多",
+        "direction": "短线偏多",
         "note": (
             "也称仙人指路，如果明日K线下跌，则形态意义打折扣；"
             "下跌或回调中出现，偏多解读；上涨高点出现，偏中性解读；"
             "后续放量增强有效性，缩量偏多力度存疑"
+        ),
+    }
+
+
+def detect_bearish_engulfing_shadow(
+    df: pd.DataFrame, obj_type: str = "index",
+) -> dict[str, Any] | None:
+    """检测空头吞影线。
+
+    条件:
+      1. 昨：有下影线
+      2. 今：收阴线
+      3. 今：收盘价 ≤ 昨最低价（阴线实体覆盖了昨下影线区域）
+    """
+    if len(df) < 2:
+        return None
+
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
+
+    prev_shape = _candle_shape(
+        float(prev["open"]), float(prev["high"]),
+        float(prev["low"]), float(prev["close"]),
+    )
+
+    # ① 昨有下影线
+    if prev_shape["lower_wick"] <= 0:
+        return None
+
+    curr_o = float(curr["open"])
+    curr_c = float(curr["close"])
+
+    # ② 今收阴线
+    if curr_c >= curr_o:
+        return None
+
+    # ③ 今收盘 ≤ 昨最低（阴线实体覆盖长下影线区域）
+    prev_l = float(prev["low"])
+    if curr_c > prev_l:
+        return None
+
+    return {
+        "name": "空头吞影线",
+        "direction": "短线偏空",
+        "note": (
+            "下影线本是洗盘/落底信号（如单针探底），被阴线吃掉则可能是诱多骗线；"
+            "短线偏空解读"
         ),
     }
 
@@ -305,6 +352,7 @@ def detect_neck_inside(
 # Registry of all pattern detectors (append new ones here).
 _PATTERN_DETECTORS = [
     detect_bullish_engulfing_shadow,
+    detect_bearish_engulfing_shadow,
     detect_neck_above,
     detect_neck_inside,
 ]
