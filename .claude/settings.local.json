@@ -57,6 +57,9 @@
       "Bash(rm -fr /)",
       "Bash(rm -fr /*)"
     ],
-    "defaultMode": "auto"
+    "defaultMode": "auto",
+    "additionalDirectories": [
+      "C:\\Users\\superxlcr\\.claude"
+    ]
   }
 }

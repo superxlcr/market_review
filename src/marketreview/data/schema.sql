@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS tushare_cache (
     close      REAL,
     vol        REAL,
     amount     REAL,
-    adj_factor REAL,
+    adj_factor  REAL,
+    asset_type  TEXT NOT NULL DEFAULT 'stock',  -- 'stock' or 'index'
     PRIMARY KEY (code, date)
 );
 

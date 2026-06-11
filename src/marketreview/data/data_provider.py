@@ -1,105 +1,347 @@
+"""
+DataProvider — unified data layer (v2: raw + adj_factor → qfq).
+All daily K-line data is stored as 不复权 (raw) prices with per-date
+adj_factor.  Display conversion (raw → qfq) happens at read time.
+
+API surface:
+  - ensure_data_loaded(trade_date)  – bulk backfill + daily increment
+  - get_daily(code, end_date, n)    – cached K-line (raw, with adj_factor)
+  - get_daily_batch(codes, date)    – batch snapshot for contribution
+  - raw_to_qfq(df)                  – convert to display prices
+"""
+
+import time as _time
 import tushare as ts
 from datetime import datetime, timedelta
 from .cache_manager import CacheManager
 
 
+# ── constants ──
+
+_PAGE_SIZE = 5000          # Tushare API page limit
+_CHUNK_DAYS = 30           # calendar days per date-range chunk (~20 trading days)
+_HISTORY_DAYS = 360        # calendar days of history to backfill
+MAX_PAGES_PER_CHUNK = 30   # safety cap per chunk: ~150k records max
+
+# Indices tracked by the dashboard (api.daily doesn't return index data,
+# so we fetch them via api.index_daily separately).
+_TRACKED_INDICES = [
+    "000001.SH",   # 上证指数
+    "399006.SZ",   # 创业板指
+    "000016.SH",   # 上证50
+    "000300.SH",   # 沪深300
+    "399001.SZ",   # 深证成指
+    "399005.SZ",   # 中小板指
+]
+
+# Proxy stock used for cache-coverage checks (must be a STOCK that
+# api.daily actually returns; 000001.SZ = 平安银行).
+_PROXY_CODE = "000001.SZ"
+
+
 class DataProvider:
-    """
-    Abstract data interface for agents.
-    Agents call get_daily() — they don't know or care whether data comes
-    from tushare/akshare/wind.  Swap the backend by changing _fetch_from_api().
-    """
+    """Single entry point for all market data."""
 
     def __init__(self, tushare_token: str, cache: CacheManager | None = None):
         ts.set_token(tushare_token)
         self._api = ts.pro_api()
         self.cache = cache or CacheManager()
 
-    # ------- public API (called by agent tools) -------
+    # ═══════════════════════════════════════════════════════════════
+    #  Bulk Data Loading (called from dashboard console)
+    # ═══════════════════════════════════════════════════════════════
+
+    def ensure_data_loaded(
+        self, end_date: str, progress_cb=None,
+        history_days: int = _HISTORY_DAYS,
+    ) -> dict:
+        """
+        Ensure tushare_cache has raw K-line + adj_factor for all stocks.
+
+        Only fetches what's missing — never re-fetches data already cached.
+        Splits date ranges into ~30-day chunks to stay under Tushare's
+        per-query record limit (~100k).
+
+        Returns {"status": "ok"|"error", "elapsed": float, "chunks": int}
+        """
+        end_date = end_date.replace("-", "")
+        end_dt = datetime.strptime(end_date, "%Y%m%d")
+        start_dt = end_dt - timedelta(days=history_days)
+        wanted_start = start_dt.strftime("%Y%m%d")
+
+        # ── Determine what date ranges are missing ──
+        missing_ranges: list[tuple[str, str]] = []
+
+        proxy_latest = self.cache.get_latest_date(_PROXY_CODE)
+        proxy_earliest = self.cache.get_earliest_date(_PROXY_CODE)
+
+        if proxy_latest:
+            proxy_latest_clean = proxy_latest.replace("-", "")
+            # Gap at tail (cache behind target date)?
+            if proxy_latest_clean < end_date:
+                missing_ranges.append((_next_day(proxy_latest_clean), end_date))
+        else:
+            # No cache at all — full backfill
+            missing_ranges.append((wanted_start, end_date))
+
+        if proxy_earliest and proxy_latest:
+            proxy_earliest_clean = proxy_earliest.replace("-", "")
+            # Gap at head (not enough history)?
+            if proxy_earliest_clean > wanted_start:
+                missing_ranges.append(
+                    (wanted_start, _yesterday(proxy_earliest_clean))
+                )
+
+        # ── If nothing missing, just verify indices ──
+        if not missing_ranges:
+            idx_missing = self._ensure_indices_loaded(
+                wanted_start, end_date, progress_cb
+            )
+            return {
+                "status": "ok", "elapsed": 0.0,
+                "chunks": 0, "note": "cache up to date",
+                "index_chunks": idx_missing,
+            }
+
+        # ── Fetch each missing range ──
+        t0 = _time.time()
+
+        # Compute total chunks upfront for progress bar
+        all_chunks = []
+        for fetch_start, fetch_end in missing_ranges:
+            all_chunks.extend(_date_chunks(fetch_start, fetch_end, _CHUNK_DAYS))
+        total_chunks = len(all_chunks)
+        if progress_cb:
+            progress_cb("init", 0, total_chunks)
+
+        raw_pages_total = 0
+        adj_pages_total = 0
+        chunk_idx = 0
+
+        for fetch_start, fetch_end in missing_ranges:
+            chunks = _date_chunks(fetch_start, fetch_end, _CHUNK_DAYS)
+            for chunk_start, chunk_end in chunks:
+                rp, ap = self._fetch_chunk(chunk_start, chunk_end)
+                raw_pages_total += rp
+                adj_pages_total += ap
+                chunk_idx += 1
+                if progress_cb:
+                    progress_cb("chunk", chunk_idx, total_chunks)
+
+        # ── Load index data ──
+        idx_chunks = self._ensure_indices_loaded(wanted_start, end_date, progress_cb)
+
+        if progress_cb:
+            progress_cb("done", 0, 0)
+
+        elapsed = _time.time() - t0
+        return {
+            "status": "ok",
+            "elapsed": round(elapsed, 1),
+            "chunks": total_chunks,
+            "raw_pages": raw_pages_total,
+            "adj_pages": adj_pages_total,
+            "index_chunks": idx_chunks,
+        }
+
+    def _fetch_chunk(self, chunk_start: str, chunk_end: str
+                     ) -> tuple[int, int]:
+        """
+        Fetch raw K-line + adj_factor for a single 30-day chunk.
+
+        Returns (raw_pages, adj_pages).
+        """
+        fields = "ts_code,trade_date,open,high,low,close,vol,amount"
+        raw_pages = 0
+        adj_pages = 0
+
+        # ── raw K-line ──
+        offset = 0
+        while raw_pages < MAX_PAGES_PER_CHUNK:
+            try:
+                df = self._api.daily(
+                    start_date=chunk_start, end_date=chunk_end,
+                    fields=fields,
+                    offset=offset, limit=_PAGE_SIZE,
+                )
+            except Exception as e:
+                print(f"[DataProvider] daily({chunk_start}~{chunk_end}) offset={offset}: {e}")
+                break
+
+            if df is None or df.empty:
+                break
+
+            raw_pages += 1
+            rows = _normalize_raw_batch(df)
+            if rows:
+                self.cache.upsert_daily_bulk(rows)
+
+            if len(df) < _PAGE_SIZE:
+                break
+            offset += _PAGE_SIZE
+
+        # ── adj_factor ──
+        offset = 0
+        while adj_pages < MAX_PAGES_PER_CHUNK:
+            try:
+                df = self._api.adj_factor(
+                    start_date=chunk_start, end_date=chunk_end,
+                    offset=offset, limit=_PAGE_SIZE,
+                )
+            except Exception as e:
+                print(f"[DataProvider] adj_factor({chunk_start}~{chunk_end}) offset={offset}: {e}")
+                break
+
+            if df is None or df.empty:
+                break
+
+            adj_pages += 1
+            _upsert_adj_factors(self.cache, df)
+
+            if len(df) < _PAGE_SIZE:
+                break
+            offset += _PAGE_SIZE
+
+        return raw_pages, adj_pages
+
+    def _ensure_indices_loaded(
+        self, start_date: str, end_date: str, progress_cb=None
+    ) -> int:
+        """
+        Ensure tracked indices have daily data in cache.
+
+        api.daily() only returns stocks, not indices.  We fetch index
+        OHLCV via api.index_daily() for each tracked index and upsert
+        into the same cache.  Indices have adj_factor=1.0 (no 复权).
+
+        Returns number of index-days fetched.
+        """
+        pages = 0
+        total_indices = len(_TRACKED_INDICES)
+        for ii, idx_code in enumerate(_TRACKED_INDICES):
+            # Check coverage first
+            latest_cached = self.cache.get_latest_date(idx_code)
+            if latest_cached and latest_cached.replace("-", "") >= end_date:
+                earliest_cached = self.cache.get_earliest_date(idx_code)
+                if earliest_cached and earliest_cached.replace("-", "") <= start_date:
+                    continue  # this index is fully cached
+                # partial — just skip incremental, reload full range
+
+            try:
+                df = self._api.index_daily(
+                    ts_code=idx_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    limit=_PAGE_SIZE,
+                )
+            except Exception as e:
+                print(f"[DataProvider] index_daily({idx_code}) failed: {e}")
+                continue
+
+            if df is None or df.empty:
+                continue
+
+            pages += 1
+            rows = _normalize_index_batch(df)
+            if rows:
+                self.cache.upsert_daily_bulk(rows)
+
+            if progress_cb:
+                progress_cb("index", ii + 1, total_indices)
+
+        return pages
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Single-code K-line (cache-first, no per-stock API)
+    # ═══════════════════════════════════════════════════════════════
 
     def get_daily(
         self, code: str, end_date: str = None, lookback_days: int = 120
     ) -> list[dict]:
         """
-        Return recent daily K-line rows (date DESC) for `code`, ending at `end_date`.
+        Return recent daily K-line rows (date DESC) from cache.
 
-        Args:
-            code: Stock/index code like '000001.SH'.
-            end_date: Latest date to include (YYYYMMDD or YYYY-MM-DD).
-                      Defaults to today.
-            lookback_days: Approximate number of trading days to return.
-
-        Checks cache first: if the cached data already covers `end_date` with
-        enough history, returns directly.  Otherwise fetches the missing range
-        from Tushare, upserts into cache, and returns.
+        Data is expected to be pre-loaded via ensure_data_loaded().
+        If the cache doesn't cover the requested range, returns what's
+        available (caller should handle short data gracefully).
         """
         if end_date is None:
             end_date = datetime.now().strftime("%Y%m%d")
         end_date = end_date.replace("-", "")
         end_dt = datetime.strptime(end_date, "%Y%m%d")
 
-        # ---- check whether cache covers the requested end_date ----
+        # Check cache coverage
         latest_cached = self.cache.get_latest_date(code)
+        if not latest_cached:
+            return []  # no data at all — call ensure_data_loaded first
 
-        if latest_cached:
-            latest_clean = latest_cached.replace("-", "")
-            if latest_clean >= end_date:
-                # Cache has data up to (or beyond) our end_date.
-                cached = self.cache.get_daily(code, end=end_date, limit=lookback_days)
-                # Verify the first cached row is actually close to end_date.
-                # `latest_clean >= end_date` only means there is SOME data
-                # at or past end_date — but after the `date <= end_date` filter
-                # the first row could be days earlier if end_date itself is missing.
-                if (
-                    len(cached) >= lookback_days
-                    and cached[0]["date"] >= (end_dt - timedelta(days=7)).strftime("%Y%m%d")
-                ):
-                    return cached
-                # latest date is covered but not enough rows → need more history
+        latest_clean = latest_cached.replace("-", "")
 
-        # ---- fetch missing range from Tushare ----
-        desired_start = (end_dt - timedelta(days=lookback_days * 2)).strftime("%Y%m%d")
+        # If cache is behind, return what we have (don't do per-stock API)
+        effective_end = min(end_date, latest_clean)
+        cached = self.cache.get_daily(
+            code, end=effective_end, limit=lookback_days
+        )
 
-        if latest_cached:
-            latest_clean = latest_cached.replace("-", "")
-            if latest_clean < end_date:
-                # Missing recent data: fetch from day after latest cached
-                api_start = (datetime.strptime(latest_clean, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
-                api_end = end_date
-            else:
-                # Have recent data but need more history → widen the window
-                api_start = desired_start
-                api_end = end_date
-        else:
-            # No cache at all → fetch full window
-            api_start = desired_start
-            api_end = end_date
+        # Verify the first row is close to the effective end date
+        if cached:
+            first_date = cached[0]["date"].replace("-", "")
+            first_dt = datetime.strptime(first_date, "%Y%m%d")
+            effective_dt = datetime.strptime(effective_end, "%Y%m%d")
+            if (effective_dt - first_dt).days <= 7:
+                return cached
 
-        fetched = self._fetch_from_api(code, api_start, api_end)
-        if fetched:
-            self.cache.upsert_daily(code, fetched)
-
-        return self.cache.get_daily(code, end=end_date, limit=lookback_days)
+        return cached  # return what we have even if stale
 
     def get_latest_trade_date(self, code: str) -> str | None:
-        """Return latest available trading date for a code."""
-        latest = self.cache.get_latest_date(code)
-        if latest:
-            return latest
-        # fallback: fetch recent and return max date
-        rows = self.get_daily(code, lookback_days=5)
-        return rows[0]["date"] if rows else None
+        """Return latest available trading date for a code from cache."""
+        return self.cache.get_latest_date(code)
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Batch snapshot (cache-only)
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_daily_batch(self, codes: list[str],
+                         end_date: str) -> dict[str, dict]:
+        """
+        Return {ts_code: {close, pre_close, change_pct}} for a batch of
+        stocks on a single day.
+
+        Reads from cache only — data must be pre-loaded.
+        pre_close is computed as: prev_close × adj_factor[prev] / adj_factor[today].
+        This correctly handles ex-rights dates where adj_factor jumps.
+        """
+        end_date = end_date.replace("-", "")
+        result = {}
+
+        for code in codes:
+            rows = self.cache.get_daily(code, end=end_date, limit=2)
+            if len(rows) >= 2 and rows[0]["date"] == end_date:
+                r = rows[0]
+                prev = rows[1]
+                close = float(r["close"])
+                prev_close = float(prev["close"])
+                adj_today = float(r.get("adj_factor", 1.0))
+                adj_prev = float(prev.get("adj_factor", 1.0))
+                pre = round(prev_close * adj_prev / adj_today, 4) if adj_today > 0 else prev_close
+                chg = round((close / pre - 1) * 100, 2) if pre else 0.0
+                result[code] = {
+                    "close": close,
+                    "pre_close": pre,
+                    "change_pct": chg,
+                }
+
+        return result
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Market breadth (live API — small payload)
+    # ═══════════════════════════════════════════════════════════════
 
     def get_market_breadth(self, trade_date: str) -> dict | None:
         """
-        Fetch single-day market breadth data.
-
-        Returns dict with keys:
-          trade_date, up, down, flat, up_limit, down_limit,
-          total_yi, sh_yi, sz_yi, bj_yi
-        Or None if no data for this date.
+        Fetch single-day market breadth (up/down counts, turnover by exchange).
+        Uses api.daily() — raw data is fine for counting.
         """
-        import time
         try:
             daily = self._api.daily(
                 trade_date=trade_date,
@@ -112,7 +354,6 @@ class DataProvider:
             down = int(len(daily[daily["close"] < daily["pre_close"]]))
             flat = int(len(daily[daily["close"] == daily["pre_close"]]))
 
-            # Exchange breakdown
             sh = daily[daily["ts_code"].str.endswith(".SH")]
             sz = daily[daily["ts_code"].str.endswith(".SZ")]
             bj = daily[daily["ts_code"].str.endswith(".BJ")]
@@ -122,7 +363,6 @@ class DataProvider:
             sz_yi = round(float(sz["amount"].sum()) / 1e5, 0) if len(sz) > 0 else 0
             bj_yi = round(float(bj["amount"].sum()) / 1e5, 0) if len(bj) > 0 else 0
 
-            # 涨停/跌停
             up_limit = down_limit = 0
             try:
                 limits = self._api.stk_limit(trade_date=trade_date)
@@ -144,41 +384,23 @@ class DataProvider:
             print(f"[DataProvider] get_market_breadth failed for {trade_date}: {e}")
             return None
 
+    # ═══════════════════════════════════════════════════════════════
+    #  Index weights
+    # ═══════════════════════════════════════════════════════════════
+
     def get_index_weights(self, index_code: str,
                            trade_date: str) -> list[dict] | None:
-        """
-        Return all constituent weights for the given index as of trade_date.
-
-        Uses the latest official weight publication whose weight_date
-        is <= trade_date.  Index weights are published monthly (month-end)
-        and take effect the following month.  The method checks cache first;
-        if the cached weight_date is from before the prior month-end, it
-        re-fetches from tushare to pick up any new publication.
-
-        Returns list of {con_code, weight} sorted by weight DESC, or None.
-        """
+        """Return constituent weights for an index as of trade_date."""
         trade_date = trade_date.replace("-", "")
         td = datetime.strptime(trade_date, "%Y%m%d")
 
-        # Expected weight date: published at the end of the month *before*
-        # the month containing trade_date.
-        # e.g. trade_date="20260608" → prior_month_end = "20260531"
-        #      the cached weight_date should be >= "202605"
         prior_month = (td.replace(day=1) - timedelta(days=1))
-        expected_ym = prior_month.strftime("%Y%m")  # "202605"
+        expected_ym = prior_month.strftime("%Y%m")
 
-        # Check cache
         cached_wd = self.cache.get_latest_weight_date(index_code, trade_date)
-
         if cached_wd and cached_wd[:6] >= expected_ym:
-            # Cache is current enough
             return self.cache.get_index_weights(index_code, cached_wd)
 
-        # Fetch from Tushare — API requires month-end-ish dates
-        # (last trading day of a month).  Start from the prior month's
-        # last calendar day and step back up to 7 days in case it falls
-        # on a weekend/holiday.
-        import time
         query_dt = prior_month
         df = None
         for offset in range(7):
@@ -197,111 +419,31 @@ class DataProvider:
         if df is None or df.empty:
             return None
 
-        # Normalize: the API returns 'trade_date' — rename to weight_date for storage
         weight_date = str(df["trade_date"].iloc[0])
-
-        # If cache already has this exact weight_date, no need to re-insert
         if cached_wd == weight_date:
             return self.cache.get_index_weights(index_code, weight_date)
 
-        rows = []
-        for _, r in df.iterrows():
-            rows.append({
-                "con_code": r["con_code"],
-                "weight": float(r["weight"]),
-            })
-
+        rows = [
+            {"con_code": r["con_code"], "weight": float(r["weight"])}
+            for _, r in df.iterrows()
+        ]
         self.cache.upsert_index_weights(index_code, weight_date, rows)
         return self.cache.get_index_weights(index_code, weight_date)
 
-    def get_daily_batch(self, codes: list[str],
-                         end_date: str) -> dict[str, dict]:
-        """
-        Return close/pre_close/change_pct for a batch of stocks on a single day.
-
-        Checks tushare_cache first for each code.  Missing codes are fetched
-        from tushare via a single api.daily() call (one round-trip for all
-        stocks on that day).  Fetched data is upserted into the shared cache
-        so future calls benefit.
-
-        Returns {ts_code: {close, pre_close, change_pct}} for all codes that
-        have data.  Stocks with no data on end_date are omitted.
-        """
-        end_date = end_date.replace("-", "")
-        result = {}
-
-        # ---- check cache for each code (need 2 rows for pre_close) ----
-        missing = []
-        for code in codes:
-            rows = self.cache.get_daily(code, end=end_date, limit=2)
-            # Must verify the first row is actually for end_date, otherwise
-            # cache may return yesterday's data and the chg_pct would be stale.
-            if len(rows) >= 2 and rows[0]["date"] == end_date:
-                r = rows[0]
-                prev = rows[1]
-                close = float(r["close"])
-                pre = float(prev["close"])
-                chg = round((close / pre - 1) * 100, 2) if pre else 0.0
-                result[code] = {"close": close, "pre_close": pre, "change_pct": chg}
-            else:
-                missing.append(code)
-
-        if not missing:
-            return result
-
-        # ---- fetch missing from Tushare (one call for all stocks on end_date) ----
-        try:
-            df = self._api.daily(
-                trade_date=end_date,
-                fields="ts_code,close,pre_close,open,high,low,vol,amount",
-            )
-            if df is not None and not df.empty:
-                # Use pre_close from API result BEFORE upserting to cache
-                # (cache schema does not store pre_close)
-                df = df.rename(columns={"ts_code": "code"})
-                for _, r in df.iterrows():
-                    code = r["code"]
-                    if code in missing:
-                        close_val = float(r["close"])
-                        pre_val = float(r["pre_close"])
-                        chg = round((close_val / pre_val - 1) * 100, 2) if pre_val else 0.0
-                        result[code] = {"close": close_val, "pre_close": pre_val, "change_pct": chg}
-
-                # Upsert to cache (without pre_close, which isn't in schema)
-                df["date"] = end_date
-                if "adj_factor" not in df.columns:
-                    df["adj_factor"] = 1.0
-                cols = ["code", "date", "open", "high", "low", "close",
-                        "vol", "amount", "adj_factor"]
-                df = df[[c for c in cols if c in df.columns]]
-                self.cache.upsert_daily_bulk(df.to_dict(orient="records"))
-        except Exception as e:
-            print(f"[DataProvider] get_daily_batch fetch failed for {end_date}: {e}")
-            return result
-
-        return result
+    # ═══════════════════════════════════════════════════════════════
+    #  Stock industries
+    # ═══════════════════════════════════════════════════════════════
 
     def get_stock_industries(self, codes: list[str]) -> dict[str, dict]:
-        """
-        Return Shenwan 3-level industry classification for given ts_codes.
-
-        Checks stock_industry_cache first.  Missing codes are fetched from
-        tushare index_member_all (one API call per missing code) and cached.
-
-        Returns {ts_code: {name, l1_code, l1_name, l2_code, l2_name, l3_name}}.
-        Codes without industry data are omitted from the result.
-        """
+        """Return Shenwan 3-level industry classification for given codes."""
         if not codes:
             return {}
 
-        # Check cache
         cached = self.cache.get_stock_industries(codes)
         missing = [c for c in codes if c not in cached]
-
         if not missing:
             return cached
 
-        # Fetch missing codes from Tushare
         new_rows = []
         for code in missing:
             try:
@@ -325,15 +467,14 @@ class DataProvider:
 
         if new_rows:
             self.cache.upsert_stock_industries(new_rows)
-
         return cached
 
+    # ═══════════════════════════════════════════════════════════════
+    #  Utility
+    # ═══════════════════════════════════════════════════════════════
+
     def is_trading_day(self, trade_date: str) -> bool:
-        """
-        Check if a date (YYYYMMDD) is a trading day via Tushare trade_cal API.
-        Falls back to weekday check if API is unavailable.
-        """
-        import time
+        """Check if a date is a trading day via Tushare trade_cal API."""
         trade_date = trade_date.replace("-", "")
         try:
             df = self._api.trade_cal(
@@ -345,85 +486,35 @@ class DataProvider:
                 return int(df.iloc[0]["is_open"]) == 1
         except Exception:
             pass
-
-        # Fallback: basic weekday check (Mon-Fri)
         try:
             dt = datetime.strptime(trade_date, "%Y%m%d")
             return dt.weekday() < 5
         except Exception:
             return False
 
-    # ------- internal -------
-
-    def _fetch_from_api(self, code: str, start: str, end: str) -> list[dict]:
-        """
-        Pull daily data from Tushare.  Normalizes field names to cache schema.
-        Uses pro_bar() (works with free-tier tokens).
-        Falls back to pro_api().daily() for stocks, index_daily for indices.
-        """
-        import time
-        ts_code = self._normalize_code(code)
-        asset = self._asset_type(ts_code)
-
-        # Try pro_bar first (works with all token tiers)
-        try:
-            df = ts.pro_bar(
-                ts_code=ts_code,
-                asset=asset,
-                freq="D",
-                start_date=start,
-                end_date=end,
-                adj="qfq",
-            )
-            if df is not None and not df.empty:
-                return self._normalize_df(df)
-        except IOError as e:
-            # Rate limit or permission error — log and continue
-            msg = str(e)
-            if "频率" in msg or "超出" in msg:
-                print(f"[DataProvider] pro_bar rate-limited for {ts_code}, trying fallback...")
-            else:
-                print(f"[DataProvider] pro_bar failed for {ts_code}: {msg[:100]}")
-
-        # Fallback: try pro_api endpoints
-        try:
-            if asset == "I":
-                df = self._api.index_daily(ts_code=ts_code, start_date=start, end_date=end)
-            else:
-                df = self._api.daily(
-                    ts_code=ts_code, start_date=start, end_date=end,
-                    fields="trade_date,open,high,low,close,vol,amount",
-                )
-            if df is not None and not df.empty:
-                return self._normalize_df(df)
-        except Exception as e:
-            print(f"[DataProvider] fallback API failed for {ts_code}: {e}")
-
-        return []
-
     @staticmethod
-    def _asset_type(ts_code: str) -> str:
-        """Determine Tushare asset type: I (index) or E (stock)."""
-        code_num = ts_code.split(".")[0]
-        # Index patterns: 000xxx (SSE), 399xxx (SZSE), 880xxx (sector), 999xxx
-        if code_num.startswith(("000", "399", "880", "999")):
-            return "I"
-        return "E"
+    def raw_to_qfq(df: "pd.DataFrame") -> "pd.DataFrame":
+        """
+        Convert raw (不复权) OHLCV to qfq (前复权) for display.
 
-    @staticmethod
-    def _normalize_df(df) -> list[dict]:
-        """Convert tushare DataFrame to cache-compatible list[dict]."""
-        df = df.sort_values("trade_date", ascending=False)
-        # Normalize: trade_date may be int or str
-        df["trade_date"] = df["trade_date"].astype(str)
-        # Add adj_factor placeholder if missing
-        if "adj_factor" not in df.columns:
-            df["adj_factor"] = 1.0
-        # Keep only needed columns
-        cols = ["trade_date", "open", "high", "low", "close", "vol", "amount", "adj_factor"]
-        df = df[[c for c in cols if c in df.columns]]
-        df.rename(columns={"trade_date": "date"}, inplace=True)
-        return df.to_dict(orient="records")
+        Formula: qfq_price = raw_price × adj_factor(T) / adj_factor(latest)
+
+        Expects columns: open, high, low, close, adj_factor.
+        Adds a '_qfq' suffix is NOT used; prices are converted in-place.
+        Returns the same DataFrame (mutated).
+        """
+        if df.empty or "adj_factor" not in df.columns:
+            return df
+
+        latest_adj = df["adj_factor"].max()
+        if latest_adj <= 0:
+            return df
+
+        for col in ["open", "high", "low", "close"]:
+            if col in df.columns:
+                df[col] = df[col].astype(float) * df["adj_factor"] / latest_adj
+
+        return df
 
     @staticmethod
     def _normalize_code(code: str) -> str:
@@ -435,3 +526,95 @@ class DataProvider:
             else:
                 code = f"{code}.SZ"
         return code
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Module-private helpers
+# ═══════════════════════════════════════════════════════════════
+
+def _normalize_raw_batch(df) -> list[dict]:
+    """Convert api.daily() DataFrame to cache-compatible rows."""
+    df = df.copy()
+    df = df.rename(columns={"ts_code": "code", "trade_date": "date"})
+    df["date"] = df["date"].astype(str)
+    df["adj_factor"] = 1.0  # placeholder, real values from _upsert_adj_factors
+    df["asset_type"] = "stock"
+    keep = ["code", "date", "open", "high", "low", "close",
+            "vol", "amount", "adj_factor", "asset_type"]
+    return df[[c for c in keep if c in df.columns]].to_dict(orient="records")
+
+
+def _normalize_index_batch(df) -> list[dict]:
+    """Convert api.index_daily() DataFrame to cache-compatible rows.
+
+    api.index_daily() returns: ts_code, trade_date, close, open, high,
+    low, pre_close, change, pct_chg, vol, amount.
+    Indices have adj_factor=1.0 (no 复权).
+    """
+    df = df.copy()
+    df = df.rename(columns={"ts_code": "code", "trade_date": "date"})
+    df["date"] = df["date"].astype(str)
+    df["adj_factor"] = 1.0
+    df["asset_type"] = "index"
+    keep = ["code", "date", "open", "high", "low", "close",
+            "vol", "amount", "adj_factor", "asset_type"]
+    return df[[c for c in keep if c in df.columns]].to_dict(orient="records")
+
+
+def _upsert_adj_factors(cache: CacheManager, df) -> None:
+    """
+    Merge adj_factor values from api.adj_factor() into existing cache rows.
+
+    api.adj_factor() returns: ts_code, trade_date, adj_factor.
+    We UPDATE existing rows in tushare_cache rather than INSERT,
+    because the raw data is already there from api.daily().
+    """
+    import sqlite3
+    df = df.copy()
+    df["trade_date"] = df["trade_date"].astype(str)
+    df["adj_factor"] = df["adj_factor"].astype(float)
+
+    rows = []
+    for _, r in df.iterrows():
+        rows.append({
+            "code": r["ts_code"],
+            "date": r["trade_date"],
+            "adj_factor": float(r["adj_factor"]),
+        })
+
+    # Use the cache's internal connection to do a bulk UPDATE
+    with sqlite3.connect(cache.db_path) as conn:
+        conn.executemany(
+            """UPDATE tushare_cache
+               SET adj_factor = :adj_factor
+               WHERE code = :code AND date = :date""",
+            rows,
+        )
+        conn.commit()
+
+
+def _yesterday(date_str: str) -> str:
+    """Return the day before date_str (YYYYMMDD)."""
+    dt = datetime.strptime(date_str, "%Y%m%d")
+    return (dt - timedelta(days=1)).strftime("%Y%m%d")
+
+
+def _next_day(date_str: str) -> str:
+    """Return the day after date_str (YYYYMMDD)."""
+    dt = datetime.strptime(date_str, "%Y%m%d")
+    return (dt + timedelta(days=1)).strftime("%Y%m%d")
+
+
+def _date_chunks(start: str, end: str, chunk_days: int) -> list[tuple[str, str]]:
+    """
+    Split [start, end] into overlapping-free chunks of `chunk_days` calendar days.
+    Returns list of (chunk_start, chunk_end) YYYYMMDD strings.
+    """
+    chunks = []
+    cur = datetime.strptime(start, "%Y%m%d")
+    end_dt = datetime.strptime(end, "%Y%m%d")
+    while cur <= end_dt:
+        chunk_end = min(cur + timedelta(days=chunk_days), end_dt)
+        chunks.append((cur.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d")))
+        cur = chunk_end + timedelta(days=1)
+    return chunks

@@ -26,6 +26,26 @@ class DashboardService:
     def is_configured(self) -> bool:
         return bool(os.environ.get("TUSHARE_TOKEN", ""))
 
+    # ---- bulk data loading ----
+
+    def ensure_data_loaded(self, trade_date: str, progress_cb=None) -> dict:
+        """
+        Ensure cache has raw K-line + adj_factor for all stocks.
+        Called once when the user selects a date in the console.
+
+        Args:
+            trade_date: target date (YYYYMMDD)
+            progress_cb: optional callable(phase, current, total)
+        Returns:
+            {"status": "ok"|"error", "fetched_dates": int, "elapsed": float}
+        """
+        return self._dp.ensure_data_loaded(trade_date, progress_cb=progress_cb)
+
+    @staticmethod
+    def raw_to_qfq(df):
+        """Convert raw (不复权) DataFrame to qfq (前复权) for display."""
+        return DataProvider.raw_to_qfq(df)
+
     # ---- trading day validation ----
 
     def is_trading_day(self, trade_date: str) -> bool:
@@ -37,12 +57,14 @@ class DashboardService:
     def get_index_data(self, code: str, lookback: int = 360,
                        end_date: str | None = None):
         """
-        Load K-line data for an index symbol.
-        Returns a DataFrame (date ASC).  `end_date` is passed through to
-        DataProvider.get_daily() so the cache check is date-aware.
+        Load K-line data for an index/stock symbol.
+        Returns a DataFrame (date ASC) with prices converted to qfq (前复权).
         """
         rows = self._dp.get_daily(code, end_date=end_date, lookback_days=lookback)
         df = rows_to_df(rows)
+        # Convert raw → qfq for display (no-op for indices, essential for stocks)
+        if not df.empty:
+            df = DataProvider.raw_to_qfq(df)
         return df
 
     # ---- latest trade date ----

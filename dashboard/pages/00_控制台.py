@@ -99,10 +99,47 @@ with st.form("ctrl_form", clear_on_submit=False):
 if apply_btn:
     _trade_date_str = selected_date.strftime("%Y%m%d")
     if _service.is_trading_day(_trade_date_str):
-        st.session_state.trade_date = _trade_date_str
+        # Two-phase: first set pending, rerun → load with spinner → set applied
+        st.session_state.pending_load_date = _trade_date_str
         st.rerun()
     else:
         st.error(f"**{selected_date.strftime('%Y-%m-%d')} 不是交易日**")
+
+# ── Phase 2: execute data loading (when pending_load_date is set) ──
+_pending = st.session_state.pop("pending_load_date", None)
+if _pending:
+    with st.status(f"正在加载 {_pending[:4]}-{_pending[4:6]}-{_pending[6:8]} 市场数据...", expanded=True) as status:
+        _total_chunks = [None]  # mutable box for closure
+        def _progress(phase: str, current: int, total: int | None):
+            if phase == "init":
+                _total_chunks[0] = total
+                status.update(label=f"准备拉取数据... (共 {total} 个日期段)")
+            elif phase == "chunk":
+                t = _total_chunks[0] or 1
+                status.update(label=f"正在拉取股票数据... ({current}/{t} 日期段)")
+            elif phase == "index":
+                status.update(label=f"正在拉取指数数据... ({current}/{total} 个)")
+            elif phase == "done":
+                status.update(label="数据加载完成！", state="complete")
+
+        result = _service.ensure_data_loaded(_pending, progress_cb=_progress)
+        if result["status"] == "ok":
+            status.update(
+                label=f"✅ 数据加载完成！（{result['elapsed']:.0f}秒，"
+                      f"K线 {result.get('raw_pages', '?')} 页，"
+                      f"因子 {result.get('adj_pages', '?')} 页，"
+                      f"指数 {result.get('index_chunks', 0)} 个）",
+                state="complete",
+            )
+            st.session_state.trade_date = _pending
+            # Clear stale caches so other pages pick up fresh data
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            status.update(
+                label=f"❌ 数据加载失败: {result.get('msg', '未知错误')}",
+                state="error",
+            )
 
 st.markdown("---")
 st.caption("快速跳转：左侧导航 → 市场全景 | 板块分析 | 个股追踪")

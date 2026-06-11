@@ -15,12 +15,48 @@ class CacheManager:
         self.db_path = db_path
         self._init_schema()
 
+    # Expected columns per table.  If the actual schema doesn't match, the
+    # database is dropped and recreated — no migrations, no ALTER TABLE.
+    _EXPECTED_COLUMNS = {
+        "tushare_cache": {
+            "code", "date", "open", "high", "low", "close",
+            "vol", "amount", "adj_factor", "asset_type",
+        },
+        "index_weight_cache": {
+            "index_code", "con_code", "weight_date", "weight",
+        },
+        "stock_industry_cache": {
+            "ts_code", "name",
+            "l1_code", "l1_name", "l2_code", "l2_name",
+            "l3_code", "l3_name",
+        },
+    }
+
     def _init_schema(self):
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-            sql = f.read()
         with sqlite3.connect(self.db_path) as conn:
-            conn.executescript(sql)
+            if self._schema_ok(conn):
+                return
+            # Schema mismatch — drop everything and recreate
+            conn.executescript("DROP TABLE IF EXISTS tushare_cache")
+            conn.executescript("DROP TABLE IF EXISTS index_weight_cache")
+            conn.executescript("DROP TABLE IF EXISTS stock_industry_cache")
+            with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+                conn.executescript(f.read())
             conn.commit()
+
+    def _schema_ok(self, conn: sqlite3.Connection) -> bool:
+        """Return True if all expected tables exist with the correct columns."""
+        for table, expected in self._EXPECTED_COLUMNS.items():
+            try:
+                info = conn.execute(
+                    f"PRAGMA table_info({table})"
+                ).fetchall()
+            except Exception:
+                return False
+            actual = {row[1] for row in info}  # row[1] = column name
+            if actual != expected:
+                return False
+        return True
 
     def _get_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -30,11 +66,11 @@ class CacheManager:
     # ------- write / read -------
 
     def upsert_daily(self, code: str, rows: list[dict]):
-        """Batch upsert daily K-line rows. Each row: {date, open, high, low, close, vol, amount, adj_factor}"""
+        """Batch upsert daily K-line rows. Each row: {date, open, high, low, close, vol, amount, adj_factor, pre_close}"""
         sql = """
             INSERT OR REPLACE INTO tushare_cache
-                (code, date, open, high, low, close, vol, amount, adj_factor)
-            VALUES (:code, :date, :open, :high, :low, :close, :vol, :amount, :adj_factor)
+                (code, date, open, high, low, close, vol, amount, adj_factor, asset_type)
+            VALUES (:code, :date, :open, :high, :low, :close, :vol, :amount, :adj_factor, :asset_type)
         """
         with self._get_conn() as conn:
             for r in rows:
@@ -65,6 +101,14 @@ class CacheManager:
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT MAX(date) as d FROM tushare_cache WHERE code = ?", [code]
+            ).fetchone()
+        return row["d"] if row and row["d"] else None
+
+    def get_earliest_date(self, code: str) -> str | None:
+        """Return the earliest cached date for a code, or None."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT MIN(date) as d FROM tushare_cache WHERE code = ?", [code]
             ).fetchone()
         return row["d"] if row and row["d"] else None
 
@@ -164,13 +208,13 @@ class CacheManager:
     def upsert_daily_bulk(self, rows: list[dict]):
         """
         Bulk upsert daily K-line rows from a full-market fetch.
-        Each row: {code, date, open, high, low, close, vol, amount, adj_factor}.
+        Each row: {code, date, open, high, low, close, vol, amount, adj_factor, pre_close}.
         Uses executemany for efficiency with large datasets (~5000+ rows).
         """
         sql = """
             INSERT OR REPLACE INTO tushare_cache
-                (code, date, open, high, low, close, vol, amount, adj_factor)
-            VALUES (:code, :date, :open, :high, :low, :close, :vol, :amount, :adj_factor)
+                (code, date, open, high, low, close, vol, amount, adj_factor, asset_type)
+            VALUES (:code, :date, :open, :high, :low, :close, :vol, :amount, :adj_factor, :asset_type)
         """
         with self._get_conn() as conn:
             conn.executemany(sql, rows)
