@@ -399,14 +399,17 @@ def detect_spinning_top(
     条件:
       1. 今：长上影线（上影线 ≥ 实体 × 2）
       2. 今：实体很小（body_pct < 30%）
-      3. + 短期多头 → 高档纺锤线 → 偏空
-      4. + 短期空头 → 低档纺锤线 → 偏多
-      盘整时不触发。
+      3. + 短期多头 + 今日收涨 → 高档纺锤线 → 偏空
+      4. + 短期空头 + 今日收跌 → 低档纺锤线 → 偏多
+      盘整或日涨跌与趋势方向不符时不触发。
     """
     if len(df) < 20:
         return None
 
     curr = df.iloc[-1]
+    prev = df.iloc[-2]
+    close = float(curr["close"])
+    prev_close = float(prev["close"])
     shape = _candle_shape(
         float(curr["open"]), float(curr["high"]),
         float(curr["low"]), float(curr["close"]),
@@ -420,15 +423,15 @@ def detect_spinning_top(
     if shape["body_pct"] >= 30:
         return None
 
-    # ③ 确定高档/低档
+    # ③ 确定高档/低档：趋势方向 + 日涨跌须一致
     trend = _short_term_trend(df)
-    if trend == "多头":
+    if trend == "多头" and close > prev_close:
         return {
             "name": "高档纺锤线",
             "direction": "偏空",
             "note": "在上涨之后出现，已经出现空方的进攻苗头和多方不是那么再有强烈持续上攻的念头",
         }
-    elif trend == "空头":
+    elif trend == "空头" and close < prev_close:
         return {
             "name": "低档纺锤线",
             "direction": "偏多",
