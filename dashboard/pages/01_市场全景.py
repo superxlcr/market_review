@@ -208,10 +208,10 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
     with vol_col:
         st.markdown("**成交额分析**")
         vol = volume_analysis(df)
-        _dash_log.info("%s: vol keys=%s d5=%s d10=%s vd5=%s vd10=%s",
+        _dash_log.info("%s: vol keys=%s ma5_deduct=%s ma10_deduct=%s vs_ma5=%s vs_ma10=%s",
                         name, sorted(vol.keys()),
-                        vol.get("deduct_5d_yi"), vol.get("deduct_10d_yi"),
-                        vol.get("vs_deduct_5d_pct"), vol.get("vs_deduct_10d_pct"))
+                        vol.get("ma5_deduct_yi"), vol.get("ma10_deduct_yi"),
+                        vol.get("vs_ma5_deduct_pct"), vol.get("vs_ma10_deduct_pct"))
 
         def _amt_trend_color(t: str) -> str:
             if "上升" in t or "上行" in t: return "#e53935"
@@ -231,22 +231,22 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         # 2. 5日成交额趋势
         t5 = vol.get("trend_5d", "")
         amt_rows.append(("5日额趋势", t5, _amt_trend_color(t5)))
-        # 3. 5日扣抵量
-        d5 = vol.get("deduct_5d_yi")
-        vd5 = vol.get("vs_deduct_5d_pct")
+        # 3. MA5 扣抵量
+        d5 = vol.get("ma5_deduct_yi")
+        vd5 = vol.get("vs_ma5_deduct_pct")
         if vd5 is not None:
             sign_d5 = "+" if vd5 > 0 else ""
-            amt_rows.append(("5日扣抵量", f"{d5:.2f}亿（{sign_d5}{vd5:.1f}%）" if d5 else "N/A", "#e53935" if vd5 > 0 else ("#43a047" if vd5 < 0 else "#999")))
+            amt_rows.append(("MA5 扣抵量", f"{d5:.2f}亿（{sign_d5}{vd5:.1f}%）" if d5 else "N/A", "#e53935" if vd5 > 0 else ("#43a047" if vd5 < 0 else "#999")))
         else:
-            amt_rows.append(("5日扣抵量", "N/A", None))
-        # 4. 10日扣抵量
-        d10 = vol.get("deduct_10d_yi")
-        vd10 = vol.get("vs_deduct_10d_pct")
+            amt_rows.append(("MA5 扣抵量", "N/A", None))
+        # 4. MA10 扣抵量
+        d10 = vol.get("ma10_deduct_yi")
+        vd10 = vol.get("vs_ma10_deduct_pct")
         if vd10 is not None:
             sign_d10 = "+" if vd10 > 0 else ""
-            amt_rows.append(("10日扣抵量", f"{d10:.2f}亿（{sign_d10}{vd10:.1f}%）" if d10 else "N/A", "#e53935" if vd10 > 0 else ("#43a047" if vd10 < 0 else "#999")))
+            amt_rows.append(("MA10 扣抵量", f"{d10:.2f}亿（{sign_d10}{vd10:.1f}%）" if d10 else "N/A", "#e53935" if vd10 > 0 else ("#43a047" if vd10 < 0 else "#999")))
         else:
-            amt_rows.append(("10日扣抵量", "N/A", None))
+            amt_rows.append(("MA10 扣抵量", "N/A", None))
         # 5. 5日均量
         m5 = vol.get("ma5_yi")
         v5 = vol.get("vs_ma5_pct", 0)

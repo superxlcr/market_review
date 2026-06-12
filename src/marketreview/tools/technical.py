@@ -148,15 +148,20 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
     vs_ma20 = round((latest_amount / latest_ma20 - 1) * 100, 1) if not np.isnan(latest_ma20) else 0
 
     # ---- Deduction volume (扣抵量) ----
-    # Volume from N days ago that drops off the MA-N window tomorrow.
-    deduct_5d = float(amount_series.iloc[-5]) if len(amount_series) >= 5 else None
-    deduct_10d = float(amount_series.iloc[-10]) if len(amount_series) >= 10 else None
+    # The day that drops off the MA-N window tomorrow: N trading days before
+    # today, consistent with get_offset_info() → idx = len(df) - 1 - period.
+    _n = len(amount_series)
+    _idx5 = _n - 1 - 5
+    _idx10 = _n - 1 - 10
 
-    deduct_5d_yi = round(deduct_5d / 1e5, 2) if deduct_5d else None
-    deduct_10d_yi = round(deduct_10d / 1e5, 2) if deduct_10d else None
+    deduct_5 = float(amount_series.iloc[_idx5]) if _idx5 >= 0 else None
+    deduct_10 = float(amount_series.iloc[_idx10]) if _idx10 >= 0 else None
 
-    vs_deduct_5d = round((latest_amount / deduct_5d - 1) * 100, 1) if deduct_5d and deduct_5d > 0 else None
-    vs_deduct_10d = round((latest_amount / deduct_10d - 1) * 100, 1) if deduct_10d and deduct_10d > 0 else None
+    ma5_deduct_yi = round(deduct_5 / 1e5, 2) if deduct_5 else None
+    ma10_deduct_yi = round(deduct_10 / 1e5, 2) if deduct_10 else None
+
+    vs_ma5_deduct = round((latest_amount / deduct_5 - 1) * 100, 1) if deduct_5 and deduct_5 > 0 else None
+    vs_ma10_deduct = round((latest_amount / deduct_10 - 1) * 100, 1) if deduct_10 and deduct_10 > 0 else None
 
     # ---- 5-day amount trend ----
     last5 = amount_series.iloc[-5:].tolist()
@@ -215,10 +220,10 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
         "vs_ma5_pct": vs_ma5,
         "vs_ma10_pct": vs_ma10,
         "vs_ma20_pct": vs_ma20,
-        "deduct_5d_yi": deduct_5d_yi,
-        "deduct_10d_yi": deduct_10d_yi,
-        "vs_deduct_5d_pct": vs_deduct_5d,
-        "vs_deduct_10d_pct": vs_deduct_10d,
+        "ma5_deduct_yi": ma5_deduct_yi,
+        "ma10_deduct_yi": ma10_deduct_yi,
+        "vs_ma5_deduct_pct": vs_ma5_deduct,
+        "vs_ma10_deduct_pct": vs_ma10_deduct,
         "trend_5d": trend_5d,
         "cross_state": cross_state,
         "cross_days": cross_days,
