@@ -11,6 +11,10 @@ import pandas as pd
 import numpy as np
 from typing import Any
 
+from marketreview.log_util import get_logger
+
+log = get_logger(__name__)
+
 
 def rows_to_df(rows: list[dict]) -> pd.DataFrame:
     """Convert cache rows (date DESC) to DataFrame (date ASC for TA)."""
@@ -118,11 +122,14 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
       - cross_days: 金叉/死叉持续天数
     """
     if df.empty or "amount" not in df.columns:
+        log.warning("volume_analysis: empty df or missing 'amount' column")
         return {}
 
     amount_series = df["amount"].astype(float)
     latest_amount = float(amount_series.iloc[-1])
     latest_amount_yi = round(latest_amount / 1e5, 2)   # 千元 → 亿
+
+    log.debug("volume_analysis: rows=%d latest_amount_yi=%.2f", len(amount_series), latest_amount_yi)
 
     ma5 = amount_series.rolling(5).mean()
     ma10 = amount_series.rolling(10).mean()
@@ -139,6 +146,17 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
     vs_ma5 = round((latest_amount / latest_ma5 - 1) * 100, 1) if not np.isnan(latest_ma5) else 0
     vs_ma10 = round((latest_amount / latest_ma10 - 1) * 100, 1) if not np.isnan(latest_ma10) else 0
     vs_ma20 = round((latest_amount / latest_ma20 - 1) * 100, 1) if not np.isnan(latest_ma20) else 0
+
+    # ---- Deduction volume (扣抵量) ----
+    # Volume from N days ago that drops off the MA-N window tomorrow.
+    deduct_5d = float(amount_series.iloc[-5]) if len(amount_series) >= 5 else None
+    deduct_10d = float(amount_series.iloc[-10]) if len(amount_series) >= 10 else None
+
+    deduct_5d_yi = round(deduct_5d / 1e5, 2) if deduct_5d else None
+    deduct_10d_yi = round(deduct_10d / 1e5, 2) if deduct_10d else None
+
+    vs_deduct_5d = round((latest_amount / deduct_5d - 1) * 100, 1) if deduct_5d and deduct_5d > 0 else None
+    vs_deduct_10d = round((latest_amount / deduct_10d - 1) * 100, 1) if deduct_10d and deduct_10d > 0 else None
 
     # ---- 5-day amount trend ----
     last5 = amount_series.iloc[-5:].tolist()
@@ -189,7 +207,7 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
                 cross_state = "空头"
             cross_days = 0
 
-    return {
+    result = {
         "latest_amount_yi": latest_amount_yi,
         "ma5_yi": ma5_yi,
         "ma10_yi": ma10_yi,
@@ -197,10 +215,16 @@ def volume_analysis(df: pd.DataFrame) -> dict[str, Any]:
         "vs_ma5_pct": vs_ma5,
         "vs_ma10_pct": vs_ma10,
         "vs_ma20_pct": vs_ma20,
+        "deduct_5d_yi": deduct_5d_yi,
+        "deduct_10d_yi": deduct_10d_yi,
+        "vs_deduct_5d_pct": vs_deduct_5d,
+        "vs_deduct_10d_pct": vs_deduct_10d,
         "trend_5d": trend_5d,
         "cross_state": cross_state,
         "cross_days": cross_days,
     }
+    log.debug("volume_analysis result keys: %s", sorted(result.keys()))
+    return result
 
 
 def calc_kdj(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:

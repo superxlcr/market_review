@@ -104,12 +104,9 @@ def build_index_contribution(
     """
     trade_date = trade_date.replace("-", "")
 
-    print(f"[contribution] build_index_contribution start: {index_code} @ {trade_date}")
-
     # 1. Index OHLC
     idx_rows = dp.get_daily(index_code, end_date=trade_date, lookback_days=2)
     if not idx_rows or len(idx_rows) < 2:
-        print(f"[contribution] FAIL: no index data for {index_code}")
         return None
     latest = idx_rows[0]
     prev = idx_rows[1]
@@ -117,23 +114,15 @@ def build_index_contribution(
     pre_close = float(prev["close"])
     chg_pts = round(close - pre_close, 2)
     chg_pct = round((close / pre_close - 1) * 100, 2)
-    print(f"[contribution] step1 ok: close={close} pre_close={pre_close} chg={chg_pts}")
 
     # 2. Constituent weights
     weights = dp.get_index_weights(index_code, trade_date)
     if not weights:
-        print(f"[contribution] FAIL: no weights for {index_code}")
         return None
-    print(f"[contribution] step2 ok: {len(weights)} constituents")
 
     # 3. Stock prices for all constituents
     all_codes = [w["con_code"] for w in weights]
-    print(f"[contribution] step3: fetching daily batch for {len(all_codes)} stocks...")
-    import time as _ctime
-    _ct0 = _ctime.time()
     prices = dp.get_daily_batch(all_codes, trade_date)
-    _ct1 = _ctime.time()
-    print(f"[contribution] step3 ok: got prices for {len(prices)}/{len(all_codes)} stocks in {_ct1-_ct0:.1f}s")
 
     # 4. Compute contribution for each constituent
     items = []
