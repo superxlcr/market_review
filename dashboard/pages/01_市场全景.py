@@ -726,113 +726,110 @@ else:
     trend = overview["trend"]
 
     # ======== Row 1: 涨跌比 (left) + 成交额 (right) ========
-    card_left, card_right = st.columns(2)
 
     # ---- Card 1: 涨跌数量比 + 市场情绪 ----
-    with card_left:
-        _up = today["up"]
-        _flat = today["flat"]
-        _down = today["down"]
-        _ul = today["up_limit"]
-        _dl = today["down_limit"]
-        _total = _up + _flat + _down
-        _up_pct = _up / _total * 100 if _total else 0
-        _down_pct = _down / _total * 100 if _total else 0
-        if _up >= _down:
-            _sentiment_label, _sentiment_pct, _sentiment_color = "涨", _up_pct, "#e53935"
-        else:
-            _sentiment_label, _sentiment_pct, _sentiment_color = "跌", _down_pct, "#43a047"
+    _up = today["up"]
+    _flat = today["flat"]
+    _down = today["down"]
+    _ul = today["up_limit"]
+    _dl = today["down_limit"]
+    _total = _up + _flat + _down
+    _up_pct = _up / _total * 100 if _total else 0
+    _down_pct = _down / _total * 100 if _total else 0
+    if _up >= _down:
+        _sentiment_label, _sentiment_pct, _sentiment_color = "涨", _up_pct, "#e53935"
+    else:
+        _sentiment_label, _sentiment_pct, _sentiment_color = "跌", _down_pct, "#43a047"
 
-        # Yesterday comparison HTML
-        yest_html = ""
-        if yesterday:
-            _yup, _yflat, _ydown = yesterday["up"], yesterday["flat"], yesterday["down"]
-            _yul, _ydl = yesterday["up_limit"], yesterday["down_limit"]
-            hints = []
-            up_chg = _up - _yup
-            if abs(up_chg) > 50:
-                hints.append(f'上涨家数{"↑" if up_chg > 0 else "↓"}{abs(up_chg)}')
-            hint_str = "  |  ".join(hints) if hints else ""
-            hint_color = "#e53935" if up_chg >= 0 else "#43a047"
+    yest_html = ""
+    if yesterday:
+        _yup, _yflat, _ydown = yesterday["up"], yesterday["flat"], yesterday["down"]
+        _yul, _ydl = yesterday["up_limit"], yesterday["down_limit"]
+        hints = []
+        up_chg = _up - _yup
+        if abs(up_chg) > 50:
+            hints.append(f'上涨家数{"↑" if up_chg > 0 else "↓"}{abs(up_chg)}')
+        hint_str = "  |  ".join(hints) if hints else ""
+        hint_color = "#e53935" if up_chg >= 0 else "#43a047"
 
-            yest_html = f"""
-            <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e0e0e0;font-size:14px;color:#999;">
-                昨日：<span style="color:#e53935;">{_yup}</span>:<span>{_yflat}</span>:<span style="color:#43a047;">{_ydown}</span>
-                涨停 {_yul} | 跌停 {_ydl}
-            </div>
-            <div style="margin-top:2px;font-size:13px;color:{hint_color};">{hint_str}</div>
-            """
-
-        st.html(f"""
-        <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:16px;">
-            <div style="font-size:17px;color:#888;margin-bottom:8px;">涨跌数量比</div>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                <span style="color:#e53935;font-size:34px;font-weight:bold;">{_up}</span>
-                <span style="color:#888;font-size:17px;">涨</span>
-                <span style="color:#9e9e9e;font-size:24px;">:</span>
-                <span style="color:#9e9e9e;font-size:34px;font-weight:bold;">{_flat}</span>
-                <span style="color:#888;font-size:17px;">平</span>
-                <span style="color:#9e9e9e;font-size:24px;">:</span>
-                <span style="color:#43a047;font-size:34px;font-weight:bold;">{_down}</span>
-                <span style="color:#888;font-size:17px;">跌</span>
-            </div>
-            <div style="margin-top:4px;font-size:16px;color:{_sentiment_color};font-weight:bold;">
-                市场情绪：{_sentiment_label} {_sentiment_pct:.1f}% 家
-            </div>
-            <div style="margin-top:6px;font-size:16px;">
-                <span style="color:#e53935;">涨停 {_ul}</span>
-                <span style="color:#999;margin:0 8px;">|</span>
-                <span style="color:#43a047;">跌停 {_dl}</span>
-            </div>
-            {yest_html}
+        yest_html = f"""
+        <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e0e0e0;font-size:14px;color:#999;">
+            昨日：<span style="color:#e53935;">{_yup}</span>:<span>{_yflat}</span>:<span style="color:#43a047;">{_ydown}</span>
+            涨停 {_yul} | 跌停 {_ydl}
         </div>
-        """)
+        <div style="margin-top:2px;font-size:13px;color:{hint_color};">{hint_str}</div>
+        """
+
+    card1_html = f"""
+    <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:16px;flex:1;">
+        <div style="font-size:17px;color:#888;margin-bottom:8px;">涨跌数量比</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <span style="color:#e53935;font-size:34px;font-weight:bold;">{_up}</span>
+            <span style="color:#888;font-size:17px;">涨</span>
+            <span style="color:#9e9e9e;font-size:24px;">:</span>
+            <span style="color:#9e9e9e;font-size:34px;font-weight:bold;">{_flat}</span>
+            <span style="color:#888;font-size:17px;">平</span>
+            <span style="color:#9e9e9e;font-size:24px;">:</span>
+            <span style="color:#43a047;font-size:34px;font-weight:bold;">{_down}</span>
+            <span style="color:#888;font-size:17px;">跌</span>
+        </div>
+        <div style="margin-top:4px;font-size:16px;color:{_sentiment_color};font-weight:bold;">
+            市场情绪：{_sentiment_label} {_sentiment_pct:.1f}% 家
+        </div>
+        <div style="margin-top:6px;font-size:16px;">
+            <span style="color:#e53935;">涨停 {_ul}</span>
+            <span style="color:#999;margin:0 8px;">|</span>
+            <span style="color:#43a047;">跌停 {_dl}</span>
+        </div>
+        {yest_html}
+    </div>"""
 
     # ---- Card 2: 成交额 ----
-    with card_right:
-        total_yi = today["total_yi"]
-        sh_yi = today["sh_yi"]
-        sz_yi = today["sz_yi"]
-        bj_yi = today["bj_yi"]
+    total_yi = today["total_yi"]
+    sh_yi = today["sh_yi"]
+    sz_yi = today["sz_yi"]
+    bj_yi = today["bj_yi"]
 
-        delta_html = ""
-        yest_turnover_html = ""
-        if yesterday:
-            prev_yi = yesterday["total_yi"]
-            change = total_yi - prev_yi
-            change_pct = (total_yi / prev_yi - 1) * 100 if prev_yi else 0
-            color = "#e53935" if change >= 0 else "#43a047"
-            sign = "+" if change >= 0 else ""
-            delta_html = f'<span style="color:{color};font-size:16px;">{sign}{change:,.0f}亿（{sign}{change_pct:.1f}%）</span>'
+    delta_html = ""
+    yest_turnover_html = ""
+    if yesterday:
+        prev_yi = yesterday["total_yi"]
+        change = total_yi - prev_yi
+        change_pct = (total_yi / prev_yi - 1) * 100 if prev_yi else 0
+        color = "#e53935" if change >= 0 else "#43a047"
+        sign = "+" if change >= 0 else ""
+        delta_html = f'<span style="color:{color};font-size:16px;">{sign}{change:,.0f}亿（{sign}{change_pct:.1f}%）</span>'
 
-            yest_parts = [f'上证 {yesterday["sh_yi"]:,.0f}亿', f'深证 {yesterday["sz_yi"]:,.0f}亿']
-            if yesterday["bj_yi"] > 0:
-                yest_parts.append(f'北证 {yesterday["bj_yi"]:,.0f}亿')
+        yest_parts = [f'上证 {yesterday["sh_yi"]:,.0f}亿', f'深证 {yesterday["sz_yi"]:,.0f}亿']
+        if yesterday["bj_yi"] > 0:
+            yest_parts.append(f'北证 {yesterday["bj_yi"]:,.0f}亿')
 
-            yest_turnover_html = f"""
-            <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e0e0e0;font-size:14px;color:#999;">
-                昨日：{yesterday["total_yi"]:,.0f}亿（{" | ".join(yest_parts)}）
-            </div>
-            <div style="margin-top:2px;font-size:16px;color:{color};">
-                {'放量' if change>=0 else '缩量'} {abs(change):,.0f}亿（{sign}{change_pct:.1f}%）
-            </div>
-            """
-
-        exchange_parts = [f'上证 {sh_yi:,.0f}亿', f'深证 {sz_yi:,.0f}亿']
-        if bj_yi > 0:
-            exchange_parts.append(f'北证 {bj_yi:,.0f}亿')
-
-        st.html(f"""
-        <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:16px;">
-            <div style="font-size:17px;color:#888;margin-bottom:8px;">两市成交额（亿元）</div>
-            <div style="font-size:34px;font-weight:bold;">{total_yi:,.0f}<span style="font-size:17px;color:#888;"> 亿</span></div>
-            <div style="margin-top:4px;">{delta_html}</div>
-            <div style="margin-top:8px;font-size:16px;">
-                {" &nbsp;|&nbsp; ".join(exchange_parts)}
-            </div>
-            {yest_turnover_html}
+        yest_turnover_html = f"""
+        <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e0e0e0;font-size:14px;color:#999;">
+            昨日：{yesterday["total_yi"]:,.0f}亿（{" | ".join(yest_parts)}）
         </div>
-        """)
+        """
+
+    exchange_parts = [f'上证 {sh_yi:,.0f}亿', f'深证 {sz_yi:,.0f}亿']
+    if bj_yi > 0:
+        exchange_parts.append(f'北证 {bj_yi:,.0f}亿')
+
+    card2_html = f"""
+    <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:16px;flex:1;">
+        <div style="font-size:17px;color:#888;margin-bottom:8px;">两市成交额（亿元）</div>
+        <div style="font-size:34px;font-weight:bold;">{total_yi:,.0f}<span style="font-size:17px;color:#888;"> 亿</span></div>
+        <div style="margin-top:4px;">{delta_html}</div>
+        <div style="margin-top:8px;font-size:16px;">
+            {" &nbsp;|&nbsp; ".join(exchange_parts)}
+        </div>
+        {yest_turnover_html}
+    </div>"""
+
+    st.html(f"""
+    <div style="display:flex;gap:16px;align-items:stretch;">
+        {card1_html}
+        {card2_html}
+    </div>""")
 
     # ======== Row 2: 10日成交额趋势 ========
     st.divider()
