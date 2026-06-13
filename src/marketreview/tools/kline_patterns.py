@@ -192,8 +192,12 @@ def detect_bullish_engulfing_shadow(
     if curr_c <= curr_o:
         return None
 
-    # ③ 今收盘 ≥ 昨最高（阳线实体覆盖长上影线区域）
+    # ③ 今开 ≤ 昨高 — 排除大幅跳空高开（今开比昨高还高）
     prev_h = float(prev["high"])
+    if curr_o > prev_h:
+        return None
+
+    # ④ 今收盘 ≥ 昨最高（阳线实体覆盖长上影线区域）
     if curr_c < prev_h:
         return None
 
@@ -216,7 +220,8 @@ def detect_bearish_engulfing_shadow(
     条件:
       1. 昨：有下影线
       2. 今：收阴线
-      3. 今：收盘价 ≤ 昨最低价（阴线实体覆盖了昨下影线区域）
+      3. 今开 ≥ 昨低（排除大幅跳空低开）
+      4. 今收 ≤ 昨最低价（阴线实体覆盖了昨下影线区域）
     """
     if len(df) < 2:
         return None
@@ -240,8 +245,12 @@ def detect_bearish_engulfing_shadow(
     if curr_c >= curr_o:
         return None
 
-    # ③ 今收盘 ≤ 昨最低（阴线实体覆盖长下影线区域）
+    # ③ 今开 ≥ 昨低 — 排除大幅跳空低开（今开比昨低还低）
     prev_l = float(prev["low"])
+    if curr_o < prev_l:
+        return None
+
+    # ④ 今收 ≤ 昨最低价（阴线实体覆盖了昨下影线区域）
     if curr_c > prev_l:
         return None
 
