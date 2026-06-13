@@ -18,6 +18,9 @@ from __future__ import annotations
 from typing import Any
 import pandas as pd
 import numpy as np
+from marketreview.log_util import get_logger
+
+log = get_logger(__name__)
 
 
 # ──────────────────────────────────────────────────────
@@ -467,6 +470,13 @@ def detect_patterns(
             # Skip detectors that fail on insufficient data / bad inputs
             continue
 
+    # Log detected patterns with trigger candle dates
+    if results:
+        last_date = str(df["date"].iloc[-1])[:10] if "date" in df.columns else "?"
+        prev_date = str(df["date"].iloc[-2])[:10] if len(df) >= 2 and "date" in df.columns else "?"
+        names = [p["name"] for p in results]
+        log.info("detect_patterns: type=%s prev=%s curr=%s → %s",
+                 obj_type, prev_date, last_date, names)
     return results
 
 

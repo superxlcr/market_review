@@ -14,6 +14,9 @@ import time as _time
 import tushare as ts
 from datetime import datetime, timedelta
 from .cache_manager import CacheManager
+from marketreview.log_util import get_logger
+
+log = get_logger(__name__)
 
 
 # ── constants ──
@@ -80,9 +83,10 @@ class DataProvider:
 
         proxy_latest = self.cache.get_latest_date(_PROXY_CODE)
         proxy_earliest = self.cache.get_earliest_date(_PROXY_CODE)
-        print(f"[DataProvider] ensure_data_loaded({end_date}): "
-              f"fetch_start={fetch_start} check_start={check_start} "
-              f"proxy_latest={proxy_latest} proxy_earliest={proxy_earliest}")
+        log.info("ensure_data_loaded: end=%s fetch_start=%s check_start=%s "
+                 "proxy_latest=%s proxy_earliest=%s",
+                 end_date, fetch_start, check_start,
+                 proxy_latest, proxy_earliest)
 
         if proxy_latest:
             proxy_latest_clean = proxy_latest.replace("-", "")
@@ -104,6 +108,7 @@ class DataProvider:
 
         # ── If nothing missing, just verify indices + stock_basic + daily_basic ──
         if not missing_ranges:
+            log.info("ensure_data_loaded: cache up to date, verifying indices+coverage")
             idx_missing = self._ensure_indices_loaded(
                 fetch_start, end_date, progress_cb
             )
@@ -419,6 +424,8 @@ class DataProvider:
 
         # If cache is behind, return what we have (don't do per-stock API)
         effective_end = min(end_date, latest_clean)
+        log.debug("get_daily: code=%s requested_end=%s latest_cached=%s effective_end=%s",
+                  code, end_date, latest_clean, effective_end)
         cached = self.cache.get_daily(
             code, end=effective_end, limit=lookback_days
         )

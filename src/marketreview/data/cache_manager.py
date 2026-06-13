@@ -2,6 +2,10 @@ import sqlite3
 import os
 from datetime import datetime, timedelta
 
+from marketreview.log_util import get_logger
+
+log = get_logger(__name__)
+
 DB_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
 DB_PATH = os.path.join(DB_DIR, "marketreview.db")
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
@@ -107,7 +111,10 @@ class CacheManager:
 
         with self._get_conn() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        log.debug("get_daily: code=%s end=%s limit=%s → %d rows",
+                  code, end, limit, len(result))
+        return result
 
     def get_latest_date(self, code: str) -> str | None:
         """Return the most recent cached date for a code, or None."""
@@ -352,6 +359,7 @@ class CacheManager:
             conn.execute(sql, [trade_date, count, profit_count,
                                profit_pct, stock_codes])
             conn.commit()
+        log.info("upsert_wave33: date=%s count=%s profit=%s", trade_date, count, profit_count)
 
     def get_wave33_range(self, limit: int = 15, end_date: str | None = None) -> list[dict]:
         """
@@ -371,7 +379,10 @@ class CacheManager:
                    LIMIT ?""",
                 [end_date, limit],
             ).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        log.info("get_wave33_range: end_date=%s limit=%s → %d rows",
+                 end_date, limit, len(result))
+        return result
 
     def has_wave33_date(self, trade_date: str) -> bool:
         """Return True if wave33_cache has this date."""

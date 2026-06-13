@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 
 from marketreview.data.data_provider import DataProvider
 from marketreview.tools.technical import rows_to_df
+from marketreview.log_util import get_logger
+
+log = get_logger(__name__)
 
 
 class DashboardService:
@@ -253,6 +256,9 @@ class DashboardService:
         missing_use = [d for d in use_dates
                        if not self._dp.cache.has_wave33_date(d)]
         if not missing_use:
+            log.info("ensure_wave33: FAST PATH — all %d USE dates cached "
+                     "(end=%s, range=%s..%s)",
+                     len(use_dates), td_clean, use_dates[-1], use_dates[0])
             self._precompute_cumulative_profit(use_dates, progress_cb=progress_cb)
             return {
                 "scanned": 0,
@@ -265,6 +271,10 @@ class DashboardService:
         missing_cache = [d for d in cache_dates
                          if not self._dp.cache.has_wave33_date(d)]
         already_cached = len(cache_dates) - len(missing_cache)
+        log.info("ensure_wave33: SLOW PATH — %d/%d USE missing, "
+                 "scanning %d/%d CACHE dates (end=%s)",
+                 len(missing_use), len(use_dates),
+                 len(missing_cache), len(cache_dates), td_clean)
 
         if missing_cache:
             scan_wave33(missing_cache, self._dp, progress_cb=progress_cb)
@@ -421,6 +431,8 @@ class DashboardService:
 
         # Need: chart_days for display + rolling_days for the earliest bar's window
         fetch_days = chart_days + rolling_days
+        log.info("get_wave33_data: end_date=%s chart_days=%s rolling_days=%s "
+                 "fetch_days=%s", end_date, chart_days, rolling_days, fetch_days)
         rows = self._dp.cache.get_wave33_range(limit=fetch_days, end_date=end_date)
         rows = list(reversed(rows))  # chronological (oldest first)
 

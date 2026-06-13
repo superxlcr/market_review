@@ -17,6 +17,9 @@ import numpy as np
 
 from ..data.data_provider import DataProvider
 from .technical import rows_to_df, calc_kd_standard, calc_rsi, calc_wr
+from ..log_util import get_logger
+
+log = get_logger(__name__)
 
 
 def scan_wave33(
@@ -54,12 +57,16 @@ def scan_wave33(
     full_start_dt = earliest_dt - timedelta(days=180)
     full_lookback = (latest_dt - full_start_dt).days
 
+    log.info("scan_wave33: %d dates to scan (%s..%s), full_lookback=%d days",
+             len(dates_to_scan), earliest_date, latest_date, full_lookback)
+
     results: Dict[str, dict] = {}
     total_dates = len(dates_to_scan)
 
     # ── Stock list + market caps (by date) ──
     stocks = dp.get_stock_list(latest_date)
     if not stocks:
+        log.warning("scan_wave33: no qualifying stocks for date=%s", latest_date)
         return {}
 
     market_caps_by_date: Dict[str, Dict[str, float]] = {}
@@ -117,6 +124,8 @@ def scan_wave33(
         )
 
     loaded = len(stock_cache)
+    log.info("scan_wave33 Phase 1 done: %d/%d stocks loaded + indicators computed",
+             loaded, total_stocks)
     if progress_cb:
         progress_cb("wave33_scan", loaded, total_stocks, str(total_dates))
 
