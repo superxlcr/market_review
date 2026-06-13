@@ -421,11 +421,22 @@ def calc_kd(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:
 #       价格新高 RSI 未新高 → 顶背离
 #       价格新低 RSI 未新低 → 底背离
 
-# TODO 3: calc_wr(df, period=10) → list[float]
-#   - 威廉指数 Williams %R
-#   - 公式：WR = (N日最高价 - 收盘价) / (N日最高价 - N日最低价) × 100
-#   - 值域 0~100，>80 超卖，<20 超买（注意和 KDJ/RSI 相反）
-#   - 用途：评估是否留上影线，主要看指数和行业板块，个股不怎么用
+def calc_wr(df: pd.DataFrame, period: int = 10) -> list[float]:
+    """
+    Williams %R (威廉指数).
+
+    Formula (通达信):
+        WR = (HHV(HIGH, N) - CLOSE) / (HHV(HIGH, N) - LLV(LOW, N)) * 100
+
+    Value range 0-100. >80 = oversold, <20 = overbought (inverted vs KDJ/RSI).
+
+    Returns a list of floats, same length as df (NaN for first N-1 rows).
+    """
+    high_n = df["high"].rolling(period).max()
+    low_n = df["low"].rolling(period).min()
+    rng = high_n - low_n
+    wr = (high_n - df["close"]) / rng.replace(0, float("nan")) * 100
+    return wr.tolist()
 
 # TODO 4: calc_bias_v2(df, periods=[6,12,24]) → dict[str, list[float]]
 #   - 乖离率，现有实现基本正确，待确认参数和用法细节

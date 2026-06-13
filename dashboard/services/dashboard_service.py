@@ -214,3 +214,130 @@ class DashboardService:
         except Exception as e:
             print(f"[DashboardService] get_industry_frequency failed: {e}")
             return None
+
+    # ---- wave33 ----
+
+    def ensure_wave33_computed(self, trade_date: str, progress_cb=None) -> dict:
+        """
+        Ensure wave33_cache has results for the last 20 trading days.
+        Scans any missing days (most-recent-first) using pre-loaded cache.
+        Called from console page after ensure_data_loaded().
+
+        Returns {"scanned": int, "cached": int, "elapsed": float}.
+        """
+        import time as _time
+        from marketreview.tools.wave33 import scan_wave33
+
+        t0 = _time.time()
+
+        # Determine last 40 trading days (15 chart + 21 rolling window + margin)
+        index_rows = self._dp.get_daily(
+            "000001.SH", end_date=trade_date, lookback_days=90
+        )
+        all_dates = sorted(set(
+            r["date"].replace("-", "") for r in index_rows
+        ), reverse=True)
+        td_clean = trade_date.replace("-", "")
+        target_dates = [d for d in all_dates if d <= td_clean][:40]
+
+        missing = []
+        already_cached = 0
+        for d in target_dates:
+            if self._dp.cache.has_wave33_date(d):
+                already_cached += 1
+            else:
+                missing.append(d)
+
+        scanned = 0
+        if missing:
+            scan_wave33(missing, self._dp, progress_cb=progress_cb)
+            scanned = len(missing)
+
+        elapsed = _time.time() - t0
+        return {
+            "scanned": scanned,
+            "cached": already_cached,
+            "elapsed": round(elapsed, 1),
+        }
+
+    def get_wave33_data(self, chart_days: int = 15,
+                       rolling_days: int = 21) -> dict:
+        """
+        Read wave33 results from cache and compute rolling cumulative counts.
+        Each bar = unique stocks passing in the [date - rolling_days td, date] window.
+        Chart shows `chart_days` bars; rolling window is `rolling_days` trading days.
+        Returns {dates, counts, profit_counts, profit_pcts, trend}.
+        Always READ-ONLY — never triggers computation.
+        """
+        import json
+        from marketreview.tools.wave33 import compute_trend
+
+        # Need: chart_days for display + rolling_days for the earliest bar's window
+        fetch_days = chart_days + rolling_days
+        rows = self._dp.cache.get_wave33_range(limit=fetch_days)
+        rows = list(reversed(rows))  # chronological (oldest first)
+
+        if not rows:
+            return {
+                "dates": [], "counts": [], "profit_counts": [],
+                "profit_pcts": [], "trend": {
+                    "direction": "flat", "streak": 0, "label": "维持，盘整中"
+                },
+            }
+
+        # Build date-indexed lookup: {trade_date: {"all": set, "profit": set}}
+        day_data = {}
+        for r in rows:
+            try:
+                data = json.loads(r["stock_codes"]) if r["stock_codes"] else {}
+            except (json.JSONDecodeError, TypeError):
+                codes_list = json.loads(r["stock_codes"]) if r["stock_codes"] else []
+                data = {"all": codes_list, "profit": []}
+            day_data[r["trade_date"]] = {
+                "all": set(data.get("all", [])),
+                "profit": set(data.get("profit", [])),
+            }
+
+        all_dates = sorted(day_data.keys())  # chronological
+
+        dates = []
+        counts = []
+        profit_counts = []
+        profit_pcts = []
+
+        # For each target date, compute rolling cumulative over last `rolling_days` days
+        for i, target_date in enumerate(all_dates):
+            # Find the start of the rolling window (rolling_days trading days before target)
+            window_start_idx = max(0, i - rolling_days + 1)
+            window_dates = all_dates[window_start_idx:i + 1]
+
+            cum_all = set()
+            cum_profit = set()
+            for wd in window_dates:
+                cum_all |= day_data[wd]["all"]
+                cum_profit |= day_data[wd]["profit"]
+
+            dates.append(target_date)
+            counts.append(len(cum_all))
+            profit_counts.append(len(cum_profit))
+            profit_pcts.append(round(len(cum_profit) / len(cum_all) * 100, 1)
+                             if cum_all else 0.0)
+
+        # Only return the last `chart_days` entries for the chart
+        dates = dates[-chart_days:]
+        counts = counts[-chart_days:]
+        profit_counts = profit_counts[-chart_days:]
+        profit_pcts = profit_pcts[-chart_days:]
+
+        rev_counts = list(reversed(counts))
+        trend = compute_trend(rev_counts) if rev_counts else {
+            "direction": "flat", "streak": 0, "label": "维持，盘整中"
+        }
+
+        return {
+            "dates": dates,
+            "counts": counts,
+            "profit_counts": profit_counts,
+            "profit_pcts": profit_pcts,
+            "trend": trend,
+        }

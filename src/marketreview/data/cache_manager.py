@@ -30,6 +30,16 @@ class CacheManager:
             "l1_code", "l1_name", "l2_code", "l2_name",
             "l3_code", "l3_name",
         },
+        "stock_basic_cache": {
+            "ts_code", "name", "list_date", "is_st",
+        },
+        "daily_basic_cache": {
+            "ts_code", "trade_date", "total_mv",
+        },
+        "wave33_cache": {
+            "trade_date", "count", "profit_count", "profit_pct",
+            "stock_codes", "updated_at",
+        },
     }
 
     def _init_schema(self):
@@ -40,6 +50,9 @@ class CacheManager:
             conn.executescript("DROP TABLE IF EXISTS tushare_cache")
             conn.executescript("DROP TABLE IF EXISTS index_weight_cache")
             conn.executescript("DROP TABLE IF EXISTS stock_industry_cache")
+            conn.executescript("DROP TABLE IF EXISTS stock_basic_cache")
+            conn.executescript("DROP TABLE IF EXISTS daily_basic_cache")
+            conn.executescript("DROP TABLE IF EXISTS wave33_cache")
             with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
                 conn.executescript(f.read())
             conn.commit()
@@ -219,3 +232,120 @@ class CacheManager:
         with self._get_conn() as conn:
             conn.executemany(sql, rows)
             conn.commit()
+
+    # ------- stock_basic_cache -------
+
+    def upsert_stock_basic(self, rows: list[dict]):
+        """
+        Batch upsert stock basic info.
+        Each row: {ts_code, name, list_date, is_st}.
+        is_st: 1 = ST/*ST, 0 = normal.
+        """
+        sql = """
+            INSERT OR REPLACE INTO stock_basic_cache
+                (ts_code, name, list_date, is_st)
+            VALUES (:ts_code, :name, :list_date, :is_st)
+        """
+        with self._get_conn() as conn:
+            conn.executemany(sql, rows)
+            conn.commit()
+
+    def get_stock_basic(self) -> list[dict]:
+        """Return all cached stock basic rows."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT ts_code, name, list_date, is_st FROM stock_basic_cache"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_stock_basic_count(self) -> int:
+        """Return count of cached stocks."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM stock_basic_cache"
+            ).fetchone()
+        return row["cnt"] if row else 0
+
+    # ------- daily_basic_cache -------
+
+    def upsert_daily_basic_bulk(self, rows: list[dict]):
+        """
+        Bulk upsert daily basic rows (market cap).
+        Each row: {ts_code, trade_date, total_mv}.
+        """
+        sql = """
+            INSERT OR REPLACE INTO daily_basic_cache
+                (ts_code, trade_date, total_mv)
+            VALUES (:ts_code, :trade_date, :total_mv)
+        """
+        with self._get_conn() as conn:
+            conn.executemany(sql, rows)
+            conn.commit()
+
+    def get_daily_basic(self, trade_date: str) -> list[dict]:
+        """
+        Return all daily_basic rows for a given trade_date.
+        Returns [{ts_code, total_mv}, ...].
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT ts_code, total_mv
+                   FROM daily_basic_cache
+                   WHERE trade_date = ?""",
+                [trade_date],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def daily_basic_has_range(self, start_date: str, end_date: str) -> bool:
+        """
+        Return True if daily_basic_cache has any data in [start_date, end_date].
+        A single date hit implies the whole range was likely fetched.
+        """
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM daily_basic_cache
+                   WHERE trade_date >= ? AND trade_date <= ?
+                   LIMIT 1""",
+                [start_date, end_date],
+            ).fetchone()
+        return row is not None
+
+    # ------- wave33_cache -------
+
+    def upsert_wave33(self, trade_date: str, count: int,
+                       profit_count: int, profit_pct: float,
+                       stock_codes: str):
+        """Insert or replace one wave33 daily result."""
+        sql = """
+            INSERT OR REPLACE INTO wave33_cache
+                (trade_date, count, profit_count, profit_pct, stock_codes, updated_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+        """
+        with self._get_conn() as conn:
+            conn.execute(sql, [trade_date, count, profit_count,
+                               profit_pct, stock_codes])
+            conn.commit()
+
+    def get_wave33_range(self, limit: int = 15) -> list[dict]:
+        """
+        Return last N rows from wave33_cache (trade_date DESC).
+        Returns [{trade_date, count, profit_count, profit_pct, stock_codes}, ...].
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT trade_date, count, profit_count, profit_pct, stock_codes
+                   FROM wave33_cache
+                   ORDER BY trade_date DESC
+                   LIMIT ?""",
+                [limit],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def has_wave33_date(self, trade_date: str) -> bool:
+        """Return True if wave33_cache has this date."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM wave33_cache WHERE trade_date = ?",
+                [trade_date],
+            ).fetchone()
+        return row is not None

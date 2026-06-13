@@ -36,7 +36,25 @@ CREATE TABLE IF NOT EXISTS stock_industry_cache (
     l3_name   TEXT
 );
 
--- Migration: add l3_code column to existing tables
--- SQLite does not support IF NOT EXISTS for ALTER TABLE, so ignore errors
--- if the column already exists.
--- ALTER TABLE stock_industry_cache ADD COLUMN l3_code TEXT;
+CREATE TABLE IF NOT EXISTS stock_basic_cache (
+    ts_code   TEXT PRIMARY KEY,
+    name      TEXT,
+    list_date TEXT,
+    is_st     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS daily_basic_cache (
+    ts_code    TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    total_mv   REAL,
+    PRIMARY KEY (ts_code, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS wave33_cache (
+    trade_date   TEXT PRIMARY KEY,
+    count        INTEGER NOT NULL,
+    profit_count INTEGER NOT NULL,
+    profit_pct   REAL NOT NULL,
+    stock_codes  TEXT,
+    updated_at   TEXT DEFAULT (datetime('now'))
+);

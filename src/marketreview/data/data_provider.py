@@ -23,6 +23,7 @@ _CHUNK_DAYS = 30           # calendar days per date-range chunk (~20 trading day
 _FETCH_DAYS = 1000         # calendar days to FETCH (~670 trading days)
 _CHECK_DAYS = 500          # calendar days to REQUIRE in cache (tighter, leaves headroom)
 MAX_PAGES_PER_CHUNK = 30   # safety cap per chunk: ~150k records max
+_DB_FETCH_DAYS = 60        # calendar days for daily_basic fetch (wave33 needs ~20 trading days)
 
 # Indices tracked by the dashboard (api.daily doesn't return index data,
 # so we fetch them via api.index_daily separately).
@@ -71,6 +72,8 @@ class DataProvider:
         fetch_start = fetch_start_dt.strftime("%Y%m%d")
         check_start_dt = end_dt - timedelta(days=_CHECK_DAYS)
         check_start = check_start_dt.strftime("%Y%m%d")
+        db_start_dt = end_dt - timedelta(days=_DB_FETCH_DAYS)
+        db_start = db_start_dt.strftime("%Y%m%d")
 
         # ── Determine what date ranges are missing ──
         missing_ranges: list[tuple[str, str]] = []
@@ -99,15 +102,20 @@ class DataProvider:
                     (fetch_start, _yesterday(proxy_earliest_clean))
                 )
 
-        # ── If nothing missing, just verify indices ──
+        # ── If nothing missing, just verify indices + stock_basic + daily_basic ──
         if not missing_ranges:
             idx_missing = self._ensure_indices_loaded(
                 fetch_start, end_date, progress_cb
+            )
+            self._fetch_stock_basic_once()
+            db_pages = self._ensure_daily_basic_loaded(
+                db_start, end_date
             )
             return {
                 "status": "ok", "elapsed": 0.0,
                 "chunks": 0, "note": "cache up to date",
                 "index_chunks": idx_missing,
+                "db_pages": db_pages,
             }
 
         # ── Fetch each missing range ──
@@ -133,10 +141,19 @@ class DataProvider:
                 adj_pages_total += ap
                 chunk_idx += 1
                 if progress_cb:
-                    progress_cb("chunk", chunk_idx, total_chunks)
+                    progress_cb("chunk", chunk_idx, total_chunks,
+                                f"{chunk_start}~{chunk_end}")
 
         # ── Load index data ──
         idx_chunks = self._ensure_indices_loaded(fetch_start, end_date, progress_cb)
+
+        # ── Ensure stock_basic list is cached (once, first-run only) ──
+        self._fetch_stock_basic_once()
+
+        # ── Load daily_basic (market cap) ──
+        db_pages = self._ensure_daily_basic_loaded(
+            db_start, end_date, progress_cb
+        )
 
         if progress_cb:
             progress_cb("done", 0, 0)
@@ -149,6 +166,7 @@ class DataProvider:
             "raw_pages": raw_pages_total,
             "adj_pages": adj_pages_total,
             "index_chunks": idx_chunks,
+            "db_pages": db_pages,
         }
 
     def check_cache_coverage(self, end_date: str) -> bool:
@@ -177,6 +195,12 @@ class DataProvider:
             ie = self.cache.get_earliest_date(idx_code)
             if not ie or ie.replace("-", "") > check_start:
                 return False
+
+        # Verify daily_basic_cache has data for the target date range.
+        # Without this, wave33 scan silently produces 0 results (all stocks
+        # filtered out by missing market-cap data).
+        if not self.cache.daily_basic_has_range(check_start, end_date):
+            return False
 
         return True
 
@@ -504,6 +528,144 @@ class DataProvider:
         if new_rows:
             self.cache.upsert_stock_industries(new_rows)
         return cached
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Stock basic (fetched once, cached permanently)
+    # ═══════════════════════════════════════════════════════════════
+
+    def _fetch_stock_basic_once(self) -> list[dict]:
+        """
+        Fetch full A-share stock list from Tushare stock_basic API.
+        Caches permanently in stock_basic_cache. Called once on first run.
+        Returns the list of dicts.
+        """
+        existing = self.cache.get_stock_basic()
+        if existing:
+            return existing
+
+        rows = []
+        try:
+            df = self._api.stock_basic(
+                exchange="", list_status="L",
+                fields="ts_code,name,list_date",
+            )
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    code = str(r["ts_code"])
+                    if not (code.endswith(".SH") or code.endswith(".SZ")):
+                        continue
+                    name = str(r.get("name", ""))
+                    rows.append({
+                        "ts_code": code,
+                        "name": name,
+                        "list_date": str(r.get("list_date", "")),
+                        "is_st": 1 if ("ST" in name.upper() or
+                                       "*ST" in name.upper()) else 0,
+                    })
+        except Exception as e:
+            print(f"[DataProvider] stock_basic API failed: {e}")
+            return []
+
+        if rows:
+            self.cache.upsert_stock_basic(rows)
+        return rows
+
+    def get_stock_list(self, trade_date: str) -> list[dict]:
+        """
+        Return list of qualifying A-shares for wave33 scanning.
+        Filters: non-ST, listed >= ~420 calendar days (~300 trading days).
+        Returns [{ts_code, name, list_date}, ...].
+        """
+        rows = self._fetch_stock_basic_once()
+        if not rows:
+            return []
+
+        trade_date = trade_date.replace("-", "")
+        trade_dt = datetime.strptime(trade_date, "%Y%m%d")
+
+        qualifying = []
+        for s in rows:
+            if s.get("is_st"):
+                continue
+            list_date_str = s.get("list_date", "")
+            if not list_date_str:
+                continue
+            try:
+                list_dt = datetime.strptime(list_date_str, "%Y%m%d")
+            except Exception:
+                continue
+            if (trade_dt - list_dt).days < 420:
+                continue
+            qualifying.append(s)
+
+        return qualifying
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Daily basic (market cap) — cached with K-line
+    # ═══════════════════════════════════════════════════════════════
+
+    def _ensure_daily_basic_loaded(
+        self, start_date: str, end_date: str, progress_cb=None,
+    ) -> int:
+        """
+        Fetch daily_basic (market cap) for the date range.
+        Called internally by ensure_data_loaded().
+        Skips ranges already in cache. Paginates to get all trading days.
+        Returns number of API pages fetched.
+        """
+        pages = 0
+        chunks = _date_chunks(start_date, end_date, _CHUNK_DAYS)
+        for chunk_start, chunk_end in chunks:
+            # Skip if already cached
+            if self.cache.daily_basic_has_range(chunk_start, chunk_end):
+                continue
+
+            offset = 0
+            while pages < MAX_PAGES_PER_CHUNK * len(chunks):
+                try:
+                    df = self._api.daily_basic(
+                        start_date=chunk_start, end_date=chunk_end,
+                        fields="ts_code,trade_date,total_mv",
+                        offset=offset, limit=_PAGE_SIZE,
+                    )
+                except Exception as e:
+                    print(f"[DataProvider] daily_basic({chunk_start}~{chunk_end}) offset={offset}: {e}")
+                    break
+
+                if df is None or df.empty:
+                    break
+
+                pages += 1
+                df = df.copy()
+                df["trade_date"] = df["trade_date"].astype(str)
+                df["total_mv"] = df["total_mv"].astype(float)
+
+                rows = []
+                for _, r in df.iterrows():
+                    rows.append({
+                        "ts_code": r["ts_code"],
+                        "trade_date": r["trade_date"],
+                        "total_mv": float(r["total_mv"]),
+                    })
+
+                if rows:
+                    self.cache.upsert_daily_basic_bulk(rows)
+
+                if len(df) < _PAGE_SIZE:
+                    break
+                offset += _PAGE_SIZE
+
+        return pages
+
+    def get_market_cap(self, trade_date: str) -> dict[str, float]:
+        """
+        Return {ts_code: total_mv} for all stocks on a given trade_date.
+        Reads from cache only — data must be pre-loaded.
+        """
+        trade_date = trade_date.replace("-", "")
+        rows = self.cache.get_daily_basic(trade_date)
+        return {r["ts_code"]: float(r["total_mv"])
+                for r in rows if r.get("total_mv")}
 
     # ═══════════════════════════════════════════════════════════════
     #  Utility

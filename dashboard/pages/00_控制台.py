@@ -108,33 +108,72 @@ if apply_btn:
 # ── Phase 2: execute data loading (when pending_load_date is set) ──
 _pending = st.session_state.pop("pending_load_date", None)
 if _pending:
-    # Quick check — if cache already covers this date, skip the spinner
+    # Quick check — if K-line + daily_basic cache covers this date,
+    # skip the heavy K-line loading, but still ensure wave33 is computed
+    # with detailed progress.
     if _service.check_cache_coverage(_pending):
+        with st.status("正在扫描 3浪3...", expanded=True) as status:
+            def _w33_progress(phase: str, current: int, total: int | None, extra: str = None):
+                if phase == "wave33_init":
+                    date_str = extra or "?"
+                    status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} | 共 {current} 只（共 {total} 天待扫）")
+                elif phase == "wave33_scan":
+                    parts = (extra or "?|?|?").split("|")
+                    d = parts[0]; di = parts[1] if len(parts) > 1 else "?"; dt = parts[2] if len(parts) > 2 else "?"
+                    status.update(label=f"3浪3 扫描: {d[:4]}-{d[4:6]}-{d[6:8]} | {current}/{total} 只（第 {di}/{dt} 天）")
+                elif phase == "wave33_date":
+                    date_str = extra or "?"
+                    status.update(label=f"3浪3 扫描完成: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
+
+            w33_result = _service.ensure_wave33_computed(_pending, progress_cb=_w33_progress)
+            status.update(
+                label=f"✅ 3浪3 扫描完成（扫描 {w33_result['scanned']} 天，"
+                      f"已缓存 {w33_result['cached']} 天，{w33_result['elapsed']}秒）",
+                state="complete",
+            )
         st.session_state.trade_date = _pending
         st.cache_data.clear()
         st.rerun()
 
     with st.status(f"正在加载 {_pending[:4]}-{_pending[4:6]}-{_pending[6:8]} 市场数据...", expanded=True) as status:
         _total_chunks = [None]  # mutable box for closure
-        def _progress(phase: str, current: int, total: int | None):
+        def _progress(phase: str, current: int, total: int | None, extra: str = None):
             if phase == "init":
                 _total_chunks[0] = total
                 status.update(label=f"准备拉取数据... (共 {total} 个日期段)")
             elif phase == "chunk":
                 t = _total_chunks[0] or 1
-                status.update(label=f"正在拉取股票数据... ({current}/{t} 日期段)")
+                date_range = extra or ""
+                status.update(label=f"拉取 K线: {date_range} ({current}/{t} 日期段)")
             elif phase == "index":
                 status.update(label=f"正在拉取指数数据... ({current}/{total} 个)")
+            elif phase == "wave33_init":
+                date_str = extra or "?"
+                status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} | 共 {current} 只（共 {total} 天待扫）")
+            elif phase == "wave33_scan":
+                parts = (extra or "?|?|?").split("|")
+                d = parts[0]; di = parts[1] if len(parts) > 1 else "?"; dt = parts[2] if len(parts) > 2 else "?"
+                status.update(label=f"3浪3 扫描: {d[:4]}-{d[4:6]}-{d[6:8]} | {current}/{total} 只（第 {di}/{dt} 天）")
+            elif phase == "wave33_date":
+                date_str = extra or "?"
+                status.update(label=f"3浪3 扫描完成: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
             elif phase == "done":
                 status.update(label="数据加载完成！", state="complete")
 
         result = _service.ensure_data_loaded(_pending, progress_cb=_progress)
+
+        # ── Wave33 scan (after K-line + market cap are cached) ──
+        w33_result = _service.ensure_wave33_computed(_pending, progress_cb=_progress)
+
         if result["status"] == "ok":
             status.update(
                 label=f"✅ 数据加载完成！（{result['elapsed']:.0f}秒，"
                       f"K线 {result.get('raw_pages', '?')} 页，"
                       f"因子 {result.get('adj_pages', '?')} 页，"
-                      f"指数 {result.get('index_chunks', 0)} 个）",
+                      f"指数 {result.get('index_chunks', 0)} 个，"
+                      f"市值 {result.get('db_pages', 0)} 页，"
+                      f"3浪3 扫描 {w33_result['scanned']} 天（已缓存 {w33_result['cached']} 天，"
+                      f"{w33_result['elapsed']:.0f}秒））",
                 state="complete",
             )
             st.session_state.trade_date = _pending
