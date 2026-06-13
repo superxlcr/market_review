@@ -3,11 +3,17 @@
 
 Pure computation module: reads from DataProvider cache, writes results to
 wave33_cache. No Tushare API calls.
+
+Optimisation: when scanning multiple dates, each stock's K-line is fetched
+ONCE for the full window, indicators are computed ONCE, and per-date checks
+are pure in-memory slices (no DB queries, no re-computation).
 """
 
 import json
-import numpy as np
+from datetime import datetime, timedelta
 from typing import Dict, List
+
+import numpy as np
 
 from ..data.data_provider import DataProvider
 from .technical import rows_to_df, calc_kd_standard, calc_rsi, calc_wr
@@ -23,7 +29,6 @@ def scan_wave33(
 
     Args:
         dates: Trading dates (YYYYMMDD), most-recent-first.
-               Each date requires 21 trading days of K-line ending on that date.
         dp: DataProvider instance (cache must be pre-loaded).
         progress_cb: Optional callable(phase, current, total, date_str).
 
@@ -31,86 +36,127 @@ def scan_wave33(
         {date: {count, profit_count, profit_pct, stock_codes}, ...}
         Only returns dates that were actually scanned (not already cached).
     """
-    results = {}
-    total_dates = len(dates)
+    # ── Determine which dates actually need scanning ──
+    dates_to_scan = [d for d in dates if not dp.cache.has_wave33_date(d)]
+    if not dates_to_scan:
+        return {}
 
-    for di, trade_date in enumerate(dates):
-        if dp.cache.has_wave33_date(trade_date):
+    latest_date = dates_to_scan[0]   # most recent
+    earliest_date = dates_to_scan[-1]  # furthest back
+
+    # Full window: earliest scan date - 60cal → latest scan date.
+    # 60 calendar days ≈ 40 trading days for WR(20) + SMA convergence margin.
+    latest_dt = datetime.strptime(latest_date, "%Y%m%d")
+    earliest_dt = datetime.strptime(earliest_date, "%Y%m%d")
+    full_start_dt = earliest_dt - timedelta(days=60)
+    full_lookback = (latest_dt - full_start_dt).days
+
+    results: Dict[str, dict] = {}
+    total_dates = len(dates_to_scan)
+
+    # ── Stock list + market caps (by date) ──
+    stocks = dp.get_stock_list(latest_date)
+    if not stocks:
+        return {}
+
+    market_caps_by_date: Dict[str, Dict[str, float]] = {}
+    for d in dates_to_scan:
+        market_caps_by_date[d] = dp.get_market_cap(d)
+
+    total_stocks = len(stocks)
+
+    if progress_cb:
+        progress_cb("wave33_init", total_stocks, total_dates, latest_date)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Phase 1 — Load K-line + compute indicators ONCE per stock
+    # ═══════════════════════════════════════════════════════════════════
+    #
+    # stock_cache[code] = (df, k_arr, wr10_arr, wr20_arr, rsi9_arr)
+    #   df          — pd.DataFrame, date ASC, qfq prices
+    #   k_arr       — np.array of K values (same length as df)
+    #   wr10_arr    — np.array of WR(10)
+    #   wr20_arr    — np.array of WR(20)
+    #   rsi9_arr    — np.array of RSI(9)
+
+    stock_cache: dict = {}
+
+    for si, stock in enumerate(stocks):
+        code = stock["ts_code"]
+
+        if progress_cb and si > 0 and si % 200 == 0:
+            progress_cb("wave33_load", si, total_stocks,
+                        f"加载K线|{total_dates}天待扫")
+
+        # Fetch full-window K-line once
+        rows = dp.get_daily(code, end_date=latest_date,
+                            lookback_days=full_lookback)
+        if len(rows) < 25:
             continue
 
-        # Get qualifying stock list
-        stocks = dp.get_stock_list(trade_date)
-        if not stocks:
+        df = rows_to_df(rows)
+        if len(df) < 21:
             continue
 
-        # Get market cap for this date
-        market_caps = dp.get_market_cap(trade_date)
+        df = DataProvider.raw_to_qfq(df)
 
-        qualifying_codes = []
-        profit_codes = []
-        total_stocks = len(stocks)
+        # Compute all indicators once on the full series
+        kd = calc_kd_standard(df)
+        wr10 = calc_wr(df, 10)
+        wr20 = calc_wr(df, 20)
+        rsi9 = calc_rsi(df)["RSI1"]
 
-        if progress_cb:
-            progress_cb("wave33_init", total_stocks, total_dates, trade_date)
+        stock_cache[code] = (
+            df,
+            np.array(kd["K"]),
+            np.array(wr10),
+            np.array(wr20),
+            np.array(rsi9),
+        )
 
-        for si, stock in enumerate(stocks):
-            code = stock["ts_code"]
+    loaded = len(stock_cache)
+    if progress_cb:
+        progress_cb("wave33_scan", loaded, total_stocks,
+                    f"{total_dates}天待扫|已加载{loaded}只")
 
-            if progress_cb and si > 0 and si % 200 == 0:
-                progress_cb("wave33_scan", si, total_stocks,
-                           f"{trade_date}|{di+1}|{total_dates}")
+    # ═══════════════════════════════════════════════════════════════════
+    # Phase 2 — Per-date check (pure in-memory slices)
+    # ═══════════════════════════════════════════════════════════════════
 
-            # Condition 4: market cap > 100万元
-            # Only reject when market cap is KNOWN to be too small;
-            # missing data (None) is not grounds for exclusion — daily_basic
-            # may have gaps on some dates (e.g. 2026-05-15).
+    for di, trade_date in enumerate(dates_to_scan):
+        market_caps = market_caps_by_date[trade_date]
+        qualifying_codes: list[str] = []
+        profit_codes: list[str] = []
+
+        for code, (df, k_arr, w10, w20, r9) in stock_cache.items():
+            # Market cap filter
             mv = market_caps.get(code)
             if mv is not None and mv <= 100:
                 continue
 
-            # Fetch K-line ending at trade_date.
-            # Need enough history: WR(20) requires 20 periods before first
-            # valid value, plus 5 check days → minimum 25, use 40 for margin.
-            rows = dp.get_daily(code, end_date=trade_date, lookback_days=40)
-            if len(rows) < 25:
+            # Find the row index for this trade_date — the last row with
+            # date <= trade_date.  df is sorted date ASC.
+            date_mask = df["date"] <= trade_date
+            n_rows = date_mask.sum()
+            if n_rows < 21:
                 continue
+            end_idx = n_rows - 1  # last valid row index for this date
 
-            df = rows_to_df(rows)
-            if len(df) < 21:
-                continue
-
-            # Convert to qfq
-            df = DataProvider.raw_to_qfq(df)
-
-            # Compute indicators once
-            kd = calc_kd_standard(df)
-            wr10 = calc_wr(df, 10)
-            wr20 = calc_wr(df, 20)
-            rsi_all = calc_rsi(df)
-            rsi9 = rsi_all["RSI1"]
-
-            # Check 5 conditions on last 5 trading days (indices -5..-1)
+            # Check 5 conditions on last 5 trading days (indices -5..-1
+            # relative to end_idx)
             all_5_pass = True
             for offset in range(-5, 0):
-                # Condition 1: K > 80
-                kv = kd["K"][offset]
-                if np.isnan(kv) or kv <= 80:
+                i = end_idx + offset + 1  # offset → absolute index
+                if np.isnan(k_arr[i]) or k_arr[i] <= 80:
                     all_5_pass = False
                     break
-
-                # Condition 2: WR(10) < 20 AND WR(20) < 20
-                w10 = wr10[offset]
-                w20 = wr20[offset]
-                if np.isnan(w10) or np.isnan(w20):
+                if np.isnan(w10[i]) or np.isnan(w20[i]):
                     all_5_pass = False
                     break
-                if w10 >= 20 or w20 >= 20:
+                if w10[i] >= 20 or w20[i] >= 20:
                     all_5_pass = False
                     break
-
-                # Condition 3: RSI(9) > 70
-                rv = rsi9[offset]
-                if np.isnan(rv) or rv <= 70:
+                if np.isnan(r9[i]) or r9[i] <= 70:
                     all_5_pass = False
                     break
 
@@ -120,9 +166,8 @@ def scan_wave33(
             qualifying_codes.append(code)
 
             # 20-day profit: close today vs 20 trading days ago
-            # iloc[-1] = today (trade_date), iloc[-21] = ~20 trading days ago
-            close_today = float(df["close"].iloc[-1])
-            close_20d_ago = float(df["close"].iloc[-21])
+            close_today = float(df["close"].iloc[end_idx])
+            close_20d_ago = float(df["close"].iloc[end_idx - 20])
             if close_today > close_20d_ago:
                 profit_codes.append(code)
 
