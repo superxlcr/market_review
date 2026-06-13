@@ -44,11 +44,14 @@ def scan_wave33(
     latest_date = dates_to_scan[0]   # most recent
     earliest_date = dates_to_scan[-1]  # furthest back
 
-    # Full window: earliest scan date - 60cal → latest scan date.
-    # 60 calendar days ≈ 40 trading days for WR(20) + SMA convergence margin.
+    # Full window: earliest scan date - 180cal → latest scan date.
+    # 180 calendar days ≈ 120 trading days — enough for WR(20) + SMA(9)
+    # convergence (SMA seed weight decays below 0.01% after ~60 iterations).
+    # Was 60cal (~40td), which caused RSI to deviate by 10+ points when the
+    # earliest scan date was close to the latest (few missing days).
     latest_dt = datetime.strptime(latest_date, "%Y%m%d")
     earliest_dt = datetime.strptime(earliest_date, "%Y%m%d")
-    full_start_dt = earliest_dt - timedelta(days=60)
+    full_start_dt = earliest_dt - timedelta(days=180)
     full_lookback = (latest_dt - full_start_dt).days
 
     results: Dict[str, dict] = {}
