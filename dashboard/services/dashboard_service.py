@@ -253,12 +253,135 @@ class DashboardService:
             scan_wave33(missing, self._dp, progress_cb=progress_cb)
             scanned = len(missing)
 
+        # ── Pre-compute cumulative profit (avoids per-stock DB queries on read path) ──
+        self._precompute_cumulative_profit(target_dates, progress_cb=progress_cb)
+
         elapsed = _time.time() - t0
         return {
             "scanned": scanned,
             "cached": already_cached,
             "elapsed": round(elapsed, 1),
         }
+
+    def _precompute_cumulative_profit(self, target_dates: list[str],
+                                      progress_cb=None) -> None:
+        """
+        Pre-compute cumulative 20-day profit for each target_date over a
+        21-trading-day rolling window, and store the count in each wave33_cache
+        row's stock_codes JSON blob (key ``cum_profit``).
+
+        This moves the expensive per-stock profit re-check from the read path
+        (get_wave33_data) to the write path (console), where a progress bar
+        provides feedback.
+        """
+        import json
+        from marketreview.tools.technical import rows_to_df
+
+        rolling_days = 21
+        rows = []
+        for d in target_dates:
+            row = self._dp.cache.get_wave33_row(d)
+            if row:
+                rows.append(row)
+        rows.sort(key=lambda r: r["trade_date"])  # chronological
+
+        if len(rows) < 2:
+            return
+
+        # Skip if all rows already have pre-computed cum_profit
+        all_cached = True
+        for r in rows:
+            try:
+                data = json.loads(r["stock_codes"]) if r["stock_codes"] else {}
+            except (json.JSONDecodeError, TypeError):
+                all_cached = False
+                break
+            if "cum_profit" not in data:
+                all_cached = False
+                break
+        if all_cached:
+            return
+
+        # Build day_data: {date: {"all": set, "profit": set}}
+        day_data: dict[str, dict] = {}
+        for r in rows:
+            try:
+                data = json.loads(r["stock_codes"]) if r["stock_codes"] else {}
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+            day_data[r["trade_date"]] = {
+                "all": set(data.get("all", [])),
+                "profit": set(data.get("profit", [])),
+            }
+
+        all_dates = sorted(day_data.keys())
+
+        # Collect (code, target_date) pairs and per-date cumulative union
+        date_cum_all: dict[str, set] = {}
+        for i, target_date in enumerate(all_dates):
+            window_start_idx = max(0, i - rolling_days + 1)
+            window_dates = all_dates[window_start_idx:i + 1]
+            cum_all: set = set()
+            for wd in window_dates:
+                cum_all |= day_data[wd]["all"]
+            date_cum_all[target_date] = cum_all
+
+        # Unique stocks across ALL cumulative unions
+        all_codes = sorted(set().union(*date_cum_all.values()))
+        if not all_codes:
+            return
+
+        # Pre-fetch stock data — ONE query per unique stock
+        latest_date = all_dates[-1]
+        stock_df_cache: dict[str, object] = {}  # code -> pd.DataFrame (date ASC, qfq)
+        total_codes = len(all_codes)
+
+        for idx, code in enumerate(all_codes):
+            if progress_cb and idx % 100 == 0:
+                progress_cb("wave33_cumprofit", idx, total_codes,
+                            str(len(all_dates)))
+
+            rows_daily = self._dp.get_daily(code, end_date=latest_date,
+                                            lookback_days=90)
+            if len(rows_daily) < 22:
+                continue
+            df = rows_to_df(rows_daily)
+            if len(df) < 21:
+                continue
+            df = DataProvider.raw_to_qfq(df)
+            stock_df_cache[code] = df
+
+        if progress_cb:
+            progress_cb("wave33_cumprofit", total_codes, total_codes,
+                        str(len(all_dates)))
+
+        # Update each wave33 row with cumulative profit count
+        for target_date in all_dates:
+            cum_all = date_cum_all.get(target_date, set())
+            cum_profit = 0
+            for code in cum_all:
+                df = stock_df_cache.get(code)
+                if df is None:
+                    continue
+                date_mask = df["date"] <= target_date
+                n_rows = date_mask.sum()
+                if n_rows < 21:
+                    continue
+                end_idx = n_rows - 1
+                if float(df["close"].iloc[end_idx]) > float(df["close"].iloc[end_idx - 20]):
+                    cum_profit += 1
+
+            row = self._dp.cache.get_wave33_row(target_date)
+            if not row:
+                continue
+            try:
+                sc_data = json.loads(row["stock_codes"]) if row["stock_codes"] else {}
+            except (json.JSONDecodeError, TypeError):
+                sc_data = {}
+            sc_data["cum_profit"] = cum_profit
+            self._dp.cache.update_wave33_stock_codes(
+                target_date, json.dumps(sc_data, ensure_ascii=False),
+            )
 
     def get_wave33_data(self, chart_days: int = 15,
                        rolling_days: int = 21) -> dict:
@@ -270,7 +393,7 @@ class DashboardService:
         Always READ-ONLY — never triggers computation.
         """
         import json
-        from marketreview.tools.wave33 import compute_trend
+        from marketreview.tools.wave33 import compute_trend, compute_trend_series
 
         # Need: chart_days for display + rolling_days for the earliest bar's window
         fetch_days = chart_days + rolling_days
@@ -285,7 +408,7 @@ class DashboardService:
                 },
             }
 
-        # Build date-indexed lookup: {trade_date: {"all": set, "profit": set}}
+        # Build date-indexed lookup: {trade_date: {"all": set, "profit": set, "cum_profit": int|None}}
         day_data = {}
         for r in rows:
             try:
@@ -296,6 +419,7 @@ class DashboardService:
             day_data[r["trade_date"]] = {
                 "all": set(data.get("all", [])),
                 "profit": set(data.get("profit", [])),
+                "cum_profit": data.get("cum_profit"),  # pre-computed, or None for old data
             }
 
         all_dates = sorted(day_data.keys())  # chronological
@@ -312,15 +436,25 @@ class DashboardService:
             window_dates = all_dates[window_start_idx:i + 1]
 
             cum_all = set()
-            cum_profit = set()
             for wd in window_dates:
                 cum_all |= day_data[wd]["all"]
-                cum_profit |= day_data[wd]["profit"]
+
+            # Read pre-computed cumulative profit when available (from
+            # _precompute_cumulative_profit), otherwise fall back to per-stock
+            # re-check on the TARGET date.
+            cached_cum = day_data[target_date].get("cum_profit")
+            if cached_cum is not None:
+                cum_profit = cached_cum
+            else:
+                cum_profit = 0
+                for code in cum_all:
+                    if self._dp.check_profit_on_date(code, target_date):
+                        cum_profit += 1
 
             dates.append(target_date)
             counts.append(len(cum_all))
-            profit_counts.append(len(cum_profit))
-            profit_pcts.append(round(len(cum_profit) / len(cum_all) * 100, 1)
+            profit_counts.append(cum_profit)
+            profit_pcts.append(round(cum_profit / len(cum_all) * 100, 1)
                              if cum_all else 0.0)
 
         # Only return the last `chart_days` entries for the chart
@@ -334,10 +468,18 @@ class DashboardService:
             "direction": "flat", "streak": 0, "label": "维持，盘整中"
         }
 
+        # Window boundary for the last (most recent) bar — used in sidebar label
+        last_window_end = all_dates[-1] if all_dates else ""
+        last_window_start_idx = max(0, len(all_dates) - rolling_days)
+        last_window_start = all_dates[last_window_start_idx] if all_dates else ""
+
         return {
             "dates": dates,
             "counts": counts,
             "profit_counts": profit_counts,
             "profit_pcts": profit_pcts,
             "trend": trend,
+            "trend_series": compute_trend_series(counts),
+            "last_window_start": last_window_start,
+            "last_window_end": last_window_end,
         }

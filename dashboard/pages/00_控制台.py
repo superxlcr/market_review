@@ -117,13 +117,18 @@ if _pending:
                 if phase == "wave33_init":
                     date_str = extra or "?"
                     status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} | 共 {current} 只（共 {total} 天待扫）")
+                elif phase == "wave33_load":
+                    status.update(label=f"加载K线: {current}/{total} 只（共 {extra} 天待扫）")
                 elif phase == "wave33_scan":
-                    parts = (extra or "?|?|?").split("|")
-                    d = parts[0]; di = parts[1] if len(parts) > 1 else "?"; dt = parts[2] if len(parts) > 2 else "?"
-                    status.update(label=f"3浪3 扫描: {d[:4]}-{d[4:6]}-{d[6:8]} | {current}/{total} 只（第 {di}/{dt} 天）")
+                    status.update(label=f"K线加载完成 ({current}/{total} 只)，开始逐日扫描（共 {extra} 天）...")
+                elif phase == "wave33_cumprofit":
+                    if current >= total:
+                        status.update(label=f"预计算累计盈利完成（{current} 只，共 {extra} 天）")
+                    else:
+                        status.update(label=f"预计算累计盈利: {current}/{total} 只（共 {extra} 天）")
                 elif phase == "wave33_date":
                     date_str = extra or "?"
-                    status.update(label=f"3浪3 扫描完成: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
+                    status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
 
             w33_result = _service.ensure_wave33_computed(_pending, progress_cb=_w33_progress)
             status.update(
@@ -150,13 +155,18 @@ if _pending:
             elif phase == "wave33_init":
                 date_str = extra or "?"
                 status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} | 共 {current} 只（共 {total} 天待扫）")
+            elif phase == "wave33_load":
+                status.update(label=f"加载K线: {current}/{total} 只（共 {extra} 天待扫）")
             elif phase == "wave33_scan":
-                parts = (extra or "?|?|?").split("|")
-                d = parts[0]; di = parts[1] if len(parts) > 1 else "?"; dt = parts[2] if len(parts) > 2 else "?"
-                status.update(label=f"3浪3 扫描: {d[:4]}-{d[4:6]}-{d[6:8]} | {current}/{total} 只（第 {di}/{dt} 天）")
+                status.update(label=f"K线加载完成 ({current}/{total} 只)，开始逐日扫描（共 {extra} 天）...")
+            elif phase == "wave33_cumprofit":
+                if current >= total:
+                    status.update(label=f"预计算累计盈利完成（{current} 只，共 {extra} 天）")
+                else:
+                    status.update(label=f"预计算累计盈利: {current}/{total} 只（共 {extra} 天）")
             elif phase == "wave33_date":
                 date_str = extra or "?"
-                status.update(label=f"3浪3 扫描完成: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
+                status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
             elif phase == "done":
                 status.update(label="数据加载完成！", state="complete")
 

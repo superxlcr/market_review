@@ -437,6 +437,39 @@ class DataProvider:
         """Return latest available trading date for a code from cache."""
         return self.cache.get_latest_date(code)
 
+    def check_profit_on_date(self, code: str, trade_date: str) -> bool:
+        """
+        Check if a stock closed higher than 20 trading days ago on a given date.
+
+        Reads from cache only — data must be pre-loaded.
+        Returns True if close_today > close_20d_ago (qfq prices).
+        """
+        import pandas as pd
+
+        rows = self.cache.get_daily(code, end=trade_date, limit=60)
+        if len(rows) < 22:
+            return False
+
+        # Build a minimal df sorted date ASC, convert to qfq, check profit
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return False
+        df = df.sort_values("date", ascending=True).reset_index(drop=True)
+        for col in ["close", "adj_factor"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        if len(df) < 21:
+            return False
+
+        latest_adj = df["adj_factor"].max()
+        if latest_adj <= 0:
+            return False
+
+        close_today = float(df["close"].iloc[-1]) * float(df["adj_factor"].iloc[-1]) / latest_adj
+        close_20d = float(df["close"].iloc[-21]) * float(df["adj_factor"].iloc[-21]) / latest_adj
+        return close_today > close_20d
+
     # ═══════════════════════════════════════════════════════════════
     #  Batch snapshot (cache-only)
     # ═══════════════════════════════════════════════════════════════

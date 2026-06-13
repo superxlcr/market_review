@@ -376,3 +376,21 @@ class CacheManager:
                 [trade_date],
             ).fetchone()
         return row is not None
+
+    def get_wave33_row(self, trade_date: str) -> dict | None:
+        """Read a single wave33_cache row by trade_date. Returns dict or None."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT trade_date, count, profit_count, profit_pct, stock_codes
+                   FROM wave33_cache WHERE trade_date = ?""",
+                [trade_date],
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_wave33_stock_codes(self, trade_date: str, stock_codes: str):
+        """Update only the stock_codes JSON blob for an existing wave33 row."""
+        sql = """UPDATE wave33_cache SET stock_codes = ?,
+                    updated_at = datetime('now') WHERE trade_date = ?"""
+        with self._get_conn() as conn:
+            conn.execute(sql, [stock_codes, trade_date])
+            conn.commit()

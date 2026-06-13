@@ -84,9 +84,8 @@ def scan_wave33(
     for si, stock in enumerate(stocks):
         code = stock["ts_code"]
 
-        if progress_cb and si > 0 and si % 200 == 0:
-            progress_cb("wave33_load", si, total_stocks,
-                        f"加载K线|{total_dates}天待扫")
+        if progress_cb and si > 0 and si % 50 == 0:
+            progress_cb("wave33_load", si, total_stocks, str(total_dates))
 
         # Fetch full-window K-line once
         rows = dp.get_daily(code, end_date=latest_date,
@@ -116,8 +115,7 @@ def scan_wave33(
 
     loaded = len(stock_cache)
     if progress_cb:
-        progress_cb("wave33_scan", loaded, total_stocks,
-                    f"{total_dates}天待扫|已加载{loaded}只")
+        progress_cb("wave33_scan", loaded, total_stocks, str(total_dates))
 
     # ═══════════════════════════════════════════════════════════════════
     # Phase 2 — Per-date check (pure in-memory slices)
@@ -197,6 +195,31 @@ def scan_wave33(
             progress_cb("wave33_date", di + 1, total_dates, trade_date)
 
     return results
+
+
+def compute_trend_series(counts: List[int]) -> List[str]:
+    """
+    Compute per-bar trend direction for a chronological (oldest-first) count series.
+
+    Matches compute_trend() logic at each bar position:
+      - count[i] > count[i-1] → "up"
+      - count[i] < count[i-1] → "down"
+      - equal → "flat"
+
+    Returns list of "up"|"down"|"flat" (same length as input).
+    """
+    n = len(counts)
+    if n == 0:
+        return []
+    dirs: List[str] = ["up"] * n  # first bar defaults to "up"
+    for i in range(1, n):
+        if counts[i] > counts[i - 1]:
+            dirs[i] = "up"
+        elif counts[i] < counts[i - 1]:
+            dirs[i] = "down"
+        else:
+            dirs[i] = "flat"
+    return dirs
 
 
 def compute_trend(counts: List[int]) -> dict:
