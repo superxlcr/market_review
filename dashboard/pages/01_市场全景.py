@@ -929,7 +929,114 @@ else:
     else:
         st.info("暂无成交额趋势数据")
 
+# ======== Row 3: 3浪3选股趋势 ========
 st.divider()
+st.markdown("**📈 3浪3选股趋势**")
+st.caption("近15日  |  🟥 数量较前日↑  🟩 数量较前日↓  |  ⬛折线 = 20日盈利数量")
+
+wave33_col, wave33_info = st.columns([5, 1])
+
+with wave33_col:
+    # --- Mock data (replace with real wave33 calculation later) ---
+    import plotly.graph_objects as go
+
+    _w33_dates = [
+        "05-26","05-27","05-28","05-29","05-30",
+        "06-02","06-03","06-04","06-05","06-06",
+        "06-09","06-10","06-11","06-12","06-13",
+    ]
+    _w33_counts = [58, 62, 59, 71, 68, 78, 85, 82, 96, 91, 89, 102, 108, 115, 127]
+    _w33_profit = [36, 41, 37, 47, 44, 53, 57, 54, 63, 58, 52, 67, 74, 79, 89]
+
+    _w33_bar_colors = [
+        "rgba(229,57,53,0.55)" if i == 0 or _w33_counts[i] >= _w33_counts[i-1]
+        else "rgba(67,160,71,0.55)"
+        for i in range(len(_w33_counts))
+    ]
+
+    _w33_fig = go.Figure()
+    _w33_fig.add_trace(go.Bar(
+        x=_w33_dates, y=_w33_counts, marker_color=_w33_bar_colors,
+        text=[str(c) for c in _w33_counts],
+        textposition="outside", textfont=dict(size=12, color="#555"),
+        hovertemplate="%{x}<br>3浪3: %{y}只<extra></extra>",
+    ))
+    _w33_fig.add_trace(go.Scatter(
+        x=_w33_dates, y=_w33_profit,
+        mode="lines+markers+text",
+        line=dict(color="#212121", width=3),
+        marker=dict(color="#212121", size=10, line=dict(color="#fff", width=2)),
+        text=[str(c) for c in _w33_profit],
+        textposition="top center",
+        textfont=dict(size=12, color="#212121"),
+        hovertemplate="%{x}<br>20日盈利: %{y}只<extra></extra>",
+    ))
+    _w33_y_min = min(min(_w33_counts), min(_w33_profit)) * 0.80
+    _w33_y_max = max(_w33_counts) * 1.18
+    _w33_fig.update_layout(
+        template="plotly_white", height=330,
+        margin=dict(l=40, r=10, t=10, b=30),
+        showlegend=False,
+        yaxis=dict(title="股票数量", range=[_w33_y_min, _w33_y_max]),
+        xaxis=dict(title="", type="category", tickangle=0),
+    )
+    st.plotly_chart(_w33_fig, width="stretch")
+
+with wave33_info:
+    # 趋势判定: 连续同向天数
+    _streak = 0
+    _streak_dir = 0  # 1=up, -1=down
+    for i in range(len(_w33_counts)-1, 0, -1):
+        if _w33_counts[i] > _w33_counts[i-1]:
+            if _streak_dir == 0:
+                _streak_dir = 1
+            if _streak_dir == 1:
+                _streak += 1
+            else:
+                break
+        elif _w33_counts[i] < _w33_counts[i-1]:
+            if _streak_dir == 0:
+                _streak_dir = -1
+            if _streak_dir == -1:
+                _streak += 1
+            else:
+                break
+        else:
+            break
+
+    if _streak_dir == 1:
+        if _streak >= 5:
+            _trend_text = f"确认上升，连续上升 {_streak} 天"
+        elif _streak >= 3:
+            _trend_text = f"暂时上升，连续上升 {_streak} 天"
+        else:
+            _trend_text = f"维持上升，盘整中"
+    elif _streak_dir == -1:
+        if _streak >= 5:
+            _trend_text = f"确认下降，连续下降 {_streak} 天"
+        elif _streak >= 3:
+            _trend_text = f"暂时下降，连续下降 {_streak} 天"
+        else:
+            _trend_text = f"维持下降，盘整中"
+    else:
+        _trend_text = "盘整，无明确趋势"
+
+    _trend_color = "#e53935" if _streak_dir == 1 else ("#43a047" if _streak_dir == -1 else "#888")
+
+    _w33_today = _w33_counts[-1]
+    _w33_profit_today = _w33_profit[-1]
+    _w33_profit_pct = _w33_profit_today / _w33_today * 100 if _w33_today else 0
+
+    st.html(f"""
+    <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin-top:30px;">
+        <div style="font-size:16px;color:#888;margin-bottom:4px;">今日 3浪3</div>
+        <div style="font-size:34px;font-weight:bold;">{_w33_today}<span style="font-size:13px;color:#888;"> 只</span></div>
+        <div style="font-size:16px;color:#888;margin-top:10px;">20日盈利数量</div>
+        <div style="font-size:20px;color:#333;font-weight:bold;">{_w33_profit_today} 只<span style="color:#888;font-weight:normal;">（{_w33_profit_pct:.1f}%）</span></div>
+        <div style="font-size:16px;color:#888;margin-top:16px;">变化趋势</div>
+        <div style="font-size:19px;color:{_trend_color};font-weight:bold;">{_trend_text}</div>
+    </div>
+    """)
 
 # ============ 上证指数 ============
 with st.expander("📈 上证指数 000001.SH", expanded=True):
