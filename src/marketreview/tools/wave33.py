@@ -199,26 +199,46 @@ def scan_wave33(
 
 def compute_trend_series(counts: List[int]) -> List[str]:
     """
-    Compute per-bar trend direction for a chronological (oldest-first) count series.
+    Compute per-bar trend direction with hysteresis — the direction only flips
+    after 3 *consecutive* moves in the opposite direction. A flat (equal) day
+    resets the opposite-streak counter.
 
-    Matches compute_trend() logic at each bar position:
-      - count[i] > count[i-1] → "up"
-      - count[i] < count[i-1] → "down"
-      - equal → "flat"
+    This matches the intuition behind ``compute_trend()`` labels:
+      - streak 0‑2 → "维持<方向>，盘整中" (direction unchanged)
+      - streak ≥3  → "暂时/确认<方向>" (direction confirmed)
 
-    Returns list of "up"|"down"|"flat" (same length as input).
+    Returns list of "up"|"down" (same length as input, no "flat" — equal days
+    inherit the current direction).
     """
     n = len(counts)
     if n == 0:
         return []
-    dirs: List[str] = ["up"] * n  # first bar defaults to "up"
-    for i in range(1, n):
+    dirs: List[str] = []
+    current_dir = "up"
+    opposite_streak = 0
+    for i in range(n):
+        if i == 0:
+            dirs.append(current_dir)
+            continue
         if counts[i] > counts[i - 1]:
-            dirs[i] = "up"
+            if current_dir == "up":
+                opposite_streak = 0
+            else:
+                opposite_streak += 1
+                if opposite_streak >= 3:
+                    current_dir = "up"
+                    opposite_streak = 0
         elif counts[i] < counts[i - 1]:
-            dirs[i] = "down"
-        else:
-            dirs[i] = "flat"
+            if current_dir == "down":
+                opposite_streak = 0
+            else:
+                opposite_streak += 1
+                if opposite_streak >= 3:
+                    current_dir = "down"
+                    opposite_streak = 0
+        else:  # equal → reset streak, maintain direction
+            opposite_streak = 0
+        dirs.append(current_dir)
     return dirs
 
 

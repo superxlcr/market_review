@@ -932,7 +932,7 @@ else:
 # ======== Row 3: 3浪3选股趋势 ========
 st.divider()
 st.markdown("**📈 3浪3选股趋势**")
-st.caption("近15日  |  🟥 数量较前日↑  🟩 数量较前日↓  |  ⬛折线 = 20日盈利数量")
+st.caption("近15日  |  🟥 趋势上行  🟩 趋势下降  |  ⬛折线 = 20日盈利数量")
 
 wave33_col, wave33_info = st.columns([5, 1])
 
@@ -954,10 +954,9 @@ with wave33_col:
     if w33_counts:
         _w33_red = "rgba(229,57,53,0.55)"
         _w33_green = "rgba(67,160,71,0.55)"
-        _w33_grey = "rgba(150,150,150,0.55)"
         _w33_trend_series = w33_data.get("trend_series", [])
         _w33_bar_colors = [
-            _w33_red if d == "up" else (_w33_green if d == "down" else _w33_grey)
+            _w33_red if d == "up" else _w33_green
             for d in _w33_trend_series
         ] or [_w33_red] * len(w33_counts)  # fallback: all red
 
@@ -974,18 +973,16 @@ with wave33_col:
             line=dict(color="#212121", width=3),
             marker=dict(color="#212121", size=10, line=dict(color="#fff", width=2)),
             text=[str(c) for c in w33_profit],
-            textposition="top center",
+            textposition="bottom center",
             textfont=dict(size=12, color="#212121"),
             hovertemplate="%{x}<br>20日盈利: %{y}只<extra></extra>",
         ))
-        all_vals = w33_counts + w33_profit
-        _w33_y_min = min(all_vals) * 0.80 if all_vals else 0
         _w33_y_max = max(w33_counts) * 1.18 if w33_counts else 100
         _w33_fig.update_layout(
             template="plotly_white", height=330,
-            margin=dict(l=40, r=10, t=10, b=30),
+            margin=dict(l=40, r=10, t=10, b=50),
             showlegend=False,
-            yaxis=dict(title="股票数量", range=[_w33_y_min, _w33_y_max]),
+            yaxis=dict(title="股票数量", range=[0, _w33_y_max]),
             xaxis=dict(title="", type="category", tickangle=0),
         )
         st.plotly_chart(_w33_fig, width="stretch")
