@@ -28,6 +28,7 @@ class GetIndexTechnicalsInput(BaseModel):
     index_code: str = Field(..., description="指数代码，如 000001.SH（上证）或 399006.SZ（创业板）")
     index_name: str = Field(..., description="指数中文名，如 '上证指数'")
     lookback_days: int = Field(360, description="回看交易日数，默认360天（约1.5年，覆盖年线MA240）")
+    trade_date: str | None = Field(None, description="截止交易日期 YYYYMMDD，默认今天")
 
 
 class GetIndexTechnicalsTool(BaseTool):
@@ -38,10 +39,14 @@ class GetIndexTechnicalsTool(BaseTool):
     )
     args_schema: Type[BaseModel] = GetIndexTechnicalsInput
 
-    def _run(self, index_code: str, index_name: str, lookback_days: int = 120) -> str:
+    def _run(self, index_code: str, index_name: str, lookback_days: int = 120,
+             trade_date: str | None = None) -> str:
         if _data_provider is None:
             return json.dumps({"error": "DataProvider未初始化"}, ensure_ascii=False)
-        rows = _data_provider.get_daily(index_code, lookback_days=lookback_days)
+        from datetime import datetime
+        end_date = trade_date or datetime.now().strftime("%Y%m%d")
+        rows = _data_provider.get_daily(index_code, lookback_days=lookback_days,
+                                        end_date=end_date)
         summary = build_technical_summary(index_code, index_name, rows)
         return json.dumps(summary, ensure_ascii=False, indent=2)
 
@@ -91,7 +96,9 @@ class GetIndexContributionTool(BaseTool):
         if _data_provider is None:
             return json.dumps({"error": "DataProvider未初始化"}, ensure_ascii=False)
 
-        result = build_index_contribution(index_code, trade_date=None, dp=_data_provider)
+        from datetime import datetime
+        trade_date = datetime.now().strftime("%Y%m%d")
+        result = build_index_contribution(index_code, trade_date=trade_date, dp=_data_provider)
         if result is None:
             return json.dumps(
                 {"error": f"无法获取 {index_code} 权重贡献数据"},

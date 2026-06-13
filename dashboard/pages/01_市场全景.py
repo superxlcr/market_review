@@ -939,7 +939,8 @@ wave33_col, wave33_info = st.columns([5, 1])
 with wave33_col:
     import plotly.graph_objects as go
 
-    w33_data = _service.get_wave33_data(chart_days=15, rolling_days=21)
+    w33_data = _service.get_wave33_data(chart_days=15, rolling_days=21,
+                                        end_date=_trade_date_yyyymmdd)
     w33_dates_raw = w33_data["dates"]
     w33_counts = w33_data["counts"]
     w33_profit = w33_data["profit_counts"]
@@ -998,6 +999,8 @@ with wave33_info:
     _w33_today = w33_counts[-1] if w33_counts else 0
     _w33_profit_today = w33_profit[-1] if w33_profit else 0
     _w33_profit_pct = _w33_profit_today / _w33_today * 100 if _w33_today else 0
+    _w33_day_count = w33_data.get("latest_day_count", 0)
+    _w33_day_new = w33_data.get("latest_day_new", 0)
 
     # Build date range label for the rolling window
     def _fmt_ymd(d: str) -> str:
@@ -1009,9 +1012,11 @@ with wave33_info:
     _w33_range_label = f"（{_fmt_ymd(_w33_ws)} - {_fmt_ymd(_w33_we)}）" if _w33_ws and _w33_we else ""
 
     st.html(f"""
-    <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin-top:30px;">
+    <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin-top:0px;">
         <div style="font-size:16px;color:#888;margin-bottom:4px;">今日 3浪3{_w33_range_label}</div>
         <div style="font-size:34px;font-weight:bold;">{_w33_today}<span style="font-size:13px;color:#888;"> 只</span></div>
+        <div style="font-size:16px;color:#888;margin-top:10px;">当日选出 · 其中新增</div>
+        <div style="font-size:20px;color:#333;font-weight:bold;">{_w33_day_count} 只<span style="color:#888;font-weight:normal;"> · </span><span style="color:#333;">{_w33_day_new} 只</span></div>
         <div style="font-size:16px;color:#888;margin-top:10px;">20日盈利数量</div>
         <div style="font-size:20px;color:#333;font-weight:bold;">{_w33_profit_today} 只<span style="color:#888;font-weight:normal;">（{_w33_profit_pct:.1f}%）</span></div>
         <div style="font-size:16px;color:#888;margin-top:16px;">变化趋势</div>

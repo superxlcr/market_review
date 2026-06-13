@@ -23,7 +23,7 @@ _CHUNK_DAYS = 30           # calendar days per date-range chunk (~20 trading day
 _FETCH_DAYS = 1000         # calendar days to FETCH (~670 trading days)
 _CHECK_DAYS = 500          # calendar days to REQUIRE in cache (tighter, leaves headroom)
 MAX_PAGES_PER_CHUNK = 30   # safety cap per chunk: ~150k records max
-_DB_FETCH_DAYS = 60        # calendar days for daily_basic fetch (wave33 needs ~20 trading days)
+_DB_FETCH_DAYS = 180       # calendar days for daily_basic fetch (wave33 window: 80td ≈ 110cal)
 
 # Indices tracked by the dashboard (api.daily doesn't return index data,
 # so we fetch them via api.index_daily separately).

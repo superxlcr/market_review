@@ -353,18 +353,23 @@ class CacheManager:
                                profit_pct, stock_codes])
             conn.commit()
 
-    def get_wave33_range(self, limit: int = 15) -> list[dict]:
+    def get_wave33_range(self, limit: int = 15, end_date: str | None = None) -> list[dict]:
         """
-        Return last N rows from wave33_cache (trade_date DESC).
+        Return last N rows from wave33_cache (trade_date DESC), filtered to
+        trade_date <= end_date.  When end_date is None, defaults to today.
         Returns [{trade_date, count, profit_count, profit_pct, stock_codes}, ...].
         """
+        from datetime import datetime
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y%m%d")
         with self._get_conn() as conn:
             rows = conn.execute(
                 """SELECT trade_date, count, profit_count, profit_pct, stock_codes
                    FROM wave33_cache
+                   WHERE trade_date <= ?
                    ORDER BY trade_date DESC
                    LIMIT ?""",
-                [limit],
+                [end_date, limit],
             ).fetchall()
         return [dict(r) for r in rows]
 

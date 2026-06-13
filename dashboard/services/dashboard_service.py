@@ -219,46 +219,61 @@ class DashboardService:
 
     def ensure_wave33_computed(self, trade_date: str, progress_cb=None) -> dict:
         """
-        Ensure wave33_cache has results for the last 20 trading days.
-        Scans any missing days (most-recent-first) using pre-loaded cache.
-        Called from console page after ensure_data_loaded().
+        Ensure wave33_cache covers the chart+window need for `trade_date`.
+
+        Two-window design:
+          - USE window:  40 trading days (15 chart + 21 rolling + 4 buffer)
+          - CACHE window: 80 trading days (~4 months, 2x the USE window)
+
+        Only the USE window is checked for cache completeness. When any date in
+        the USE window is missing, the full CACHE window is scanned (over-fetch),
+        so switching to nearby dates hits cache and feels instant.
 
         Returns {"scanned": int, "cached": int, "elapsed": float}.
         """
         import time as _time
         from marketreview.tools.wave33 import scan_wave33
 
+        USE_DAYS = 40       # needed for chart display
+        CACHE_DAYS = 80     # over-fetch when scanning
+
         t0 = _time.time()
 
-        # Determine last 40 trading days (15 chart + 21 rolling window + margin)
+        # Trading date list (most-recent-first), covering CACHE_DAYS
         index_rows = self._dp.get_daily(
-            "000001.SH", end_date=trade_date, lookback_days=90
+            "000001.SH", end_date=trade_date, lookback_days=180
         )
         all_dates = sorted(set(
             r["date"].replace("-", "") for r in index_rows
         ), reverse=True)
         td_clean = trade_date.replace("-", "")
-        target_dates = [d for d in all_dates if d <= td_clean][:40]
+        use_dates = [d for d in all_dates if d <= td_clean][:USE_DAYS]
 
-        missing = []
-        already_cached = 0
-        for d in target_dates:
-            if self._dp.cache.has_wave33_date(d):
-                already_cached += 1
-            else:
-                missing.append(d)
+        # ── Fast path: all USE dates already cached ──
+        missing_use = [d for d in use_dates
+                       if not self._dp.cache.has_wave33_date(d)]
+        if not missing_use:
+            self._precompute_cumulative_profit(use_dates, progress_cb=progress_cb)
+            return {
+                "scanned": 0,
+                "cached": len(use_dates),
+                "elapsed": round(_time.time() - t0, 1),
+            }
 
-        scanned = 0
-        if missing:
-            scan_wave33(missing, self._dp, progress_cb=progress_cb)
-            scanned = len(missing)
+        # ── Slow path: scan the full CACHE window ──
+        cache_dates = [d for d in all_dates if d <= td_clean][:CACHE_DAYS]
+        missing_cache = [d for d in cache_dates
+                         if not self._dp.cache.has_wave33_date(d)]
+        already_cached = len(cache_dates) - len(missing_cache)
 
-        # ── Pre-compute cumulative profit (avoids per-stock DB queries on read path) ──
-        self._precompute_cumulative_profit(target_dates, progress_cb=progress_cb)
+        if missing_cache:
+            scan_wave33(missing_cache, self._dp, progress_cb=progress_cb)
+
+        self._precompute_cumulative_profit(cache_dates, progress_cb=progress_cb)
 
         elapsed = _time.time() - t0
         return {
-            "scanned": scanned,
+            "scanned": len(missing_cache),
             "cached": already_cached,
             "elapsed": round(elapsed, 1),
         }
@@ -384,20 +399,29 @@ class DashboardService:
             )
 
     def get_wave33_data(self, chart_days: int = 15,
-                       rolling_days: int = 21) -> dict:
+                       rolling_days: int = 21,
+                       end_date: str | None = None) -> dict:
         """
         Read wave33 results from cache and compute rolling cumulative counts.
         Each bar = unique stocks passing in the [date - rolling_days td, date] window.
         Chart shows `chart_days` bars; rolling window is `rolling_days` trading days.
         Returns {dates, counts, profit_counts, profit_pcts, trend}.
         Always READ-ONLY — never triggers computation.
+
+        Args:
+            end_date: Optional YYYYMMDD — filter to trade_date <= end_date.
+                      Defaults to today (cache layer also defaults to today).
         """
+        from datetime import datetime
         import json
         from marketreview.tools.wave33 import compute_trend, compute_trend_series
 
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y%m%d")
+
         # Need: chart_days for display + rolling_days for the earliest bar's window
         fetch_days = chart_days + rolling_days
-        rows = self._dp.cache.get_wave33_range(limit=fetch_days)
+        rows = self._dp.cache.get_wave33_range(limit=fetch_days, end_date=end_date)
         rows = list(reversed(rows))  # chronological (oldest first)
 
         if not rows:
@@ -406,6 +430,8 @@ class DashboardService:
                 "profit_pcts": [], "trend": {
                     "direction": "flat", "streak": 0, "label": "维持，盘整中"
                 },
+                "trend_series": [], "last_window_start": "", "last_window_end": "",
+                "latest_day_count": 0, "latest_day_new": 0,
             }
 
         # Build date-indexed lookup: {trade_date: {"all": set, "profit": set, "cum_profit": int|None}}
@@ -473,6 +499,19 @@ class DashboardService:
         last_window_start_idx = max(0, len(all_dates) - rolling_days)
         last_window_start = all_dates[last_window_start_idx] if all_dates else ""
 
+        # ── Latest single-day stats (not cumulative) ──
+        latest_date = all_dates[-1]
+        latest_day_all = day_data[latest_date]["all"]
+        latest_day_count = len(latest_day_all)
+
+        # New: stocks selected today that were NOT in the previous 20-day
+        # cumulative (i.e. first appearance in the rolling window).
+        prev_start = max(0, len(all_dates) - 1 - rolling_days + 1)
+        prev_cum = set()
+        for wd in all_dates[prev_start:len(all_dates) - 1]:
+            prev_cum |= day_data[wd]["all"]
+        latest_day_new = len(latest_day_all - prev_cum)
+
         return {
             "dates": dates,
             "counts": counts,
@@ -482,4 +521,6 @@ class DashboardService:
             "trend_series": compute_trend_series(counts),
             "last_window_start": last_window_start,
             "last_window_end": last_window_end,
+            "latest_day_count": latest_day_count,
+            "latest_day_new": latest_day_new,
         }
