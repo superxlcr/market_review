@@ -132,6 +132,33 @@ class CacheManager:
             ).fetchone()
         return row is not None
 
+    def count_daily_date(self, date_str: str) -> int:
+        """Return number of stocks with daily data for a given date."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT code) FROM tushare_cache WHERE date = ?",
+                [date_str],
+            ).fetchone()
+        return row[0] if row else 0
+
+    def get_daily_dates_in_range(self, start: str, end: str) -> list[str]:
+        """Return distinct trade dates in tushare_cache for a range."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT date FROM tushare_cache "
+                "WHERE date >= ? AND date <= ? ORDER BY date",
+                [start, end],
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_stock_basic_count(self) -> int:
+        """Return number of stocks in stock_basic_cache."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM stock_basic_cache"
+            ).fetchone()
+        return row[0] if row else 0
+
     # ------- index_weight_cache -------
 
     def upsert_index_weights(self, index_code: str, weight_date: str,

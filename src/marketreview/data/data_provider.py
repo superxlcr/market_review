@@ -111,6 +111,8 @@ class DataProvider:
             db_pages = self._ensure_daily_basic_loaded(
                 db_start, end_date
             )
+            # Validate coverage even when cache appears up-to-date
+            self._validate_coverage(fetch_start, end_date)
             return {
                 "status": "ok", "elapsed": 0.0,
                 "chunks": 0, "note": "cache up to date",
@@ -158,6 +160,9 @@ class DataProvider:
         if progress_cb:
             progress_cb("done", 0, 0)
 
+        # ── Validate coverage (catches silent data gaps like missing 0506-0507) ──
+        self._validate_coverage(fetch_start, end_date)
+
         elapsed = _time.time() - t0
         return {
             "status": "ok",
@@ -203,6 +208,81 @@ class DataProvider:
             return False
 
         return True
+
+    _COVERAGE_WARN_THRESHOLD = 0.90    # warn if < 90% stocks covered on a date
+    _COVERAGE_MAX_RETRY = 2            # max re-fetch attempts per gapped date
+
+    def _validate_coverage(self, start: str, end: str):
+        """
+        Check that all dates in [start, end] have adequate stock coverage.
+
+        Tushare's daily API can silently return fewer stocks than expected
+        (rate limits, server issues, data not yet published).  A single
+        missing date breaks path-dependent indicators (SMA, EMA) and
+        produces wrong screening results that are very hard to diagnose.
+
+        Logs a warning for each date below threshold.  If gaps are found,
+        attempts one re-fetch of the gapped dates.
+        """
+        date_strs = self.cache.get_daily_dates_in_range(start, end)
+        if not date_strs:
+            return
+
+        total_stocks = self.cache.get_stock_basic_count()
+        if total_stocks == 0:
+            return  # no stock_basic yet, skip validation
+
+        gaps = []
+        for d in date_strs:
+            cnt = self.cache.count_daily_date(d)
+            ratio = cnt / total_stocks if total_stocks > 0 else 1.0
+            if ratio < self._COVERAGE_WARN_THRESHOLD:
+                gaps.append((d, cnt, total_stocks))
+
+        if gaps:
+            # Log all gaps
+            print("[DataProvider] ⚠ COVERAGE GAP DETECTED:")
+            for d, cnt, total in gaps:
+                pct = cnt / total * 100
+                print(f"  {d}: {cnt}/{total} stocks ({pct:.1f}%)")
+
+            # Attempt one re-fetch for gapped dates
+            for attempt in range(1, self._COVERAGE_MAX_RETRY + 1):
+                still_gapped = []
+                for d, cnt, total in gaps:
+                    new_cnt = self.cache.count_daily_date(d)
+                    if new_cnt / total < self._COVERAGE_WARN_THRESHOLD:
+                        still_gapped.append(d)
+
+                if not still_gapped:
+                    print("[DataProvider] ✓ Coverage restored after re-fetch.")
+                    return
+
+                print(f"[DataProvider] Re-fetching {len(still_gapped)} gapped "
+                      f"dates (attempt {attempt}/{self._COVERAGE_MAX_RETRY})...")
+                self._fetch_chunk(still_gapped[0], still_gapped[-1])
+
+            # Final check — raise if still gapped
+            final_gaps = []
+            for d, cnt, total in gaps:
+                new_cnt = self.cache.count_daily_date(d)
+                if new_cnt / total < self._COVERAGE_WARN_THRESHOLD:
+                    final_gaps.append((d, new_cnt, total))
+
+            if final_gaps:
+                msg = (
+                    "[DataProvider] ❌ PERSISTENT COVERAGE GAP after "
+                    f"{self._COVERAGE_MAX_RETRY} re-fetch attempts:\n"
+                )
+                for d, cnt, total in final_gaps:
+                    pct = cnt / total * 100
+                    msg += f"  {d}: {cnt}/{total} stocks ({pct:.1f}%)\n"
+                msg += (
+                    "These dates may not be trading days, or tushare may not "
+                    "have published the data yet.  Wave33 / indicator scans "
+                    "for affected dates will produce incorrect results."
+                )
+                print(msg)
 
     def _fetch_chunk(self, chunk_start: str, chunk_end: str
                      ) -> tuple[int, int]:

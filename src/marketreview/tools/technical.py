@@ -361,25 +361,25 @@ def calc_kd(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:
     """
     TDX-style KD indicator (K/D only, no J).
 
-    Formula (通达信):
+    Uses a high-based RSV correction for K_final — better at capturing
+    breakout strength in overbought territory.  Used by the technical
+    indicator display (市场全景 K-line overlay).
+
+    Formula:
       收盘RSV = (C - LLV(L,9)) / (HHV(H,9) - LLV(L,9)) * 100
-      K_close = SMA(收盘RSV, 3, 1)        # 辅助平滑线
+      K_close = SMA(收盘RSV, 3, 1)
       D_close = SMA(K_close, 3, 1)
       最高RSV = (H - LLV(L,9)) / (HHV(H,9) - LLV(L,9)) * 100
-      K_final = 2/3 * K_close[-1] + 1/3 * 最高RSV
-      D_final = 2/3 * D_close[-1] + 1/3 * K_final
+      K_final = (RSV_high + 2 * K_close[-1]) / 3        (blended)
+      D_final = (K_final + 2 * D_close[-1]) / 3
 
-    K_final is driven by high-price RSV but smoothed via close-based reference.
     Returns {"K": [...], "D": [...]}.
     """
     low_n = df["low"].rolling(n).min()
     high_n = df["high"].rolling(n).max()
     rng = high_n - low_n
 
-    # Close-based RSV
     rsv_close = (df["close"] - low_n) / rng.replace(0, np.nan) * 100
-
-    # High-based RSV (for final K line)
     rsv_high = (df["high"] - low_n) / rng.replace(0, np.nan) * 100
 
     k_close = np.full(len(df), np.nan)
@@ -387,7 +387,6 @@ def calc_kd(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:
     k_final = np.full(len(df), np.nan)
     d_final = np.full(len(df), np.nan)
 
-    # Start from first valid RSV index
     start = n - 1
     if start < 0 or start >= len(df):
         return {"K": [np.nan] * len(df), "D": [np.nan] * len(df)}
@@ -398,7 +397,7 @@ def calc_kd(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:
     d_final[start] = k_final[start]
 
     for i in range(start + 1, len(df)):
-        # SMA(X, 3, 1): (1*X + 2*prev) / 3
+        # SMA(X, 3, 1): (X + 2*prev) / 3
         if not np.isnan(rsv_close.iloc[i]):
             k_close[i] = (rsv_close.iloc[i] + 2 * k_close[i - 1]) / 3
         else:
@@ -412,6 +411,46 @@ def calc_kd(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:
         d_final[i] = (k_final[i] + 2 * d_close[i - 1]) / 3
 
     return {"K": k_final.tolist(), "D": d_final.tolist()}
+
+
+def calc_kd_standard(df: pd.DataFrame, n: int = 9) -> dict[str, list[float]]:
+    """
+    TDX-standard KD indicator — exact K(9,3,3) for formula screening.
+
+    This is the correct formula for matching 通达信 condition-screening
+    output.  Do NOT use calc_kd() for screening — it has a high-based
+    RSV correction that produces different K values from 通达信.
+
+    Formula:
+      RSV = (CLOSE - LLV(LOW,9)) / (HHV(HIGH,9) - LLV(LOW,9)) * 100
+      K   = SMA(RSV, 3, 1)    # (RSV + 2*K_prev) / 3
+      D   = SMA(K,   3, 1)    # (K   + 2*D_prev) / 3
+
+    Returns {"K": [...], "D": [...]}.
+    """
+    low_n = df["low"].rolling(n).min()
+    high_n = df["high"].rolling(n).max()
+    rng = high_n - low_n
+    rsv = (df["close"] - low_n) / rng.replace(0, np.nan) * 100
+
+    k_arr = np.full(len(df), np.nan)
+    d_arr = np.full(len(df), np.nan)
+
+    start = n - 1
+    if start < 0 or start >= len(df):
+        return {"K": [np.nan] * len(df), "D": [np.nan] * len(df)}
+
+    k_arr[start] = rsv.iloc[start]
+    d_arr[start] = k_arr[start]
+
+    for i in range(start + 1, len(df)):
+        if not np.isnan(rsv.iloc[i]):
+            k_arr[i] = (rsv.iloc[i] + 2 * k_arr[i - 1]) / 3
+        else:
+            k_arr[i] = k_arr[i - 1]
+        d_arr[i] = (k_arr[i] + 2 * d_arr[i - 1]) / 3
+
+    return {"K": k_arr.tolist(), "D": d_arr.tolist()}
 
 # TODO 2: calc_rsi(df, period=6) → list[float]
 #   - 基于收盘价（确认：现有实现已用 close）

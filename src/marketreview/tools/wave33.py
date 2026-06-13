@@ -10,7 +10,7 @@ import numpy as np
 from typing import Dict, List
 
 from ..data.data_provider import DataProvider
-from .technical import rows_to_df, calc_kd, calc_rsi, calc_wr
+from .technical import rows_to_df, calc_kd_standard, calc_rsi, calc_wr
 
 
 def scan_wave33(
@@ -83,7 +83,7 @@ def scan_wave33(
             df = DataProvider.raw_to_qfq(df)
 
             # Compute indicators once
-            kd = calc_kd(df)
+            kd = calc_kd_standard(df)
             wr10 = calc_wr(df, 10)
             wr20 = calc_wr(df, 20)
             rsi_all = calc_rsi(df)

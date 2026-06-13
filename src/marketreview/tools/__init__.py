@@ -5,6 +5,7 @@ from .technical import (
     ma_arrangement,
     volume_analysis,
     calc_kd,
+    calc_kd_standard,
     calc_kdj,
     calc_rsi,
     calc_bias,
