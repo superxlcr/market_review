@@ -1,11 +1,10 @@
 [project]
 name = "marketreview"
 version = "0.1.0"
-description = "marketReview using crewAI"
+description = "A-stock market review dashboard"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "crewai[litellm,tools]>=0.100.0",
     "tushare>=1.4.0",
     "streamlit>=1.30.0",
     "plotly>=5.18.0",
@@ -13,19 +12,9 @@ dependencies = [
     "numpy>=1.24.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
+    "openai>=1.0.0",
 ]
-
-[project.scripts]
-marketreview = "marketreview.main:run"
-run_crew = "marketreview.main:run"
-train = "marketreview.main:train"
-replay = "marketreview.main:replay"
-test = "marketreview.main:test"
-run_with_trigger = "marketreview.main:run_with_trigger"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.crewai]
-type = "crew"
