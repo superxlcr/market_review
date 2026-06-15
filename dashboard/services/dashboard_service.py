@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timedelta
 
 from marketreview.data.data_provider import DataProvider
-from marketreview.tools.technical import rows_to_df
+from marketreview.tools.technical import rows_to_df, build_technical_summary
 from marketreview.log_util import get_logger
 
 log = get_logger(__name__)
@@ -24,6 +24,7 @@ class DashboardService:
     def __init__(self, tushare_token: str | None = None):
         token = tushare_token or os.environ.get("TUSHARE_TOKEN", "")
         self._dp = DataProvider(tushare_token=token)
+        self._llm_client = None  # lazy init
 
     @property
     def is_configured(self) -> bool:
@@ -536,3 +537,131 @@ class DashboardService:
             "latest_day_count": latest_day_count,
             "latest_day_new": latest_day_new,
         }
+
+    # ---- AI summary ----
+
+    @staticmethod
+    def _load_prompt(name: str) -> str:
+        """Load a prompt template from llm/prompts/<name>.md."""
+        import os as _os
+        prompt_dir = _os.path.join(
+            _os.path.dirname(__file__),
+            "..", "..", "src", "marketreview", "llm", "prompts",
+        )
+        filepath = _os.path.join(prompt_dir, f"{name}.md")
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def _get_llm(self):
+        """Lazy-init the LLM client."""
+        if self._llm_client is None:
+            from marketreview.llm import create_llm_client
+            self._llm_client = create_llm_client()
+        return self._llm_client
+
+    def get_ai_summary(self, trade_date: str) -> dict:
+        """
+        Read cached AI summaries for a given trade_date.
+        Returns dict keyed by guide_key, each value is {content, model, created_at}.
+        Returns empty dict if nothing cached.
+        """
+        rows = self._dp.cache.get_ai_summary(trade_date, "market_overview")
+        return {r["guide_key"]: r for r in rows}
+
+    def generate_ai_summary(self, trade_date: str) -> dict:
+        """
+        Generate AI guides + summary for market_overview, store in DB, return result.
+        Same dict shape as get_ai_summary().
+
+        If all LLM calls fail, returns dict with a single 'error' key.
+        Individual guide failures are replaced with a placeholder string.
+        """
+        import json as _json
+
+        llm = self._get_llm()
+        model = llm.model_name
+        result = {}
+        FAIL_PLACEHOLDER = "AI 摘要暂时不可用"
+
+        # --- 1. Market overview data ---
+        overview = self.get_market_overview(trade_date)
+        if overview is None or "error" in overview:
+            return {"error": "无法获取市场概览数据"}
+
+        # --- 2. Guide: market breadth ---
+        breadth_data = {
+            "今日涨跌比": f"{overview['today']['up']}:{overview['today']['flat']}:{overview['today']['down']}",
+            "涨停": overview["today"]["up_limit"],
+            "跌停": overview["today"]["down_limit"],
+            "今日成交额": f"{overview['today']['total_yi']:,.0f}亿",
+        }
+        if overview["yesterday"]:
+            breadth_data["昨日成交额"] = f"{overview['yesterday']['total_yi']:,.0f}亿"
+            breadth_data["昨日涨跌比"] = f"{overview['yesterday']['up']}:{overview['yesterday']['flat']}:{overview['yesterday']['down']}"
+
+        try:
+            prompt = self._load_prompt("guide_market_breadth")
+            guide_breadth = llm.chat("", prompt.format(data=_json.dumps(breadth_data, ensure_ascii=False)))
+        except Exception as e:
+            log.warning("guide_market_breadth LLM call failed: %s", e)
+            guide_breadth = FAIL_PLACEHOLDER
+
+        self._dp.cache.save_ai_summary(
+            trade_date, "market_overview", "guide/market_breadth",
+            guide_breadth, model,
+        )
+        result["guide/market_breadth"] = {"content": guide_breadth, "model": model}
+
+        # --- 3. Guide: SH index ---
+        sh_rows = self._dp.get_daily("000001.SH", end_date=trade_date, lookback_days=360)
+        sh_summary = build_technical_summary("000001.SH", "上证指数", sh_rows)
+
+        try:
+            prompt = self._load_prompt("guide_sh_index")
+            guide_sh = llm.chat("", prompt.format(data=_json.dumps(sh_summary, ensure_ascii=False)))
+        except Exception as e:
+            log.warning("guide_sh_index LLM call failed: %s", e)
+            guide_sh = FAIL_PLACEHOLDER
+
+        self._dp.cache.save_ai_summary(
+            trade_date, "market_overview", "guide/sh_index",
+            guide_sh, model,
+        )
+        result["guide/sh_index"] = {"content": guide_sh, "model": model}
+
+        # --- 4. Guide: CZ index ---
+        cz_rows = self._dp.get_daily("399006.SZ", end_date=trade_date, lookback_days=360)
+        cz_summary = build_technical_summary("399006.SZ", "创业板指", cz_rows)
+
+        try:
+            prompt = self._load_prompt("guide_cz_index")
+            guide_cz = llm.chat("", prompt.format(data=_json.dumps(cz_summary, ensure_ascii=False)))
+        except Exception as e:
+            log.warning("guide_cz_index LLM call failed: %s", e)
+            guide_cz = FAIL_PLACEHOLDER
+
+        self._dp.cache.save_ai_summary(
+            trade_date, "market_overview", "guide/cz_index",
+            guide_cz, model,
+        )
+        result["guide/cz_index"] = {"content": guide_cz, "model": model}
+
+        # --- 5. Summary ---
+        try:
+            prompt = self._load_prompt("summary")
+            summary = llm.chat("", prompt.format(
+                guide_breadth=guide_breadth,
+                guide_sh=guide_sh,
+                guide_cz=guide_cz,
+            ))
+        except Exception as e:
+            log.warning("summary LLM call failed: %s", e)
+            summary = FAIL_PLACEHOLDER
+
+        self._dp.cache.save_ai_summary(
+            trade_date, "market_overview", "summary",
+            summary, model,
+        )
+        result["summary"] = {"content": summary, "model": model}
+
+        return result
