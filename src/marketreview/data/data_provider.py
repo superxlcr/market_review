@@ -166,7 +166,7 @@ class DataProvider:
         )
 
         # ── Validate coverage (catches silent data gaps like missing 0506-0507) ──
-        self._validate_coverage(fetch_start, end_date)
+        self._validate_coverage(fetch_start, end_date, progress_cb)
 
         if progress_cb:
             progress_cb("done", 0, 0)
@@ -220,7 +220,7 @@ class DataProvider:
     _COVERAGE_WARN_THRESHOLD = 0.90    # warn if < 90% stocks covered on a date
     _COVERAGE_MAX_RETRY = 2            # max re-fetch attempts per gapped date
 
-    def _validate_coverage(self, start: str, end: str):
+    def _validate_coverage(self, start: str, end: str, progress_cb=None):
         """
         Check that all dates in [start, end] have adequate stock coverage.
 
@@ -254,6 +254,9 @@ class DataProvider:
                 for d, cnt, total in gaps
             )
             log.warning("COVERAGE GAP DETECTED (%d dates):\n%s", len(gaps), gap_lines)
+
+            if progress_cb:
+                progress_cb("validate", 0, 0, f"发现 {len(gaps)} 天数据不完整，补拉中...")
 
             # Attempt one re-fetch for gapped dates
             for attempt in range(1, self._COVERAGE_MAX_RETRY + 1):

@@ -167,6 +167,8 @@ if _pending:
             elif phase == "wave33_date":
                 date_str = extra or "?"
                 status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
+            elif phase == "validate":
+                status.update(label=extra or "正在验证数据覆盖率...")
             elif phase == "done":
                 status.update(label="数据加载完成！", state="complete")
 
