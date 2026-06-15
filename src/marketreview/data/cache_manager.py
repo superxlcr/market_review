@@ -52,33 +52,39 @@ class CacheManager:
 
     def _init_schema(self):
         with sqlite3.connect(self.db_path) as conn:
-            if self._schema_ok(conn):
+            # Check each table individually — only drop mismatched ones
+            any_change = False
+            for table, expected in self._EXPECTED_COLUMNS.items():
+                if not self._table_exists(conn, table):
+                    any_change = True  # new table, will be created
+                elif not self._table_schema_ok(conn, table, expected):
+                    log.warning("Schema mismatch for %s — dropping and recreating", table)
+                    conn.executescript(f"DROP TABLE IF EXISTS {table}")
+                    any_change = True
+            if not any_change:
                 return
-            # Schema mismatch — drop everything and recreate
-            conn.executescript("DROP TABLE IF EXISTS tushare_cache")
-            conn.executescript("DROP TABLE IF EXISTS index_weight_cache")
-            conn.executescript("DROP TABLE IF EXISTS stock_industry_cache")
-            conn.executescript("DROP TABLE IF EXISTS stock_basic_cache")
-            conn.executescript("DROP TABLE IF EXISTS daily_basic_cache")
-            conn.executescript("DROP TABLE IF EXISTS wave33_cache")
-            conn.executescript("DROP TABLE IF EXISTS ai_summary")
+            # Run schema.sql — all tables use CREATE TABLE IF NOT EXISTS
             with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
                 conn.executescript(f.read())
             conn.commit()
 
-    def _schema_ok(self, conn: sqlite3.Connection) -> bool:
-        """Return True if all expected tables exist with the correct columns."""
-        for table, expected in self._EXPECTED_COLUMNS.items():
-            try:
-                info = conn.execute(
-                    f"PRAGMA table_info({table})"
-                ).fetchall()
-            except Exception:
-                return False
-            actual = {row[1] for row in info}  # row[1] = column name
-            if actual != expected:
-                return False
-        return True
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", [table]
+        ).fetchone()
+        return row is not None
+
+    @staticmethod
+    def _table_schema_ok(conn: sqlite3.Connection, table: str,
+                         expected: set) -> bool:
+        """Return True if table exists with the exact expected columns."""
+        try:
+            info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        except Exception:
+            return False
+        actual = {row[1] for row in info}  # row[1] = column name
+        return actual == expected
 
     def _get_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
