@@ -22,11 +22,14 @@ log = get_logger(__name__)
 # ── constants ──
 
 _PAGE_SIZE = 5000          # Tushare API page limit
-_CHUNK_DAYS = 30           # calendar days per date-range chunk (~20 trading days)
+_CHUNK_DAYS = 20           # calendar days per date-range chunk (~14 trading days)
+                            # Kept small so per-chunk records stay under tushare's
+                            # pagination limit (offset >= ~100k fails for most endpoints).
 _FETCH_DAYS = 1000         # calendar days to FETCH (~670 trading days)
 _CHECK_DAYS = 500          # calendar days to REQUIRE in cache (tighter, leaves headroom)
 MAX_PAGES_PER_CHUNK = 30   # safety cap per chunk: ~150k records max
 _DB_FETCH_DAYS = 180       # calendar days for daily_basic fetch (wave33 window: 80td ≈ 110cal)
+_BASIC_CHUNK_DAYS = 10    # smaller chunks for daily_basic: its pagination limit is ~100k offset
 
 # Indices tracked by the dashboard (api.daily doesn't return index data,
 # so we fetch them via api.index_daily separately).
@@ -265,7 +268,12 @@ class DataProvider:
 
                 print(f"[DataProvider] Re-fetching {len(still_gapped)} gapped "
                       f"dates (attempt {attempt}/{self._COVERAGE_MAX_RETRY})...")
-                self._fetch_chunk(still_gapped[0], still_gapped[-1])
+                # Split into _CHUNK_DAYS ranges so each API call stays
+                # within tushare's pagination limit (offset < ~100k).
+                for cs, ce in _date_chunks(
+                    still_gapped[0], still_gapped[-1], _CHUNK_DAYS,
+                ):
+                    self._fetch_chunk(cs, ce)
 
             # Final check — raise if still gapped
             final_gaps = []
@@ -734,7 +742,7 @@ class DataProvider:
         Returns number of API pages fetched.
         """
         pages = 0
-        chunks = _date_chunks(start_date, end_date, _CHUNK_DAYS)
+        chunks = _date_chunks(start_date, end_date, _BASIC_CHUNK_DAYS)
         for chunk_start, chunk_end in chunks:
             # Skip if already cached
             if self.cache.daily_basic_has_range(chunk_start, chunk_end):

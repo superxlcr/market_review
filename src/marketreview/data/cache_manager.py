@@ -332,17 +332,45 @@ class CacheManager:
 
     def daily_basic_has_range(self, start_date: str, end_date: str) -> bool:
         """
-        Return True if daily_basic_cache has any data in [start_date, end_date].
-        A single date hit implies the whole range was likely fetched.
+        Return True if daily_basic_cache has COMPLETE data in [start_date, end_date].
+
+        Checks both existence AND count consistency: if any date in the range has
+        < 90% of the max count for the range, the chunk is treated as incomplete
+        so it will be re-fetched.  This auto-heals gaps caused by tushare
+        pagination limits (offset >= 105000 fails for daily_basic).
         """
         with self._get_conn() as conn:
-            row = conn.execute(
-                """SELECT 1 FROM daily_basic_cache
+            rows = conn.execute(
+                """SELECT COUNT(*) FROM daily_basic_cache
                    WHERE trade_date >= ? AND trade_date <= ?
-                   LIMIT 1""",
+                   GROUP BY trade_date""",
                 [start_date, end_date],
+            ).fetchall()
+        if not rows:
+            return False
+        counts = [r[0] for r in rows]
+        max_cnt = max(counts)
+        # If any date has < 90% of the max, the chunk is incomplete
+        return all(c >= max_cnt * 0.9 for c in counts)
+
+    def count_daily_basic_date(self, date_str: str) -> int:
+        """Return number of stocks with daily_basic data for a given date."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM daily_basic_cache WHERE trade_date = ?",
+                [date_str],
             ).fetchone()
-        return row is not None
+        return row[0] if row else 0
+
+    def get_daily_basic_dates_in_range(self, start: str, end: str) -> list[str]:
+        """Return distinct trade dates in daily_basic_cache for a range."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT trade_date FROM daily_basic_cache "
+                "WHERE trade_date >= ? AND trade_date <= ? ORDER BY trade_date",
+                [start, end],
+            ).fetchall()
+        return [r[0] for r in rows]
 
     # ------- wave33_cache -------
 
