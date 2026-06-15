@@ -44,6 +44,10 @@ class CacheManager:
             "trade_date", "count", "profit_count", "profit_pct",
             "stock_codes", "updated_at",
         },
+        "ai_summary": {
+            "trade_date", "summary_type", "guide_key",
+            "content", "model", "created_at",
+        },
     }
 
     def _init_schema(self):
@@ -57,6 +61,7 @@ class CacheManager:
             conn.executescript("DROP TABLE IF EXISTS stock_basic_cache")
             conn.executescript("DROP TABLE IF EXISTS daily_basic_cache")
             conn.executescript("DROP TABLE IF EXISTS wave33_cache")
+            conn.executescript("DROP TABLE IF EXISTS ai_summary")
             with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
                 conn.executescript(f.read())
             conn.commit()
@@ -437,4 +442,30 @@ class CacheManager:
                     updated_at = datetime('now') WHERE trade_date = ?"""
         with self._get_conn() as conn:
             conn.execute(sql, [stock_codes, trade_date])
+            conn.commit()
+
+    # ------- ai_summary -------
+
+    def get_ai_summary(self, trade_date: str, summary_type: str) -> list[dict]:
+        """Get all AI summary rows for a given date and type.
+        Returns list of dicts with keys: guide_key, content, model, created_at.
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT guide_key, content, model, created_at "
+                "FROM ai_summary WHERE trade_date = ? AND summary_type = ?",
+                (trade_date, summary_type),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_ai_summary(self, trade_date: str, summary_type: str,
+                        guide_key: str, content: str, model: str = ""):
+        """Insert or replace one AI summary row."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO ai_summary "
+                "(trade_date, summary_type, guide_key, content, model, created_at) "
+                "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                (trade_date, summary_type, guide_key, content, model),
+            )
             conn.commit()

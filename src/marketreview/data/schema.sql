@@ -58,3 +58,13 @@ CREATE TABLE IF NOT EXISTS wave33_cache (
     stock_codes  TEXT,
     updated_at   TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS ai_summary (
+    trade_date   TEXT NOT NULL,
+    summary_type TEXT NOT NULL,
+    guide_key    TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    model        TEXT,
+    created_at   TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (trade_date, summary_type, guide_key)
+);
