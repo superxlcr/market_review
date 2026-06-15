@@ -136,6 +136,12 @@ if _pending:
                       f"已缓存 {w33_result['cached']} 天，{w33_result['elapsed']}秒）",
                 state="complete",
             )
+        # ── AI summary ──
+        with st.status("正在生成 AI 总结...", expanded=False) as _ai_status:
+            _cached = _service.get_ai_summary(_pending)
+            if not _cached:
+                _service.generate_ai_summary(_pending)
+            _ai_status.update(label="✅ AI 总结已就绪", state="complete")
         st.session_state.trade_date = _pending
         st.cache_data.clear()
         st.rerun()
@@ -188,6 +194,12 @@ if _pending:
                       f"{w33_result['elapsed']:.0f}秒））",
                 state="complete",
             )
+            # ── AI summary ──
+            with st.status("正在生成 AI 总结...", expanded=False) as _ai_status:
+                _cached = _service.get_ai_summary(_pending)
+                if not _cached:
+                    _service.generate_ai_summary(_pending)
+                _ai_status.update(label="✅ AI 总结已就绪", state="complete")
             st.session_state.trade_date = _pending
             # Clear stale caches so other pages pick up fresh data
             st.cache_data.clear()
@@ -197,6 +209,30 @@ if _pending:
                 label=f"❌ 数据加载失败: {result.get('msg', '未知错误')}",
                 state="error",
             )
+
+# ── AI Summary Card ──
+_current_td = st.session_state.get("trade_date")
+if _current_td:
+    _ai = _service.get_ai_summary(_current_td)
+    if _ai and "summary" in _ai:
+        st.markdown("---")
+        st.markdown("### 🤖 当日复盘总结")
+        _summary_content = _ai["summary"]["content"]
+        st.info(_summary_content)
+        # Also show individual guides collapsed
+        with st.expander("📋 查看各板块导语"):
+            for _gk in ["guide/market_breadth", "guide/sh_index", "guide/cz_index"]:
+                if _gk in _ai:
+                    _label = {
+                        "guide/market_breadth": "市场概览",
+                        "guide/sh_index": "上证指数",
+                        "guide/cz_index": "创业板指",
+                    }.get(_gk, _gk)
+                    st.caption(f"**{_label}**")
+                    st.text(_ai[_gk]["content"])
+    elif _ai and "error" not in _ai:
+        st.markdown("---")
+        st.caption("🤖 AI 总结尚未生成（切换日期时将自动生成）")
 
 st.markdown("---")
 st.caption("快速跳转：左侧导航 → 市场全景 | 板块分析 | 个股追踪")
