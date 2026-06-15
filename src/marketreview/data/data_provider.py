@@ -165,11 +165,11 @@ class DataProvider:
             db_start, end_date, progress_cb
         )
 
-        if progress_cb:
-            progress_cb("done", 0, 0)
-
         # ── Validate coverage (catches silent data gaps like missing 0506-0507) ──
         self._validate_coverage(fetch_start, end_date)
+
+        if progress_cb:
+            progress_cb("done", 0, 0)
 
         elapsed = _time.time() - t0
         return {
