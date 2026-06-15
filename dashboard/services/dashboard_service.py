@@ -168,7 +168,7 @@ class DashboardService:
             from marketreview.tools.contribution import build_index_contribution
             return build_index_contribution(index_code, trade_date, self._dp)
         except Exception as e:
-            print(f"[DashboardService] get_index_contribution failed: {e}")
+            log.warning("get_index_contribution failed: %s", e)
             return None
 
     # ---- industry frequency (cross-date aggregation) ----
@@ -198,7 +198,7 @@ class DashboardService:
             from marketreview.tools.kline_patterns import detect_patterns
             return detect_patterns(df, obj_type="index")
         except Exception as e:
-            print(f"[DashboardService] get_kline_patterns failed: {e}")
+            log.warning("get_kline_patterns failed: %s", e)
             return []
 
     def get_industry_frequency(
@@ -215,7 +215,7 @@ class DashboardService:
                 return None
             return build_industry_frequency(index_code, dates, self._dp, top_n=10, min_days=3)
         except Exception as e:
-            print(f"[DashboardService] get_industry_frequency failed: {e}")
+            log.warning("get_industry_frequency failed: %s", e)
             return None
 
     # ---- wave33 ----

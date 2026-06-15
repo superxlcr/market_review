@@ -249,10 +249,11 @@ class DataProvider:
 
         if gaps:
             # Log all gaps
-            print("[DataProvider] ⚠ COVERAGE GAP DETECTED:")
-            for d, cnt, total in gaps:
-                pct = cnt / total * 100
-                print(f"  {d}: {cnt}/{total} stocks ({pct:.1f}%)")
+            gap_lines = "\n".join(
+                f"  {d}: {cnt}/{total} stocks ({cnt / total * 100:.1f}%)"
+                for d, cnt, total in gaps
+            )
+            log.warning("COVERAGE GAP DETECTED (%d dates):\n%s", len(gaps), gap_lines)
 
             # Attempt one re-fetch for gapped dates
             for attempt in range(1, self._COVERAGE_MAX_RETRY + 1):
@@ -263,11 +264,13 @@ class DataProvider:
                         still_gapped.append(d)
 
                 if not still_gapped:
-                    print("[DataProvider] ✓ Coverage restored after re-fetch.")
+                    log.info("Coverage restored after re-fetch")
                     return
 
-                print(f"[DataProvider] Re-fetching {len(still_gapped)} gapped "
-                      f"dates (attempt {attempt}/{self._COVERAGE_MAX_RETRY})...")
+                log.warning(
+                    "Re-fetching %d gapped dates (attempt %d/%d)...",
+                    len(still_gapped), attempt, self._COVERAGE_MAX_RETRY,
+                )
                 # Split into _CHUNK_DAYS ranges so each API call stays
                 # within tushare's pagination limit (offset < ~100k).
                 for cs, ce in _date_chunks(
@@ -283,19 +286,16 @@ class DataProvider:
                     final_gaps.append((d, new_cnt, total))
 
             if final_gaps:
-                msg = (
-                    "[DataProvider] ❌ PERSISTENT COVERAGE GAP after "
-                    f"{self._COVERAGE_MAX_RETRY} re-fetch attempts:\n"
+                gap_lines = "\n".join(
+                    f"  {d}: {cnt}/{total} stocks ({cnt / total * 100:.1f}%)"
+                    for d, cnt, total in final_gaps
                 )
-                for d, cnt, total in final_gaps:
-                    pct = cnt / total * 100
-                    msg += f"  {d}: {cnt}/{total} stocks ({pct:.1f}%)\n"
-                msg += (
+                log.error(
+                    "PERSISTENT COVERAGE GAP after %d re-fetch attempts:\n%s\n"
                     "These dates may not be trading days, or tushare may not "
-                    "have published the data yet.  Wave33 / indicator scans "
-                    "for affected dates will produce incorrect results."
+                    "have published the data yet.",
+                    self._COVERAGE_MAX_RETRY, gap_lines,
                 )
-                print(msg)
 
     def _fetch_chunk(self, chunk_start: str, chunk_end: str
                      ) -> tuple[int, int]:
@@ -318,7 +318,7 @@ class DataProvider:
                     offset=offset, limit=_PAGE_SIZE,
                 )
             except Exception as e:
-                print(f"[DataProvider] daily({chunk_start}~{chunk_end}) offset={offset}: {e}")
+                log.warning("daily(%s~%s) offset=%d: %s", chunk_start, chunk_end, offset, e)
                 break
 
             if df is None or df.empty:
@@ -342,7 +342,7 @@ class DataProvider:
                     offset=offset, limit=_PAGE_SIZE,
                 )
             except Exception as e:
-                print(f"[DataProvider] adj_factor({chunk_start}~{chunk_end}) offset={offset}: {e}")
+                log.warning("adj_factor(%s~%s) offset=%d: %s", chunk_start, chunk_end, offset, e)
                 break
 
             if df is None or df.empty:
@@ -388,7 +388,7 @@ class DataProvider:
                     limit=_PAGE_SIZE,
                 )
             except Exception as e:
-                print(f"[DataProvider] index_daily({idx_code}) failed: {e}")
+                log.warning("index_daily(%s) failed: %s", idx_code, e)
                 continue
 
             if df is None or df.empty:
@@ -569,7 +569,7 @@ class DataProvider:
                 "sh_yi": sh_yi, "sz_yi": sz_yi, "bj_yi": bj_yi,
             }
         except Exception as e:
-            print(f"[DataProvider] get_market_breadth failed for {trade_date}: {e}")
+            log.warning("get_market_breadth failed for %s: %s", trade_date, e)
             return None
 
     # ═══════════════════════════════════════════════════════════════
@@ -599,7 +599,7 @@ class DataProvider:
                     trade_date=qd,
                 )
             except Exception as e:
-                print(f"[DataProvider] index_weight failed for {index_code} @ {qd}: {e}")
+                log.warning("index_weight failed for %s @ %s: %s", index_code, qd, e)
                 return None
             if df is not None and not df.empty:
                 break
@@ -651,7 +651,7 @@ class DataProvider:
                     new_rows.append(row)
                     cached[code] = row
             except Exception as e:
-                print(f"[DataProvider] index_member_all failed for {code}: {e}")
+                log.warning("index_member_all failed for %s: %s", code, e)
 
         if new_rows:
             self.cache.upsert_stock_industries(new_rows)
@@ -691,7 +691,7 @@ class DataProvider:
                                        "*ST" in name.upper()) else 0,
                     })
         except Exception as e:
-            print(f"[DataProvider] stock_basic API failed: {e}")
+            log.warning("stock_basic API failed: %s", e)
             return []
 
         if rows:
@@ -757,7 +757,7 @@ class DataProvider:
                         offset=offset, limit=_PAGE_SIZE,
                     )
                 except Exception as e:
-                    print(f"[DataProvider] daily_basic({chunk_start}~{chunk_end}) offset={offset}: {e}")
+                    log.warning("daily_basic(%s~%s) offset=%d: %s", chunk_start, chunk_end, offset, e)
                     break
 
                 if df is None or df.empty:
