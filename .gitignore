@@ -4,5 +4,5 @@ __pycache__/
 .superpowers/
 .venv/
 .idea/
-data/
+/data/
 logs/
