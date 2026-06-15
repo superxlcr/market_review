@@ -37,7 +37,7 @@ from marketreview.tools.technical import (
 )
 from services.dashboard_service import DashboardService
 from rendering.styles import vol_color_ramp, up_down_color, PAGE_CSS
-from rendering.charts import plot_kline_with_ma, plot_turnover_trend
+from rendering.charts import plot_kline_with_ma
 
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
@@ -730,6 +730,11 @@ st.caption("Agent 1 — 大盘分析")
 # ============ 市场概览 ============
 st.header("📈 市场概览")
 
+# AI 导语：市场概览
+_ai_cache = _service.get_ai_summary(_trade_date_yyyymmdd)
+if _ai_cache and "guide/market_breadth" in _ai_cache:
+    st.info(f"🤖 {_ai_cache['guide/market_breadth']['content']}")
+
 
 @st.cache_data(ttl=300)
 def load_market_overview(trade_date: str):
@@ -1026,20 +1031,26 @@ with wave33_info:
 
 # ============ 上证指数 ============
 with st.expander("📈 上证指数 000001.SH", expanded=True):
+    # AI 导语
+    if _ai_cache and "guide/sh_index" in _ai_cache:
+        st.info(f"🤖 {_ai_cache['guide/sh_index']['content']}")
     render_index_section(_service, "000001.SH", "上证指数", end_date=_trade_date_yyyymmdd)
 
 st.divider()
 
 # ============ 创业板指 ============
 with st.expander("📉 创业板指 399006.SZ", expanded=True):
+    # AI 导语
+    if _ai_cache and "guide/cz_index" in _ai_cache:
+        st.info(f"🤖 {_ai_cache['guide/cz_index']['content']}")
     render_index_section(_service, "399006.SZ", "创业板指", end_date=_trade_date_yyyymmdd)
 
-# ============ Agent 1 分析报告 ============
+# ============ AI 每日总结 ============
 st.divider()
-st.header("🤖 Agent 1 最新分析报告")
-report_path = os.path.join(os.path.dirname(__file__), "..", "report.md")
-if os.path.exists(report_path):
-    with open(report_path, "r", encoding="utf-8") as f:
-        st.markdown(f.read())
+st.header("🤖 每日总结")
+if _ai_cache and "summary" in _ai_cache:
+    st.info(_ai_cache["summary"]["content"])
+elif _ai_cache and "error" in _ai_cache:
+    st.caption("AI 总结生成失败，请稍后重试")
 else:
-    st.info("尚未生成分析报告。运行 `python -m src.marketreview.main YYYYMMDD` 后此处会显示 Agent 1 的 LLM 输出。")
+    st.caption("AI 总结尚未生成（切换日期时将自动生成）")
