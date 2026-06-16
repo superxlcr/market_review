@@ -540,9 +540,21 @@ class DashboardService:
 
     # ---- AI summary ----
 
+    # Shared system prompt path (relative to this file)
+    _SYSTEM_PROMPT_PATH = os.path.join(
+        os.path.dirname(__file__),
+        "..", "..", "src", "marketreview", "llm", "system.md",
+    )
+
+    @classmethod
+    def _load_system_prompt(cls) -> str:
+        """Load the shared analysis framework (system prompt)."""
+        with open(cls._SYSTEM_PROMPT_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+
     @staticmethod
     def _load_prompt(name: str) -> str:
-        """Load a prompt template from llm/prompts/<name>.md."""
+        """Load a per-guide user-prompt template from llm/prompts/<name>.md."""
         import os as _os
         prompt_dir = _os.path.join(
             _os.path.dirname(__file__),
@@ -550,7 +562,7 @@ class DashboardService:
         )
         filepath = _os.path.join(prompt_dir, f"{name}.md")
         with open(filepath, "r", encoding="utf-8") as f:
-            return f.read()
+            return f.read().strip()
 
     def _get_llm(self):
         """Lazy-init the LLM client."""
@@ -582,6 +594,7 @@ class DashboardService:
         model = llm.model_name
         result = {}
         FAIL_PLACEHOLDER = "AI 摘要暂时不可用"
+        sys_prompt = self._load_system_prompt()
 
         # --- 1. Market overview data ---
         overview = self.get_market_overview(trade_date)
@@ -643,23 +656,11 @@ class DashboardService:
         # -- 3浪3选股 --
         w33 = self.get_wave33_data(chart_days=15, rolling_days=21,
                                     end_date=trade_date)
-        wave33_data = {
-            "说明": (
-                "全市场主升浪强势股筛选：连续5个交易日同时满足 "
-                "KD标准K>80、WR(10)<20、WR(20)<20、RSI(9)>70、市值>100亿。"
-                "每日选出的股票取21日滚动并集，代表近期走主升浪的股票池。"
-            ),
-            "用法": (
-                "数量上升=赚钱效应扩散，下降=收缩。"
-                "3天连续同方向=初步信号，5天=趋势确立。"
-                "20日盈利占比=选出强势股持有20日实际盈利比例。"
-            ),
-            "近15日数据": [],
-        }
+        wave33_list = []
         if w33["dates"]:
             for i, d in enumerate(w33["dates"]):
                 dc = d.replace("-", "")
-                wave33_data["近15日数据"].append({
+                wave33_list.append({
                     "日期": f"{dc[4:6]}-{dc[6:8]}",
                     "数量": w33["counts"][i],
                     "20日盈利占比": f"{w33['profit_pcts'][i]}%",
@@ -668,13 +669,14 @@ class DashboardService:
         breadth_data = {
             "涨跌结构": breadth_structure,
             "成交额": turnover_data,
-            "3浪3选股": wave33_data,
+            "3浪3选股_近15日": wave33_list,
         }
 
         try:
-            prompt = self._load_prompt("guide_market_breadth")
+            user_tmpl = self._load_prompt("guide_market_breadth")
             guide_breadth = llm.chat(
-                "", prompt.format(data=_json.dumps(breadth_data, ensure_ascii=False)))
+                sys_prompt,
+                user_tmpl.format(data=_json.dumps(breadth_data, ensure_ascii=False)))
         except Exception as e:
             log.warning("guide_market_breadth LLM call failed: %s", e)
             guide_breadth = FAIL_PLACEHOLDER
@@ -685,13 +687,16 @@ class DashboardService:
         )
         result["guide/market_breadth"] = {"content": guide_breadth, "model": model}
 
-        # --- 3. Guide: SH index ---
+        # --- 3. Guide: SH index (with market breadth as context) ---
         sh_rows = self._dp.get_daily("000001.SH", end_date=trade_date, lookback_days=360)
         sh_summary = build_technical_summary("000001.SH", "上证指数", sh_rows)
 
         try:
-            prompt = self._load_prompt("guide_sh_index")
-            guide_sh = llm.chat("", prompt.format(data=_json.dumps(sh_summary, ensure_ascii=False)))
+            user_tmpl = self._load_prompt("guide_sh_index")
+            guide_sh = llm.chat(sys_prompt, user_tmpl.format(
+                market_breadth_guide=guide_breadth,
+                data=_json.dumps(sh_summary, ensure_ascii=False),
+            ))
         except Exception as e:
             log.warning("guide_sh_index LLM call failed: %s", e)
             guide_sh = FAIL_PLACEHOLDER
@@ -702,13 +707,16 @@ class DashboardService:
         )
         result["guide/sh_index"] = {"content": guide_sh, "model": model}
 
-        # --- 4. Guide: CZ index ---
+        # --- 4. Guide: CZ index (with market breadth as context) ---
         cz_rows = self._dp.get_daily("399006.SZ", end_date=trade_date, lookback_days=360)
         cz_summary = build_technical_summary("399006.SZ", "创业板指", cz_rows)
 
         try:
-            prompt = self._load_prompt("guide_cz_index")
-            guide_cz = llm.chat("", prompt.format(data=_json.dumps(cz_summary, ensure_ascii=False)))
+            user_tmpl = self._load_prompt("guide_cz_index")
+            guide_cz = llm.chat(sys_prompt, user_tmpl.format(
+                market_breadth_guide=guide_breadth,
+                data=_json.dumps(cz_summary, ensure_ascii=False),
+            ))
         except Exception as e:
             log.warning("guide_cz_index LLM call failed: %s", e)
             guide_cz = FAIL_PLACEHOLDER
@@ -721,8 +729,8 @@ class DashboardService:
 
         # --- 5. Summary ---
         try:
-            prompt = self._load_prompt("summary")
-            summary = llm.chat("", prompt.format(
+            user_tmpl = self._load_prompt("summary")
+            summary = llm.chat(sys_prompt, user_tmpl.format(
                 guide_breadth=guide_breadth,
                 guide_sh=guide_sh,
                 guide_cz=guide_cz,
