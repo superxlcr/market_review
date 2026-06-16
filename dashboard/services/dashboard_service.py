@@ -589,19 +589,92 @@ class DashboardService:
             return {"error": "无法获取市场概览数据"}
 
         # --- 2. Guide: market breadth ---
-        breadth_data = {
-            "今日涨跌比": f"{overview['today']['up']}:{overview['today']['flat']}:{overview['today']['down']}",
-            "涨停": overview["today"]["up_limit"],
-            "跌停": overview["today"]["down_limit"],
-            "今日成交额": f"{overview['today']['total_yi']:,.0f}亿",
+        today = overview["today"]
+        yesterday = overview["yesterday"]
+        trend = overview["trend"]
+
+        # -- 涨跌结构 --
+        t_total = today["up"] + today["flat"] + today["down"]
+        breadth_structure = {
+            "今日": {
+                "上涨": today["up"],
+                "平盘": today["flat"],
+                "下跌": today["down"],
+                "上涨占比": f"{today['up'] / t_total * 100:.1f}%",
+                "涨停": today["up_limit"],
+                "跌停": today["down_limit"],
+            },
         }
-        if overview["yesterday"]:
-            breadth_data["昨日成交额"] = f"{overview['yesterday']['total_yi']:,.0f}亿"
-            breadth_data["昨日涨跌比"] = f"{overview['yesterday']['up']}:{overview['yesterday']['flat']}:{overview['yesterday']['down']}"
+        if yesterday:
+            y_total = yesterday["up"] + yesterday["flat"] + yesterday["down"]
+            breadth_structure["昨日"] = {
+                "上涨": yesterday["up"],
+                "平盘": yesterday["flat"],
+                "下跌": yesterday["down"],
+                "上涨占比": f"{yesterday['up'] / y_total * 100:.1f}%",
+                "涨停": yesterday["up_limit"],
+                "跌停": yesterday["down_limit"],
+            }
+
+        # -- 成交额 --
+        turnover_data = {
+            "今日": f"{today['total_yi']:,.0f}亿",
+        }
+        if yesterday:
+            turnover_data["昨日"] = f"{yesterday['total_yi']:,.0f}亿"
+
+        amounts = [d["total_yi"] for d in trend]
+        if len(amounts) >= 5:
+            turnover_data["5日均量"] = f"{sum(amounts[-5:]) / 5:,.0f}亿"
+        if len(amounts) >= 10:
+            turnover_data["10日均量"] = f"{sum(amounts[-10:]) / 10:,.0f}亿"
+
+        turnover_data["近10日每日"] = []
+        for d in trend:
+            up_n = d.get("up", 0)
+            down_n = d.get("down", 0)
+            side = "涨多" if up_n >= down_n else "跌多"
+            turnover_data["近10日每日"].append({
+                "日期": f"{d['date'][4:6]}-{d['date'][6:8]}",
+                "成交额": f"{d['total_yi']:,.0f}亿",
+                "涨跌": side,
+            })
+
+        # -- 3浪3选股 --
+        w33 = self.get_wave33_data(chart_days=15, rolling_days=21,
+                                    end_date=trade_date)
+        wave33_data = {
+            "说明": (
+                "全市场主升浪强势股筛选：连续5个交易日同时满足 "
+                "KD标准K>80、WR(10)<20、WR(20)<20、RSI(9)>70、市值>100亿。"
+                "每日选出的股票取21日滚动并集，代表近期走主升浪的股票池。"
+            ),
+            "用法": (
+                "数量上升=赚钱效应扩散，下降=收缩。"
+                "3天连续同方向=初步信号，5天=趋势确立。"
+                "20日盈利占比=选出强势股持有20日实际盈利比例。"
+            ),
+            "近15日数据": [],
+        }
+        if w33["dates"]:
+            for i, d in enumerate(w33["dates"]):
+                dc = d.replace("-", "")
+                wave33_data["近15日数据"].append({
+                    "日期": f"{dc[4:6]}-{dc[6:8]}",
+                    "数量": w33["counts"][i],
+                    "20日盈利占比": f"{w33['profit_pcts'][i]}%",
+                })
+
+        breadth_data = {
+            "涨跌结构": breadth_structure,
+            "成交额": turnover_data,
+            "3浪3选股": wave33_data,
+        }
 
         try:
             prompt = self._load_prompt("guide_market_breadth")
-            guide_breadth = llm.chat("", prompt.format(data=_json.dumps(breadth_data, ensure_ascii=False)))
+            guide_breadth = llm.chat(
+                "", prompt.format(data=_json.dumps(breadth_data, ensure_ascii=False)))
         except Exception as e:
             log.warning("guide_market_breadth LLM call failed: %s", e)
             guide_breadth = FAIL_PLACEHOLDER
