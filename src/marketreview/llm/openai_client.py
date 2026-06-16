@@ -24,6 +24,11 @@ class OpenAIClient(LLMClient):
         return self._model
 
     def chat(self, system_prompt: str, user_prompt: str) -> str:
+        log.info("LLM request: model=%s system_len=%d user_len=%d",
+                 self._model, len(system_prompt), len(user_prompt))
+        log.debug("LLM system_prompt: %s", system_prompt)
+        log.debug("LLM user_prompt: %s", user_prompt)
+
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -33,4 +38,6 @@ class OpenAIClient(LLMClient):
             temperature=0.7,
             max_tokens=2000,
         )
-        return resp.choices[0].message.content.strip()
+        content = resp.choices[0].message.content.strip()
+        log.info("LLM response: len=%d content=%s", len(content), content)
+        return content
