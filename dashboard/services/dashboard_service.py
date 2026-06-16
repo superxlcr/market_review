@@ -578,7 +578,176 @@ class DashboardService:
         Returns empty dict if nothing cached.
         """
         rows = self._dp.cache.get_ai_summary(trade_date, "market_overview")
-        return {r["guide_key"]: r for r in rows}
+        result = {}
+        for r in rows:
+            if r.get("content") == "AI 摘要暂时不可用":
+                continue  # stale placeholder from a prior failed run — skip so caller retries
+            result[r["guide_key"]] = r
+        return result
+
+    @staticmethod
+    def _build_index_ai_data(code: str, name: str, rows: list[dict],
+                              tech_summary: dict) -> dict:
+        """Build structured AI-ready data dict for an index guide."""
+        if not rows:
+            return {"error": "无数据"}
+
+        latest = rows[-1]
+        close = float(latest["close"])
+        open_val = float(latest["open"])
+        high = float(latest["high"])
+        low = float(latest["low"])
+
+        # --- 涨跌幅 ---
+        if len(rows) >= 2:
+            prev_close = float(rows[-2]["close"])
+            chg_pct = (close / prev_close - 1) * 100
+        else:
+            chg_pct = 0.0
+
+        # === K线价格 ===
+        kp = tech_summary.get("kline_pattern", {})
+        price_data: dict = {
+            "今日": {
+                "开盘": round(open_val, 2),
+                "最高": round(high, 2),
+                "最低": round(low, 2),
+                "收盘": round(close, 2),
+                "涨跌幅": f"{chg_pct:+.2f}%",
+                "K线类型": kp.get("type", ""),
+                "实体占比": f"{kp.get('body_pct', 0)}%",
+                "上影线占比": f"{kp.get('upper_wick_pct', 0)}%",
+                "下影线占比": f"{kp.get('lower_wick_pct', 0)}%",
+                "解读": kp.get("interpretation", ""),
+            },
+        }
+
+        # 近5日K线
+        recent_5 = rows[-min(5, len(rows)):]
+        price_data["近5日K线"] = []
+        for i, r in enumerate(recent_5):
+            entry: dict = {
+                "日期": f"{r['date'][4:6]}-{r['date'][6:8]}",
+                "开": round(float(r["open"]), 2),
+                "高": round(float(r["high"]), 2),
+                "低": round(float(r["low"]), 2),
+                "收": round(float(r["close"]), 2),
+            }
+            # chg from previous candle
+            if i > 0:
+                prev_r = recent_5[i - 1]
+                entry["涨跌幅"] = f"{(float(r['close']) / float(prev_r['close']) - 1) * 100:+.2f}%"
+            elif len(rows) > len(recent_5):
+                prev_r = rows[-len(recent_5) - 1]
+                entry["涨跌幅"] = f"{(float(r['close']) / float(prev_r['close']) - 1) * 100:+.2f}%"
+            price_data["近5日K线"].append(entry)
+
+        # === 均线 ===
+        mas = tech_summary.get("mas", {})
+        ma_dirs = tech_summary.get("ma_directions", {})
+        ma_arrangement = tech_summary.get("ma_arrangement", "")
+
+        ma_list: list[dict] = []
+        for period in [5, 10, 20, 60, 120, 240]:
+            key = f"MA{period}"
+            val = mas.get(key)
+            if val is None:
+                continue
+            direction = ma_dirs.get(key, "→")
+            if direction == "↑":
+                role = "支撑"
+            elif direction == "↓":
+                role = "压力"
+            else:
+                role = "无(走平)"
+            ma_list.append({
+                "均线": key,
+                "值": val,
+                "方向": direction,
+                "作用": role,
+            })
+
+        ma_data = {"排列": ma_arrangement, "各均线": ma_list}
+
+        # === 成交量 ===
+        vol = tech_summary.get("volume", {})
+
+        # 近10日成交额
+        recent_10 = rows[-min(10, len(rows)):]
+        turnover_10d: list[dict] = []
+        for r in recent_10:
+            amount_yi = round(float(r["amount"]) / 1e5, 2)
+            turnover_10d.append({
+                "日期": f"{r['date'][4:6]}-{r['date'][6:8]}",
+                "成交额": f"{amount_yi:,.0f}亿",
+            })
+
+        # 扣抵量（含扣抵日日期）
+        deduct_data: dict = {}
+        for period, label in [(5, "MA5"), (10, "MA10")]:
+            idx = len(rows) - 1 - period
+            if idx >= 0:
+                deduct_date = rows[idx]["date"]
+                deduct_amt = vol.get(f"ma{period}_deduct_yi")
+                vs_pct = vol.get(f"vs_ma{period}_deduct_pct")
+                deduct_data[label] = {
+                    "扣抵日": f"{deduct_date[4:6]}-{deduct_date[6:8]}",
+                    "扣抵量": f"{deduct_amt:,.0f}亿" if deduct_amt is not None else "N/A",
+                    "今日vs扣抵量": f"{vs_pct:+.1f}%" if vs_pct is not None else "N/A",
+                }
+
+        volume_data: dict = {
+            "今日成交额": f"{vol.get('latest_amount_yi', 0):,.0f}亿",
+            "5日均量": f"{vol.get('ma5_yi', 0):,.0f}亿",
+            "10日均量": f"{vol.get('ma10_yi', 0):,.0f}亿",
+            "今日vs5日均量": f"{vol.get('vs_ma5_pct', 0):+.1f}%",
+            "今日vs10日均量": f"{vol.get('vs_ma10_pct', 0):+.1f}%",
+            "量能趋势": vol.get("trend_5d", ""),
+            "均量状态": f"{vol.get('cross_state', '')}{'(' + str(vol.get('cross_days', 0)) + '天)' if vol.get('cross_days', 0) else ''}",
+            "扣抵量": deduct_data,
+            "近10日成交额": turnover_10d,
+        }
+
+        # === 技术指标 ===
+        kd_k = tech_summary.get("kd_k", 0) or 0
+        kd_zone = "超买区" if kd_k > 80 else ("超卖区" if kd_k < 20 else "常态区")
+        rsi_val = tech_summary.get("rsi")
+        rsi_zone = "超买区" if (rsi_val and rsi_val > 70) else ("超卖区" if (rsi_val and rsi_val < 30) else "常态区")
+
+        kd_div = tech_summary.get("kd_divergence") or {}
+        rsi_div = tech_summary.get("rsi_divergence") or {}
+
+        indicator_data: dict = {
+            "KD": {
+                "K": tech_summary.get("kd_k"),
+                "D": tech_summary.get("kd_d"),
+                "区间": kd_zone,
+                "背离": kd_div.get("type", "无"),
+            },
+            "RSI": {
+                "值": rsi_val,
+                "区间": rsi_zone,
+                "背离": rsi_div.get("type", "无"),
+            },
+            "BIAS6": f"{tech_summary.get('bias6', 0):+.2f}%",
+        }
+
+        return {
+            "指数": name,
+            "K线价格": price_data,
+            "均线": ma_data,
+            "成交量": volume_data,
+            "技术指标": indicator_data,
+        }
+
+    # ── AI 功能版本号 ─────────────────────────────────────────────
+    # X.Y.Z (语义化，仅用于验证代码是否热更成功)
+    #   X — 大板块上线时 +1，Y/Z 归零  （例：市场全景→1，个股追踪→2）
+    #   Y — 大板块内新增子版块时 +1，Z 归零 （例：加了市场概览导语、加了指数导语）
+    #   Z — 每次本地改完代码、想验证重启是否生效时 +1
+    # 打印位置：generate_ai_summary() 启动时 → stderr: [AI vX.Y.Z]
+    # ──────────────────────────────────────────────────────────────
+    _AI_VERSION = "1.0.0"
 
     def generate_ai_summary(self, trade_date: str) -> dict:
         """
@@ -588,7 +757,10 @@ class DashboardService:
         If all LLM calls fail, returns dict with a single 'error' key.
         Individual guide failures are replaced with a placeholder string.
         """
-        import json as _json
+        import json as _json, sys as _sys
+
+        _sys.stderr.write(f"[AI v{self._AI_VERSION}] generate_ai_summary({trade_date})\n")
+        _sys.stderr.flush()
 
         llm = self._get_llm()
         model = llm.model_name
@@ -678,13 +850,15 @@ class DashboardService:
                 sys_prompt,
                 user_tmpl.format(data=_json.dumps(breadth_data, ensure_ascii=False)))
         except Exception as e:
-            log.warning("guide_market_breadth LLM call failed: %s", e)
+            import traceback as _tb
+            log.warning("guide_market_breadth LLM call failed: %s\n%s", e, _tb.format_exc())
             guide_breadth = FAIL_PLACEHOLDER
 
-        self._dp.cache.save_ai_summary(
-            trade_date, "market_overview", "guide/market_breadth",
-            guide_breadth, model,
-        )
+        if guide_breadth != FAIL_PLACEHOLDER:
+            self._dp.cache.save_ai_summary(
+                trade_date, "market_overview", "guide/market_breadth",
+                guide_breadth, model,
+            )
         result["guide/market_breadth"] = {"content": guide_breadth, "model": model}
 
         # --- 3. Guide: SH index (with market breadth as context) ---
@@ -695,16 +869,22 @@ class DashboardService:
             user_tmpl = self._load_prompt("guide_sh_index")
             guide_sh = llm.chat(sys_prompt, user_tmpl.format(
                 market_breadth_guide=guide_breadth,
-                data=_json.dumps(sh_summary, ensure_ascii=False),
+                data=_json.dumps(
+                    self._build_index_ai_data("000001.SH", "上证指数", sh_rows, sh_summary),
+                    ensure_ascii=False),
             ))
         except Exception as e:
+            import traceback as _tb, sys as _sys
             log.warning("guide_sh_index LLM call failed: %s", e)
+            _sys.stderr.write(f"[TRACEBACK sh_index] {e}\n{_tb.format_exc()}\n")
+            _sys.stderr.flush()
             guide_sh = FAIL_PLACEHOLDER
 
-        self._dp.cache.save_ai_summary(
-            trade_date, "market_overview", "guide/sh_index",
-            guide_sh, model,
-        )
+        if guide_sh != FAIL_PLACEHOLDER:
+            self._dp.cache.save_ai_summary(
+                trade_date, "market_overview", "guide/sh_index",
+                guide_sh, model,
+            )
         result["guide/sh_index"] = {"content": guide_sh, "model": model}
 
         # --- 4. Guide: CZ index (with market breadth as context) ---
@@ -715,16 +895,20 @@ class DashboardService:
             user_tmpl = self._load_prompt("guide_cz_index")
             guide_cz = llm.chat(sys_prompt, user_tmpl.format(
                 market_breadth_guide=guide_breadth,
-                data=_json.dumps(cz_summary, ensure_ascii=False),
+                data=_json.dumps(
+                    self._build_index_ai_data("399006.SZ", "创业板指", cz_rows, cz_summary),
+                    ensure_ascii=False),
             ))
         except Exception as e:
-            log.warning("guide_cz_index LLM call failed: %s", e)
+            import traceback as _tb2
+            log.warning("guide_cz_index LLM call failed: %s\n%s", e, _tb2.format_exc())
             guide_cz = FAIL_PLACEHOLDER
 
-        self._dp.cache.save_ai_summary(
-            trade_date, "market_overview", "guide/cz_index",
-            guide_cz, model,
-        )
+        if guide_cz != FAIL_PLACEHOLDER:
+            self._dp.cache.save_ai_summary(
+                trade_date, "market_overview", "guide/cz_index",
+                guide_cz, model,
+            )
         result["guide/cz_index"] = {"content": guide_cz, "model": model}
 
         # --- 5. Summary ---
@@ -736,13 +920,15 @@ class DashboardService:
                 guide_cz=guide_cz,
             ))
         except Exception as e:
-            log.warning("summary LLM call failed: %s", e)
+            import traceback as _tb3
+            log.warning("summary LLM call failed: %s\n%s", e, _tb3.format_exc())
             summary = FAIL_PLACEHOLDER
 
-        self._dp.cache.save_ai_summary(
-            trade_date, "market_overview", "summary",
-            summary, model,
-        )
+        if summary != FAIL_PLACEHOLDER:
+            self._dp.cache.save_ai_summary(
+                trade_date, "market_overview", "summary",
+                summary, model,
+            )
         result["summary"] = {"content": summary, "model": model}
 
         return result

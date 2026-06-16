@@ -108,6 +108,7 @@ if apply_btn:
 # ── Phase 2: execute data loading (when pending_load_date is set) ──
 _pending = st.session_state.pop("pending_load_date", None)
 if _pending:
+    _expected_guides = {"guide/market_breadth", "guide/sh_index", "guide/cz_index", "summary"}
     # Quick check — if K-line + daily_basic cache covers this date,
     # skip the heavy K-line loading, but still ensure wave33 is computed
     # with detailed progress.
@@ -139,7 +140,7 @@ if _pending:
         # ── AI summary ──
         with st.status("正在生成 AI 总结...", expanded=False) as _ai_status:
             _cached = _service.get_ai_summary(_pending)
-            if not _cached:
+            if not _expected_guides.issubset(_cached.keys()):
                 _service.generate_ai_summary(_pending)
             _ai_status.update(label="✅ AI 总结已就绪", state="complete")
         st.session_state.trade_date = _pending
@@ -197,7 +198,7 @@ if _pending:
             # ── AI summary ──
             with st.status("正在生成 AI 总结...", expanded=False) as _ai_status:
                 _cached = _service.get_ai_summary(_pending)
-                if not _cached:
+                if not _expected_guides.issubset(_cached.keys()):
                     _service.generate_ai_summary(_pending)
                 _ai_status.update(label="✅ AI 总结已就绪", state="complete")
             st.session_state.trade_date = _pending

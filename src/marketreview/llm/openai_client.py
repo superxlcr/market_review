@@ -36,7 +36,11 @@ class OpenAIClient(LLMClient):
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.7,
-            max_tokens=2000,
+            max_tokens=16000,
+            extra_body={
+                "reasoning_effort": "max",
+                "thinking": {"type": "enabled"},
+            },
         )
         content = resp.choices[0].message.content.strip()
         log.info("LLM response: len=%d content=%s", len(content), content)
