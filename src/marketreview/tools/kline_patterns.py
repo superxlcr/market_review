@@ -181,8 +181,9 @@ def detect_bullish_engulfing_shadow(
         float(prev["low"]), float(prev["close"]),
     )
 
-    # ① 昨有长上影线
-    if not prev_shape["has_long_upper"]:
+    # ① 昨上影线显著（上影线 ≥ 实体）—— 确保上影线是昨K线的显著特征
+    #    不同于纺锤线的 has_long_upper（上影 ≥ 实体×2），吞影线只需要上影≥实体即可
+    if prev_shape["upper_wick"] < prev_shape["body"]:
         return None
 
     curr_o = float(curr["open"])
