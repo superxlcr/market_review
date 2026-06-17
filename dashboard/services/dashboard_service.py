@@ -587,8 +587,14 @@ class DashboardService:
 
     @staticmethod
     def _build_index_ai_data(code: str, name: str, rows: list[dict],
-                              tech_summary: dict) -> dict:
-        """Build structured AI-ready data dict for an index guide."""
+                              tech_summary: dict,
+                              contrib: dict | None = None,
+                              freq: dict | None = None) -> dict:
+        """Build structured AI-ready data dict for an index guide.
+
+        contrib / freq are optional pre-fetched contribution & industry-frequency
+        data from get_index_contribution / get_industry_frequency.
+        """
         if not rows:
             return {"error": "无数据"}
 
@@ -778,6 +784,54 @@ class DashboardService:
         except Exception:
             pattern_results = []
 
+        # === 权重贡献（dashboard 同款） ===
+        contrib_data: dict = {}
+        if contrib:
+            idx = contrib.get("index", {})
+            contrib_data["指数涨跌"] = {
+                "收盘": idx.get("close"),
+                "涨跌点": idx.get("chg_pts"),
+                "涨跌幅": f"{idx.get('chg_pct', 0):+.2f}%",
+            }
+            # 领涨 Top10 — keep only key fields for AI
+            if contrib.get("gainers"):
+                contrib_data["领涨Top10"] = [
+                    {
+                        "代码": g["code"],
+                        "名称": g["name"],
+                        "行业": g["industry"],
+                        "权重": f"{g['weight']:.1f}%",
+                        "涨幅": f"{g['chg_pct']:+.2f}%",
+                        "贡献点": f"{g['contrib']:+.2f}",
+                    }
+                    for g in contrib["gainers"]
+                ]
+            # 领跌 Top10
+            if contrib.get("losers"):
+                contrib_data["领跌Top10"] = [
+                    {
+                        "代码": l["code"],
+                        "名称": l["name"],
+                        "行业": l["industry"],
+                        "权重": f"{l['weight']:.1f}%",
+                        "跌幅": f"{l['chg_pct']:+.2f}%",
+                        "贡献点": f"{l['contrib']:+.2f}",
+                    }
+                    for l in contrib["losers"]
+                ]
+            # 近5日频繁领涨/领跌行业
+            if freq:
+                if freq.get("gainers"):
+                    contrib_data["近5日频繁领涨行业"] = [
+                        {"行业": f["industry"], "出现天数": f["days"]}
+                        for f in freq["gainers"]
+                    ]
+                if freq.get("losers"):
+                    contrib_data["近5日频繁领跌行业"] = [
+                        {"行业": f["industry"], "出现天数": f["days"]}
+                        for f in freq["losers"]
+                    ]
+
         return {
             "指数": name,
             "K线价格": price_data,
@@ -785,6 +839,7 @@ class DashboardService:
             "成交量": volume_data,
             "技术指标": indicator_data,
             "K线形态": pattern_results,
+            "权重贡献": contrib_data,
         }
 
     # ── AI 功能版本号 ─────────────────────────────────────────────
@@ -911,13 +966,16 @@ class DashboardService:
         # --- 3. Guide: SH index (with market breadth as context) ---
         sh_rows = self._dp.get_daily("000001.SH", end_date=trade_date, lookback_days=360)
         sh_summary = build_technical_summary("000001.SH", "上证指数", sh_rows)
+        sh_contrib = self.get_index_contribution("000001.SH", trade_date)
+        sh_freq = self.get_industry_frequency("000001.SH", trade_date)
 
         try:
             user_tmpl = self._load_prompt("guide_sh_index")
             guide_sh = llm.chat(sys_prompt, user_tmpl.format(
                 market_breadth_guide=guide_breadth,
                 data=_json.dumps(
-                    self._build_index_ai_data("000001.SH", "上证指数", sh_rows, sh_summary),
+                    self._build_index_ai_data("000001.SH", "上证指数", sh_rows, sh_summary,
+                                              contrib=sh_contrib, freq=sh_freq),
                     ensure_ascii=False),
             ))
         except Exception as e:
@@ -937,13 +995,16 @@ class DashboardService:
         # --- 4. Guide: CZ index (with market breadth as context) ---
         cz_rows = self._dp.get_daily("399006.SZ", end_date=trade_date, lookback_days=360)
         cz_summary = build_technical_summary("399006.SZ", "创业板指", cz_rows)
+        cz_contrib = self.get_index_contribution("399006.SZ", trade_date)
+        cz_freq = self.get_industry_frequency("399006.SZ", trade_date)
 
         try:
             user_tmpl = self._load_prompt("guide_cz_index")
             guide_cz = llm.chat(sys_prompt, user_tmpl.format(
                 market_breadth_guide=guide_breadth,
                 data=_json.dumps(
-                    self._build_index_ai_data("399006.SZ", "创业板指", cz_rows, cz_summary),
+                    self._build_index_ai_data("399006.SZ", "创业板指", cz_rows, cz_summary,
+                                              contrib=cz_contrib, freq=cz_freq),
                     ensure_ascii=False),
             ))
         except Exception as e:
