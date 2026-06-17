@@ -138,7 +138,7 @@ if _pending:
                 state="complete",
             )
         # ── AI summary ──
-        with st.status("正在生成 AI 总结...", expanded=False) as _ai_status:
+        with st.status("正在生成 AI 总结...", expanded=True) as _ai_status:
             _cached = _service.get_ai_summary(_pending)
             if not _expected_guides.issubset(_cached.keys()):
                 _service.generate_ai_summary(_pending)
@@ -185,8 +185,12 @@ if _pending:
         w33_result = _service.ensure_wave33_computed(_pending, progress_cb=_progress)
 
         if result["status"] == "ok":
+            status.update(label="正在生成 AI 总结...")
+            _cached = _service.get_ai_summary(_pending)
+            if not _expected_guides.issubset(_cached.keys()):
+                _service.generate_ai_summary(_pending)
             status.update(
-                label=f"✅ 数据加载完成！（{result['elapsed']:.0f}秒，"
+                label=f"✅ 全部就绪！（数据 {result['elapsed']:.0f}秒，"
                       f"K线 {result.get('raw_pages', '?')} 页，"
                       f"因子 {result.get('adj_pages', '?')} 页，"
                       f"指数 {result.get('index_chunks', 0)} 个，"
@@ -195,12 +199,6 @@ if _pending:
                       f"{w33_result['elapsed']:.0f}秒））",
                 state="complete",
             )
-            # ── AI summary ──
-            with st.status("正在生成 AI 总结...", expanded=False) as _ai_status:
-                _cached = _service.get_ai_summary(_pending)
-                if not _expected_guides.issubset(_cached.keys()):
-                    _service.generate_ai_summary(_pending)
-                _ai_status.update(label="✅ AI 总结已就绪", state="complete")
             st.session_state.trade_date = _pending
             # Clear stale caches so other pages pick up fresh data
             st.cache_data.clear()
