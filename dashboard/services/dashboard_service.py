@@ -101,6 +101,8 @@ class DashboardService:
         Fetch complete market overview for a given trade_date.
         Returns dict with keys: today, yesterday, trend, error (if any).
         """
+        import time as _time
+        _t0 = _time.perf_counter()
         if not self.is_configured:
             return None
 
@@ -145,13 +147,16 @@ class DashboardService:
         avg_5d = round(sum(amounts[-5:]) / min(5, len(amounts[-5:])), 0) if len(amounts) >= 5 else 0
         avg_10d = round(sum(amounts[-10:]) / min(10, len(amounts[-10:])), 0) if len(amounts) >= 10 else 0
 
-        return {
+        result = {
             "today": today,
             "yesterday": yesterday,
             "trend": trend,
             "avg_5d": avg_5d,
             "avg_10d": avg_10d,
         }
+        log.info("get_market_overview(%s) elapsed=%.2fs", trade_date,
+                 _time.perf_counter() - _t0)
+        return result
 
     # ---- index contribution ----
 
@@ -849,7 +854,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：generate_ai_summary() 启动时 → stderr: [AI vX.Y.Z]
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.1.1"
+    _AI_VERSION = "1.1.2"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -863,8 +868,9 @@ class DashboardService:
             phase: "market_data" | "index_start" | "index_progress" | "index_done" | "summary_start" | "summary_done"
             label: human-readable description of current stage
         """
-        import json as _json, sys as _sys
+        import json as _json, sys as _sys, time as _time
 
+        _t_total_start = _time.perf_counter()
         _sys.stderr.write(f"[AI v{self._AI_VERSION}] generate_ai_summary({trade_date})\n")
         _sys.stderr.flush()
 
@@ -877,7 +883,9 @@ class DashboardService:
         # --- 1. Market overview data ---
         if progress_cb:
             progress_cb("market_data", "正在准备市场数据...")
+        _t1 = _time.perf_counter()
         overview = self.get_market_overview(trade_date)
+        log.info("stage=market_data elapsed=%.1fs", _time.perf_counter() - _t1)
         if overview is None or "error" in overview:
             return {"error": "无法获取市场概览数据"}
 
@@ -955,6 +963,7 @@ class DashboardService:
         market_data_json = _json.dumps(breadth_data, ensure_ascii=False)
 
         # --- 3. Prepare index data (fast, local cache reads) ---
+        _t2 = _time.perf_counter()
         sh_rows = self._dp.get_daily("000001.SH", end_date=trade_date, lookback_days=360)
         sh_summary = build_technical_summary("000001.SH", "上证指数", sh_rows)
         sh_contrib = self.get_index_contribution("000001.SH", trade_date)
@@ -979,6 +988,8 @@ class DashboardService:
 
         # --- 4. Guide: SH + CZ index (concurrent LLM calls) ---
         from marketreview.llm.concurrent import batch_chat
+
+        log.info("stage=index_data_prep elapsed=%.1fs", _time.perf_counter() - _t2)
 
         INDEX_TASKS = [
             {"label": "guide/sh_index", "user_message": sh_user_msg},
@@ -1024,6 +1035,7 @@ class DashboardService:
         result["guide/cz_index"] = {"content": guide_cz, "model": model}
 
         # --- 5. Summary (market panorama overview, placed at top of page) ---
+        _t4 = _time.perf_counter()
         if progress_cb:
             progress_cb("summary_start", "正在生成市场全景总览...")
         try:
@@ -1038,6 +1050,8 @@ class DashboardService:
             log.warning("summary LLM call failed: %s\n%s", e, _tb3.format_exc())
             summary = FAIL_PLACEHOLDER
 
+        log.info("stage=summary elapsed=%.1fs", _time.perf_counter() - _t4)
+
         if summary != FAIL_PLACEHOLDER:
             self._dp.cache.save_ai_summary(
                 trade_date, "market_overview", "summary",
@@ -1045,4 +1059,7 @@ class DashboardService:
             )
         result["summary"] = {"content": summary, "model": model}
 
+        log.info("generate_ai_summary DONE total=%.1fs model=%s keys=%s",
+                 _time.perf_counter() - _t_total_start, model,
+                 sorted(result.keys()))
         return result

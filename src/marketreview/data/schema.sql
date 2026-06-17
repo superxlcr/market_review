@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS tushare_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cache_code_date ON tushare_cache(code, date DESC);
+CREATE INDEX IF NOT EXISTS idx_cache_date ON tushare_cache(date, asset_type);
 
 CREATE TABLE IF NOT EXISTS index_weight_cache (
     index_code   TEXT    NOT NULL,

@@ -6,6 +6,7 @@ Used by DashboardService to parallelise independent AI summary calls
 """
 from __future__ import annotations
 
+import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
@@ -49,16 +50,30 @@ def batch_chat(
 
     total = len(tasks)
     workers = min(max_workers, total)
+    labels = [t["label"] for t in tasks]
+
+    _t_start = _time.perf_counter()
+
+    # Track per-task start time for individual elapsed logging
+    _task_start: dict[str, float] = {}
 
     def _call_one(label: str, user_msg: str) -> tuple[str, str]:
+        _task_start[label] = _time.perf_counter()
         try:
-            return (label, llm.chat(system_prompt, user_msg))
+            content = llm.chat(system_prompt, user_msg)
+            elapsed = _time.perf_counter() - _task_start[label]
+            log.info("batch_chat task=%s elapsed=%.1fs status=ok", label, elapsed)
+            return (label, content)
         except Exception:
             import traceback as _tb
-            log.warning("batch_chat: %s failed\n%s", label, _tb.format_exc())
+            elapsed = _time.perf_counter() - _task_start[label]
+            log.warning("batch_chat task=%s elapsed=%.1fs status=failed\n%s",
+                       label, elapsed, _tb.format_exc())
             return (label, fail_placeholder)
 
     results: dict[str, str] = {}
+
+    log.info("batch_chat start: tasks=%d workers=%d labels=%s", total, workers, labels)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {
@@ -79,5 +94,10 @@ def batch_chat(
 
     if progress_cb:
         progress_cb("done", total, total, "")
+
+    total_elapsed = _time.perf_counter() - _t_start
+    failed = sum(1 for v in results.values() if v == fail_placeholder)
+    log.info("batch_chat done: total=%.1fs failed=%d/%d",
+             total_elapsed, failed, total)
 
     return results

@@ -61,9 +61,8 @@ class CacheManager:
                     log.warning("Schema mismatch for %s — dropping and recreating", table)
                     conn.executescript(f"DROP TABLE IF EXISTS {table}")
                     any_change = True
-            if not any_change:
-                return
-            # Run schema.sql — all tables use CREATE TABLE IF NOT EXISTS
+            # Always run schema.sql — all statements use IF NOT EXISTS
+            # (idempotent; ensures new indexes are created on existing DBs)
             with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
                 conn.executescript(f.read())
             conn.commit()
@@ -168,6 +167,26 @@ class CacheManager:
                 [start, end],
             ).fetchall()
         return [r[0] for r in rows]
+
+    def get_previous_trade_date(self, date_str: str) -> str | None:
+        """Return the most recent trade date in cache strictly before date_str."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT MAX(date) FROM tushare_cache WHERE date < ?",
+                [date_str],
+            ).fetchone()
+        return row[0] if row and row[0] else None
+
+    def get_date_snapshot(self, date_str: str) -> list[dict]:
+        """Return all stock rows for a given date (code, close, amount).
+        Only returns rows where asset_type='stock' (excludes indices)."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT code, close, amount FROM tushare_cache "
+                "WHERE date = ? AND asset_type = 'stock'",
+                [date_str],
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_stock_basic_count(self) -> int:
         """Return number of stocks in stock_basic_cache."""

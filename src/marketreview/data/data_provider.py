@@ -525,55 +525,120 @@ class DataProvider:
         return result
 
     # ═══════════════════════════════════════════════════════════════
-    #  Market breadth (live API — small payload)
+    #  Market breadth (cache-first — respects the cache-before-API rule)
     # ═══════════════════════════════════════════════════════════════
+
+    # Minimum number of stocks that must be in cache for a date
+    # before we trust the cache over the API (≥ 4000 for a normal trading day).
+    _BREADTH_CACHE_MIN_STOCKS = 4000
 
     def get_market_breadth(self, trade_date: str) -> dict | None:
         """
         Fetch single-day market breadth (up/down counts, turnover by exchange).
-        Uses api.daily() — raw data is fine for counting.
+
+        Cache-first: reads from local tushare_cache if the date has ≥ 4000 stocks;
+        falls back to live API only when cache is incomplete.
         """
         try:
-            daily = self._api.daily(
-                trade_date=trade_date,
-                fields="ts_code,close,pre_close,amount",
-            )
-            if daily is None or daily.empty:
-                return None
-
-            up = int(len(daily[daily["close"] > daily["pre_close"]]))
-            down = int(len(daily[daily["close"] < daily["pre_close"]]))
-            flat = int(len(daily[daily["close"] == daily["pre_close"]]))
-
-            sh = daily[daily["ts_code"].str.endswith(".SH")]
-            sz = daily[daily["ts_code"].str.endswith(".SZ")]
-            bj = daily[daily["ts_code"].str.endswith(".BJ")]
-
-            total_yi = round(float(daily["amount"].sum()) / 1e5, 0)
-            sh_yi = round(float(sh["amount"].sum()) / 1e5, 0) if len(sh) > 0 else 0
-            sz_yi = round(float(sz["amount"].sum()) / 1e5, 0) if len(sz) > 0 else 0
-            bj_yi = round(float(bj["amount"].sum()) / 1e5, 0) if len(bj) > 0 else 0
-
-            up_limit = down_limit = 0
-            try:
-                limits = self._api.stk_limit(trade_date=trade_date)
-                if limits is not None and not limits.empty:
-                    merged = daily.merge(limits, on="ts_code")
-                    up_limit = int(len(merged[merged["close"] == merged["up_limit"]]))
-                    down_limit = int(len(merged[merged["close"] == merged["down_limit"]]))
-            except Exception:
-                pass
-
-            return {
-                "trade_date": trade_date,
-                "up": up, "down": down, "flat": flat,
-                "up_limit": up_limit, "down_limit": down_limit,
-                "total_yi": total_yi,
-                "sh_yi": sh_yi, "sz_yi": sz_yi, "bj_yi": bj_yi,
-            }
+            cnt = self.cache.count_daily_date(trade_date)
+            if cnt >= self._BREADTH_CACHE_MIN_STOCKS:
+                return self._breadth_from_cache(trade_date)
+            # Fallback to live API
+            log.info("get_market_breadth(%s): cache has %d stocks (< %d), falling back to API",
+                     trade_date, cnt, self._BREADTH_CACHE_MIN_STOCKS)
+            return self._breadth_from_api(trade_date)
         except Exception as e:
             log.warning("get_market_breadth failed for %s: %s", trade_date, e)
             return None
+
+    def _breadth_from_cache(self, trade_date: str) -> dict | None:
+        """Compute market breadth from local tushare_cache."""
+        today_rows = self.cache.get_date_snapshot(trade_date)
+        if not today_rows:
+            return None
+
+        prev_date = self.cache.get_previous_trade_date(trade_date)
+        prev_rows = self.cache.get_date_snapshot(prev_date) if prev_date else []
+        prev_map = {r["code"]: r["close"] for r in prev_rows} if prev_rows else {}
+
+        up = down = flat = 0
+        total_amount = 0.0
+        sh_amount = sz_amount = bj_amount = 0.0
+
+        for r in today_rows:
+            code = r["code"]
+            close = float(r["close"]) if r["close"] else 0.0
+            amount = float(r["amount"]) if r["amount"] else 0.0
+            total_amount += amount
+
+            if code.endswith(".SH"):
+                sh_amount += amount
+            elif code.endswith(".SZ"):
+                sz_amount += amount
+            elif code.endswith(".BJ"):
+                bj_amount += amount
+
+            prev_close = prev_map.get(code)
+            if prev_close is None or prev_close == 0:
+                flat += 1
+            elif close > prev_close:
+                up += 1
+            elif close < prev_close:
+                down += 1
+            else:
+                flat += 1
+
+        # up_limit / down_limit still require the live stk_limit API
+        # (not cached).  Skip in cache path — it's best-effort anyway.
+        return {
+            "trade_date": trade_date,
+            "up": up, "down": down, "flat": flat,
+            "up_limit": 0, "down_limit": 0,
+            "total_yi": round(total_amount / 1e5, 0),
+            "sh_yi": round(sh_amount / 1e5, 0),
+            "sz_yi": round(sz_amount / 1e5, 0),
+            "bj_yi": round(bj_amount / 1e5, 0),
+        }
+
+    def _breadth_from_api(self, trade_date: str) -> dict | None:
+        """Live API fallback when cache doesn't have enough data for the date."""
+        daily = self._api.daily(
+            trade_date=trade_date,
+            fields="ts_code,close,pre_close,amount",
+        )
+        if daily is None or daily.empty:
+            return None
+
+        up = int(len(daily[daily["close"] > daily["pre_close"]]))
+        down = int(len(daily[daily["close"] < daily["pre_close"]]))
+        flat = int(len(daily[daily["close"] == daily["pre_close"]]))
+
+        sh = daily[daily["ts_code"].str.endswith(".SH")]
+        sz = daily[daily["ts_code"].str.endswith(".SZ")]
+        bj = daily[daily["ts_code"].str.endswith(".BJ")]
+
+        total_yi = round(float(daily["amount"].sum()) / 1e5, 0)
+        sh_yi = round(float(sh["amount"].sum()) / 1e5, 0) if len(sh) > 0 else 0
+        sz_yi = round(float(sz["amount"].sum()) / 1e5, 0) if len(sz) > 0 else 0
+        bj_yi = round(float(bj["amount"].sum()) / 1e5, 0) if len(bj) > 0 else 0
+
+        up_limit = down_limit = 0
+        try:
+            limits = self._api.stk_limit(trade_date=trade_date)
+            if limits is not None and not limits.empty:
+                merged = daily.merge(limits, on="ts_code")
+                up_limit = int(len(merged[merged["close"] == merged["up_limit"]]))
+                down_limit = int(len(merged[merged["close"] == merged["down_limit"]]))
+        except Exception:
+            pass
+
+        return {
+            "trade_date": trade_date,
+            "up": up, "down": down, "flat": flat,
+            "up_limit": up_limit, "down_limit": down_limit,
+            "total_yi": total_yi,
+            "sh_yi": sh_yi, "sz_yi": sz_yi, "bj_yi": bj_yi,
+        }
 
     # ═══════════════════════════════════════════════════════════════
     #  Index weights
