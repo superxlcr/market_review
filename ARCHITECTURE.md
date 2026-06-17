@@ -1,141 +1,250 @@
-# ARCHITECTURE — A-stock Market Review System
+# A股复盘系统 — 架构文档
 
-## 分层架构
+> 最后更新：2026-06-18
+
+## 1. 系统概述
+
+基于 Streamlit 的 A 股每日复盘仪表盘。用户在**控制台**选择交易日 → 系统自动加载数据 → 展示市场全景 + 板块分析 + 个股追踪。AI 在每个板块顶部生成导语总结。
+
+**核心理念：**
+- **LLM 做推理**（趋势判断、状态归类、文字总结）
+- **代码做计算**（均线、指标、公式筛选、权重贡献）
+- **数据提前加载到本地缓存**，Dashboard 只读缓存
+- **AI 只给数据和用法说明，不下结论** — 列表给 AI 自己找规律
+
+## 2. 架构总览
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Dashboard (dashboard/app.py)                    │  ← 展示层：Streamlit UI
-│    - 渲染 HTML 表格 / Plotly 图表                │
-│    - 调用 rendering/ 中的图表组件                │
-│    - 不包含业务逻辑                               │
-├─────────────────────────────────────────────────┤
-│  Agent Tools (src/marketreview/tools/)           │  ← 工具层：CrewAI BaseTool
-│    - market_tools.py   Agent 1 的数据工具        │
-│    - contribution.py   指数贡献计算              │
-│    - 所有工具必须通过 DataProvider 访问数据      │
-├─────────────────────────────────────────────────┤
-│  Technical Lib (src/marketreview/tools/)         │  ← 业务逻辑：纯函数
-│    - technical.py      技术分析（MA/量/指标等）   │
-│    - Dashboard 和 Agent Tools 共用               │
-├─────────────────────────────────────────────────┤
-│  Data Layer (src/marketreview/data/)             │  ← 数据层：单一入口
-│    - DataProvider      对外唯一接口              │
-│    - CacheManager      内部 SQLite 缓存          │
-│    - Tushare API       仅 DataProvider 内部调用  │
-└─────────────────────────────────────────────────┘
+Dashboard (Streamlit, 4 pages)
+  └── DashboardService  (统一服务门面)
+        ├── DataProvider   (数据抽象层)
+        │     └── CacheManager  (SQLite 缓存)
+        │           └── schema.sql
+        ├── Tools  (纯计算模块)
+        │     ├── technical.py       # 技术指标 (MA/KD/RSI/BIAS/背离)
+        │     ├── contribution.py    # 权重贡献分析
+        │     ├── wave33.py          # 3浪3选股公式
+        │     └── kline_patterns.py  # K线形态识别
+        └── LLM  (AI 总结)
+              ├── OpenAIClient       # LLM 客户端
+              ├── concurrent.py      # 并发 LLM 调用
+              ├── system.md          # 共享系统提示词
+              └── prompts/           # 各板块用户提示词模板
 ```
 
-## 核心设计规则
+**与原始设计的差异：** 系统已从 CrewAI Flow 架构完全重构为纯 Streamlit + 服务层架构。不再使用 CrewAI Agent 编排，所有逻辑由 `DashboardService` 直接调用工具模块完成，AI 总结通过 LLM 直调实现。
 
-### 1. DataProvider 是数据唯一入口
+## 3. 项目目录结构
 
-- ✅ Dashboard / Agent Tools → `DataProvider.get_daily()` / `get_market_breadth()` / `get_latest_trade_date()`
-- ❌ **禁止**在 DataProvider 之外调用 `ts.pro_api()` / `ts.pro_bar()`
-- ❌ **禁止**在 DataProvider 之外直接使用 `CacheManager`
-- **原因**: Tushare 可能替换为 akshare/Wind，数据源变更只需改 DataProvider 内部
+```
+marketreview/
+├── architecture.md               ← 本文件
+├── AGENTS.md                     # CrewAI 参考（保留用于模板参考）
+├── dashboard/
+│   ├── app.py                    # Streamlit 入口（多页面导航）
+│   ├── pages/
+│   │   ├── 00_控制台.py          # 日期选择 + 数据加载 + AI 总结触发
+│   │   ├── 01_市场全景.py        # 大盘分析（上证/创业板）+ 33公式
+│   │   ├── 02_板块分析.py        # 行业板块分析
+│   │   └── 03_个股追踪.py        # 自选股追踪
+│   ├── rendering/
+│   │   ├── charts.py             # Plotly 图表构建（K线+均线+成交量）
+│   │   └── styles.py             # 颜色工具 + CSS
+│   └── services/
+│       └── dashboard_service.py  # 统一服务门面
+├── src/marketreview/
+│   ├── data/
+│   │   ├── cache_manager.py      # SQLite 缓存读写
+│   │   ├── data_provider.py      # 数据抽象层（tushare → 缓存）
+│   │   └── schema.sql            # DDL（8 表 + 索引）
+│   ├── tools/
+│   │   ├── technical.py          # 技术分析工具
+│   │   ├── contribution.py       # 权重贡献 + 行业频率
+│   │   ├── wave33.py             # 33 公式选股
+│   │   └── kline_patterns.py     # K 线形态检测
+│   ├── llm/
+│   │   ├── __init__.py           # LLMClient 抽象 + 工厂
+│   │   ├── openai_client.py      # OpenAI-compatible 客户端
+│   │   ├── concurrent.py         # 并发批量 LLM 调用
+│   │   ├── system.md             # 共享系统提示词
+│   │   └── prompts/
+│   │       ├── guide_sh_index.md  # 上证指数导语模板
+│   │       ├── guide_cz_index.md  # 创业板指导语模板
+│   │       └── summary.md         # 总览摘要模板
+│   └── log_util.py               # 日志工具（每模块独立文件）
+├── data/                         # SQLite 数据库文件（marketreview.db）
+├── logs/                         # 日志文件
+└── .env                          # 环境变量（TUSHARE_TOKEN, OPENAI_API_KEY 等）
+```
 
-详见 [[data-layer-architecture]]
+## 4. 数据层
 
-### 2. 业务逻辑与渲染分离
+### 4.1 数据库（SQLite，8 表）
 
-- 计算/分析函数放在 `technical.py`，Dashboard 和 Agent Tools 共用
-- Dashboard 只负责渲染，不实现业务逻辑
-- 颜色生成器等纯渲染逻辑放在 Dashboard 侧
+| 表 | 用途 | 关键字段 |
+|----|------|----------|
+| `tushare_cache` | 日线 K 线缓存（不复权 + adj_factor） | code, date, OHLCV, amount, adj_factor, asset_type |
+| `index_weight_cache` | 指数成分股权重（月度发布） | index_code, con_code, weight_date, weight |
+| `stock_industry_cache` | 申万行业分类（3级） | ts_code, name, l1/l2/l3 code/name |
+| `stock_basic_cache` | 全 A 股基础信息 | ts_code, name, list_date, is_st |
+| `daily_basic_cache` | 市值数据（日频） | ts_code, trade_date, total_mv, circ_mv |
+| `wave33_cache` | 33公式每日选股结果 | trade_date, count, profit_count, profit_pct, stock_codes(JSON) |
+| `index_contribution_cache` | 指数权重贡献缓存 | index_code, trade_date, top_n, weight_type, data(JSON) |
+| `ai_summary` | AI 总结缓存 | trade_date, summary_type, guide_key, content, model |
 
-### 3. Agent Tools 必须通过 DataProvider
+### 4.2 复权策略
 
-- `GetMarketBreadthTool` 调用 `DataProvider.get_market_breadth()`，不直接访问 `_api`
-- `GetIndexTechnicalsTool` 调用 `DataProvider.get_daily()` + `build_technical_summary()`
+- **存储**：不复权价格 + per-date `adj_factor`
+- **读取时转换**：`qfq_price = raw_price × adj_factor / latest_adj_factor`
+- **优势**：一组原始数据可生成任意日期的前复权，无需每次除权后重算
 
-## 模块职责
+### 4.3 CacheManager 特性
 
-### `dashboard/app.py`
-Streamlit 页面骨架：标题、日期解析、expander 循环、报告展示。
-**不应包含**: 数据获取逻辑（应有 DashboardService）、业务计算（应在 technical.py）。
+- **Schema 自动检测**：启动时逐表检查列结构，仅删除/重建不匹配的表（不丢弃整个数据库）
+- **日期边界检查**：`daily_basic_has_range()` 检查 end_date 是否有数据行（避免 SQL GROUP BY 对零行日期不可见导致的隐性数据缺失）
+- **数据覆盖率验证**：`DataProvider._validate_coverage()` 在数据加载后自动检测每日期望股票数是否 >= 90%，不足则自动重新拉取
 
-### `src/marketreview/tools/technical.py`
-共享技术分析函数：
-| 函数 | 用途 |
+## 5. 数据加载流程
+
+```
+用户选择日期 -> 控制台 00_控制台.py
+  ├── 快速路径：check_cache_coverage() -> K线 + daily_basic 均覆盖
+  │   ├── ensure_wave33_computed() -> 扫描或跳过
+  │   └── generate_ai_summary() -> 生成/读取 AI 总结
+  └── 慢速路径：ensure_data_loaded()
+        ├── 判断缺失范围 -> 20天/chunk 分页拉取 api.daily + api.adj_factor
+        ├── _ensure_indices_loaded() -> api.index_daily（6个跟踪指数）
+        ├── _fetch_stock_basic_once() -> 全 A 股列表
+        ├── _ensure_daily_basic_loaded() -> 市值数据（10天/chunk）
+        ├── _validate_coverage() -> 覆盖率检查 + 自动补拉
+        ├── ensure_wave33_computed() -> 33公式扫描
+        └── generate_ai_summary() -> AI 总结
+```
+
+**关键参数：**
+- `_FETCH_DAYS = 1000`：拉取 1000 天 K 线历史
+- `_CHECK_DAYS = 500`：检查 500 天覆盖率即视为完整
+- `_CHUNK_DAYS = 20`：每 chunk 20 个日历日（避免 tushare 分页 offset 超限）
+
+## 6. Dashboard 页面
+
+### 6.0 控制台（00_控制台.py）
+- 日期选择器 + 交易日验证
+- 数据加载进度（多阶段进度回调：K线/市值/指数/33公式/AI）
+- AI 总结卡片 + 各板块导语展示
+
+### 6.1 市场全景（01_市场全景.py）
+- **市场概览**：涨跌家数、成交额（沪/深/京）、环比变化
+- **上证指数 + 创业板指**：K 线图 + MA(5/10/20/60/120/240)、成交量分析、KD 指标、BIAS、RSI 背离
+- **权重贡献**：领涨/领跌 Top10（基于流通市值动态计算）、行业频率
+- **33 公式**：近 15 日滚动窗口选股数量 + 20日盈利占比柱状图
+- **AI 导语**：上证/创业板各有独立导语，顶部有全景总览摘要
+
+### 6.2 板块分析（02_板块分析.py）
+- 申万行业板块技术分析（复用同一技术指标框架）
+- 权重贡献 + 行业频率统计
+
+### 6.3 个股追踪（03_个股追踪.py）
+- 自选股 K 线 + 技术指标展示
+- 待扩展：四状态判定、持仓分层管理
+
+## 7. 工具模块
+
+### 7.1 technical.py — 技术分析
+| 功能 | 函数 |
 |------|------|
-| `rows_to_df()` | 缓存行 → DataFrame |
-| `calc_ma()` | 计算多周期均线 |
-| `ma_direction()` | 均线方向（1日斜率） |
-| `ma_arrangement()` | 均线排列（短期/中长期分判） |
-| `get_offset_info()` | 扣抵日/扣抵量/后续均量 |
-| `get_ma_role()` | 均线作用（支撑/压制/拖拽） |
-| `volume_analysis()` | 成交额分析（均额/趋势/交叉） |
-| `calc_kdj()` / `calc_rsi()` / `calc_bias()` | 技术指标 |
-| `kline_pattern()` | K线形态（单根） |
-| `build_technical_summary()` | 综合摘要（Agent 用） |
+| 均线系统 | `calc_ma()`, `ma_direction()`, `ma_arrangement()` |
+| 成交量分析 | `volume_analysis()` (含扣抵量、均额交叉、5日趋势) |
+| KD 指标 | `calc_kd()` (展示用), `calc_kd_standard()` (筛选用) |
+| RSI | `calc_rsi()` (通达信 SMA 公式) |
+| BIAS | `calc_bias()`, `bias_status()` (超买/超卖判定) |
+| WR | `calc_wr()` |
+| KD 背离 | `detect_kd_divergence()` (含区间边界检测) |
+| RSI 背离 | `detect_rsi_divergence()` |
+| 扣抵分析 | `get_offset_info()` (扣抵日定位 + 均量窗口) |
+| 均线角色 | `get_ma_role()` (支撑/压制/拖拽) |
+| K线形态 | `kline_pattern()` (单K线：实体/影线比例) |
+| 综合摘要 | `build_technical_summary()` |
 
-### `src/marketreview/tools/market_tools.py`
-Agent 1 的 CrewAI 工具（BaseTool 子类）：
-- `GetIndexTechnicalsTool` — 指数技术分析
-- `GetMarketBreadthTool` — 市场宽度数据
-- `GetIndexContributionTool` — 权重股贡献
+### 7.2 contribution.py — 权重贡献
+- `build_index_contribution()`：从 circ_mv 动态计算成分股权重，输出领涨/领跌 Top10
+- `build_industry_frequency()`：跨日统计行业出现频率（>=3天）
+- `pick_industry_label()`：L1/L2/L3 行业标签覆盖逻辑
 
-### `src/marketreview/data/data_provider.py`
-对外接口：
-- `get_daily(code, lookback_days)` — K线数据（缓存+拉取）
-- `get_latest_trade_date(code)` — 最新交易日
-- `get_market_breadth(trade_date)` — 市场宽度
+### 7.3 wave33.py — 33 公式选股
+- 条件：连续5日 K>80 + WR(10/20)<20 + RSI(9)>70 + 市值 > 100亿
+- 两窗口缓存设计：
+  - **USE 窗口**：40 个交易日（满足图表显示）
+  - **CACHE 窗口**：80 个交易日（2x 超取 = 切换日期即时命中）
+- 滚动 21 日去重 + 累计盈利预计算
+- `compute_trend()`：趋势方向判定（含滞后确认逻辑）
 
-### `src/marketreview/data/cache_manager.py`
-SQLite 缓存 CRUD，仅 DataProvider 内部使用。
+### 7.4 kline_patterns.py — K 线形态识别
+- 两阶段架构：单K线分类 -> 多K线形态匹配
+- 当前支持：多头吞影线（仙人指路）、空头吞影线、颈上线/颈内线、高档/低档纺锤线
 
-## 数据流（以指数页面为例）
+## 8. AI 总结（3 步流水线）
 
+### 8.1 提示词架构
+所有 AI 调用共享同一个 **系统提示词**（`system.md`），定义分析优先级：
+1. **结构** > 2. **成交量** > 3. **K线价格** > 4. **技术指标**
+
+每个输出板块有独立的 **用户提示词模板**（`prompts/*.md`），使用 `{data}` 和 `{market_data}` 占位符注入结构化数据。
+
+### 8.2 生成流程
 ```
-用户访问 ?date=20260605
-  → app.py 解析日期
-  → load_data("000001.SH", end_date="20260605")
-    → DataProvider.get_daily("000001.SH")
-      → CacheManager.get_daily()  [命中则返回，未命中则拉取]
-      → Tushare API [仅在缓存过期/不足时]
-  → rows_to_df() → DataFrame
-  → render_index_section(df)
-    → calc_ma() / ma_direction() / get_offset_info() / volume_analysis() / ...
-    → HTML 表格 / Plotly 图表
-```
-
-## 数据库
-
-当前仅 `tushare_cache` 表（schema.sql）。后续 Agent 2/3/4 会新增：
-- `watchlist` — 自选股
-- `trade_log` — 交易记录
-- `report_archive` — 报告归档
-- 等（详见设计文档）
-
-## 文件清单
-
-```
-dashboard/
-  app.py                         Streamlit 页面骨架 (~520 lines)
-  services/
-    dashboard_service.py         DashboardService — 统一数据入口
-  rendering/
-    styles.py                    _vol_color_ramp(), up_down_color(), PAGE_CSS
-    charts.py                    plot_kline_with_ma(), plot_turnover_trend()
-
-src/marketreview/
-  tools/
-    technical.py                 技术分析函数库（Dashboard + Agent 共用）
-    market_tools.py              Agent 1 CrewAI 工具
-    contribution.py              指数权重贡献计算
-    __init__.py                  导出清单
-  data/
-    data_provider.py             数据层唯一入口
-    cache_manager.py             SQLite 缓存（DataProvider 内部使用）
-    schema.sql                   DDL
-  config/
-    agents.yaml                  Agent 1 角色定义
-    tasks.yaml                   Agent 1 任务描述
-  crew.py                        CrewAI crew 组装
-  main.py                        CLI 入口
+1. Breadth（市场广度）-> 涨跌结构 + 成交额 + 33公式数据 JSON
+2. Index guides（并行）-> 上证指数 + 创业板指（各含完整技术数据 + 权重贡献）
+3. Summary -> 基于 index guides 结果，生成全景总览
 ```
 
-## 相关文档
+### 8.3 缓存策略
+- AI 结果按 `(trade_date, summary_type, guide_key)` 唯一键存入 `ai_summary` 表
+- 先读缓存，未命中才调用 LLM
+- 占位符 "AI 摘要暂时不可用" 会被跳过，触发重试
+- 并发调用失败不阻塞其他调用
 
-- `docs/superpowers/specs/2026-06-04-market-review-system-design.md` — 完整系统设计
-- `docs/superpowers/plans/2026-06-05-agent1-implementation.md` — Agent 1 实施计划
-- `docs/tushare-integration-notes.md` — Tushare 踩坑笔记
+## 9. LLM 层
+
+| 文件 | 职责 |
+|------|------|
+| `__init__.py` | `LLMClient` 抽象类 + `create_llm_client()` 工厂 |
+| `openai_client.py` | OpenAI-compatible 客户端（支持 DeepSeek/OpenAI） |
+| `concurrent.py` | `batch_chat()` — ThreadPoolExecutor 并发调用，支持进度回调 |
+
+LLM 配置通过环境变量：
+- `OPENAI_API_BASE`：API 端点（自动补全 `/v1`）
+- `OPENAI_API_KEY`：API 密钥
+- `MODEL`：模型名（默认 `deepseek-chat`）
+
+## 10. 颜色约定
+
+- **红 = 上涨/偏多/看涨** (`#e53935`)
+- **绿 = 下跌/偏空/看跌** (`#43a047`)
+- **灰 = 中性/持平** (`#999`)
+- K 线图：红阳绿阴（A 股习惯）
+- 成交量柱：红涨绿跌
+
+## 11. 关键设计决策
+
+| 决策 | 原因 |
+|------|------|
+| 不复权存储 + 读取时前复权 | 避免除权后全量重算；一组数据支持任意日期前复权 |
+| circ_mv 而非 total_mv 计算权重 | A 股有大量非流通股（国有、创始人），total_mv 虚高 |
+| 权重贡献缓存仅存动态计算结果 | 回退到月度权重时不缓存，等市值数据就绪后自动更新 |
+| 两窗口缓存（USE/CACHE） | USE 窗口检查快 -> 切换日期即时命中；CACHE 窗口超取减少扫描频率 |
+| 累计盈利预计算 | 将昂贵的 per-stock 20日盈利检查从读路径移到写路径，UI 即时渲染 |
+| 覆盖率自动验证 + 补拉 | 防止 tushare 分页截断造成的隐性数据缺失 |
+| AI 只收数据和用法，不下结论 | 让 AI 基于数据自行分析，避免 prompt 中的偏见引导 |
+| 系统提示词 + 用户提示词分离 | system 定义分析框架，user 注入当日数据，复用 system 上下文 |
+
+## 12. 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 前端 | Streamlit（Plotly K线图表） |
+| 服务层 | Python（DashboardService 门面模式） |
+| 数据层 | SQLite（8 表，自愈 schema） |
+| LLM | DeepSeek / OpenAI-compatible API（并发调用） |
+| 数据源 | Tushare Pro API |
+| 日志 | Python logging（每模块独立文件 + errors.log 汇总） |
