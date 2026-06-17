@@ -161,6 +161,9 @@ if _pending:
                 status.update(label=f"拉取 K线: {date_range} ({current}/{t} 日期段)")
             elif phase == "index":
                 status.update(label=f"正在拉取指数数据... ({current}/{total} 个)")
+            elif phase == "basic":
+                date_range = extra or ""
+                status.update(label=f"拉取市值数据: {date_range} ({current}/{total} 段)")
             elif phase == "wave33_init":
                 date_str = extra or "?"
                 status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} | 共 {current} 只（共 {total} 天待扫）")

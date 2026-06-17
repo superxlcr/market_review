@@ -577,6 +577,8 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
             unsafe_allow_html=True,
         )
 
+        st.caption("权重基于流通市值每日动态计算")
+
         left_col, right_col = st.columns(2)
 
         # --- 领涨 Top 10 ---

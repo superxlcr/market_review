@@ -38,11 +38,15 @@ class CacheManager:
             "ts_code", "name", "list_date", "is_st",
         },
         "daily_basic_cache": {
-            "ts_code", "trade_date", "total_mv",
+            "ts_code", "trade_date", "total_mv", "circ_mv",
         },
         "wave33_cache": {
             "trade_date", "count", "profit_count", "profit_pct",
             "stock_codes", "updated_at",
+        },
+        "index_contribution_cache": {
+            "index_code", "trade_date", "top_n",
+            "weight_type", "data", "created_at",
         },
         "ai_summary": {
             "trade_date", "summary_type", "guide_key",
@@ -335,12 +339,12 @@ class CacheManager:
     def upsert_daily_basic_bulk(self, rows: list[dict]):
         """
         Bulk upsert daily basic rows (market cap).
-        Each row: {ts_code, trade_date, total_mv}.
+        Each row: {ts_code, trade_date, total_mv, circ_mv}.
         """
         sql = """
             INSERT OR REPLACE INTO daily_basic_cache
-                (ts_code, trade_date, total_mv)
-            VALUES (:ts_code, :trade_date, :total_mv)
+                (ts_code, trade_date, total_mv, circ_mv)
+            VALUES (:ts_code, :trade_date, :total_mv, :circ_mv)
         """
         with self._get_conn() as conn:
             conn.executemany(sql, rows)
@@ -349,11 +353,11 @@ class CacheManager:
     def get_daily_basic(self, trade_date: str) -> list[dict]:
         """
         Return all daily_basic rows for a given trade_date.
-        Returns [{ts_code, total_mv}, ...].
+        Returns [{ts_code, total_mv, circ_mv}, ...].
         """
         with self._get_conn() as conn:
             rows = conn.execute(
-                """SELECT ts_code, total_mv
+                """SELECT ts_code, total_mv, circ_mv
                    FROM daily_basic_cache
                    WHERE trade_date = ?""",
                 [trade_date],
@@ -368,6 +372,9 @@ class CacheManager:
         < 90% of the max count for the range, the chunk is treated as incomplete
         so it will be re-fetched.  This auto-heals gaps caused by tushare
         pagination limits (offset >= 105000 fails for daily_basic).
+
+        Also checks the boundary — dates with zero rows don't appear in GROUP BY
+        above, so an explicit check guards against silent gaps at the edges.
         """
         with self._get_conn() as conn:
             rows = conn.execute(
@@ -380,8 +387,16 @@ class CacheManager:
             return False
         counts = [r[0] for r in rows]
         max_cnt = max(counts)
-        # If any date has < 90% of the max, the chunk is incomplete
-        return all(c >= max_cnt * 0.9 for c in counts)
+        # All existing dates must be ≥ 90% of max
+        if not all(c >= max_cnt * 0.9 for c in counts):
+            return False
+        # Boundary check: end_date must have rows (dates without rows are
+        # invisible in GROUP BY).  This may cause a redundant fetch when
+        # end_date falls on a weekend, but that is far cheaper than silently
+        # skipping missing data on an actual trading day.
+        if self.count_daily_basic_date(end_date) == 0:
+            return False
+        return True
 
     def count_daily_basic_date(self, date_str: str) -> int:
         """Return number of stocks with daily_basic data for a given date."""
@@ -467,6 +482,37 @@ class CacheManager:
                     updated_at = datetime('now') WHERE trade_date = ?"""
         with self._get_conn() as conn:
             conn.execute(sql, [stock_codes, trade_date])
+            conn.commit()
+
+    # ------- index_contribution_cache -------
+
+    def get_index_contribution_cache(self, index_code: str, trade_date: str,
+                                      top_n: int = 10) -> dict | None:
+        """Return cached contribution JSON, or None."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT data FROM index_contribution_cache "
+                "WHERE index_code = ? AND trade_date = ? AND top_n = ?",
+                (index_code, trade_date, top_n),
+            ).fetchone()
+        if row:
+            import json as _json
+            return _json.loads(row["data"])
+        return None
+
+    def upsert_index_contribution_cache(self, index_code: str,
+                                         trade_date: str, top_n: int,
+                                         weight_type: str, data: dict):
+        """Insert or replace a cached contribution result."""
+        import json as _json
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO index_contribution_cache "
+                "(index_code, trade_date, top_n, weight_type, data, created_at) "
+                "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                (index_code, trade_date, top_n, weight_type,
+                 _json.dumps(data, ensure_ascii=False)),
+            )
             conn.commit()
 
     # ------- ai_summary -------

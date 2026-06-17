@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS daily_basic_cache (
     ts_code    TEXT NOT NULL,
     trade_date TEXT NOT NULL,
     total_mv   REAL,
+    circ_mv    REAL,
     PRIMARY KEY (ts_code, trade_date)
 );
 
@@ -58,6 +59,16 @@ CREATE TABLE IF NOT EXISTS wave33_cache (
     profit_pct   REAL NOT NULL,
     stock_codes  TEXT,
     updated_at   TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS index_contribution_cache (
+    index_code   TEXT NOT NULL,
+    trade_date   TEXT NOT NULL,
+    top_n        INTEGER NOT NULL DEFAULT 10,
+    weight_type  TEXT NOT NULL,   -- 'dynamic' (total_mv) or 'cached' (index_weight API)
+    data         TEXT NOT NULL,   -- JSON blob: {index, gainers, losers}
+    created_at   TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (index_code, trade_date, top_n)
 );
 
 CREATE TABLE IF NOT EXISTS ai_summary (

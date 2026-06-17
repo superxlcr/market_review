@@ -19,6 +19,9 @@ Contribution formula (derivation):
 
 from datetime import datetime, timedelta
 from ..data.data_provider import DataProvider
+from ..log_util import get_logger
+
+log = get_logger(__name__)
 
 
 # Industry label override logic:
@@ -104,6 +107,13 @@ def build_index_contribution(
     """
     trade_date = trade_date.replace("-", "")
 
+    # 0. Check cache — return if already computed for this (index, date, top_n)
+    cached = dp.cache.get_index_contribution_cache(index_code, trade_date, top_n)
+    if cached is not None:
+        log.debug("build_index_contribution: %s @ %s (top_n=%d) — cache hit",
+                  index_code, trade_date, top_n)
+        return cached
+
     # 1. Index OHLC
     idx_rows = dp.get_daily(index_code, end_date=trade_date, lookback_days=2)
     if not idx_rows or len(idx_rows) < 2:
@@ -115,28 +125,54 @@ def build_index_contribution(
     chg_pts = round(close - pre_close, 2)
     chg_pct = round((close / pre_close - 1) * 100, 2)
 
-    # 2. Constituent weights
-    weights = dp.get_index_weights(index_code, trade_date)
-    if not weights:
+    # 2. Constituent list (from latest index_weight, monthly list)
+    cached_weights = dp.get_index_weights(index_code, trade_date)
+    if not cached_weights:
         return None
 
+    all_codes = [w["con_code"] for w in cached_weights]
+
     # 3. Stock prices for all constituents
-    all_codes = [w["con_code"] for w in weights]
     prices = dp.get_daily_batch(all_codes, trade_date)
 
-    # 4. Compute contribution for each constituent
+    # 4. Compute weights from daily circ_mv (流通市值)
+    #    Falls back to cached monthly weights if market-cap data is unavailable.
+    #    circ_mv is preferred over total_mv because it reflects actual tradable
+    #    shares — many A-share stocks have large non-tradable portions (state-owned,
+    #    founder shares) that inflate total_mv without contributing to daily trading.
+    market_caps = dp.get_circ_mv(trade_date)
+    circ_mv_sum = sum(market_caps.get(code, 0) for code in all_codes)
+    use_dynamic_weight = circ_mv_sum > 0
+    weight_type = "dynamic" if use_dynamic_weight else "cached"
+    if use_dynamic_weight:
+        log.info("build_index_contribution: %s @ %s — using dynamic weights "
+                 "(circ_mv_sum=%.0f万, constituents=%d)",
+                 index_code, trade_date, circ_mv_sum, len(all_codes))
+    else:
+        log.warning("build_index_contribution: %s @ %s — "
+                    "circ_mv unavailable, falling back to cached weights",
+                    index_code, trade_date)
+
+    # 5. Compute contribution for each constituent
     items = []
-    for w in weights:
+    for w in cached_weights:
         code = w["con_code"]
         p = prices.get(code)
         if p is None:
             continue
         chg = p["change_pct"]
+
+        if use_dynamic_weight:
+            mv = market_caps.get(code, 0)
+            weight_pct = round(mv / circ_mv_sum * 100, 4) if mv > 0 else 0
+        else:
+            weight_pct = w["weight"]
+
         # contrib = weight% x chg% x index_close / 10000
-        contrib = round(w["weight"] * chg * close / 10000, 2)
+        contrib = round(weight_pct * chg * close / 10000, 2)
         items.append({
             "code": code,
-            "weight": round(w["weight"], 2),
+            "weight": round(weight_pct, 2),
             "chg_pct": chg,
             "contrib": contrib,
         })
@@ -175,7 +211,7 @@ def build_index_contribution(
             "contrib": item["contrib"],
         }
 
-    return {
+    result = {
         "index": {
             "close": close,
             "pre_close": pre_close,
@@ -185,6 +221,18 @@ def build_index_contribution(
         "gainers": [_attach_name_industry(g) for g in gainers],
         "losers": [_attach_name_industry(l) for l in losers],
     }
+
+    # 6. Cache the result (only when dynamic weights succeeded —
+    #    fallback results should not be cached so they can be
+    #    recomputed once daily_basic data becomes available)
+    if use_dynamic_weight:
+        dp.cache.upsert_index_contribution_cache(
+            index_code, trade_date, top_n, weight_type, result,
+        )
+    else:
+        log.debug("Skipping cache — fallback weights should not be persisted")
+
+    return result
 
 
 def build_industry_frequency(

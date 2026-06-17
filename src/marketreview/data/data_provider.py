@@ -117,7 +117,7 @@ class DataProvider:
             )
             self._fetch_stock_basic_once()
             db_pages = self._ensure_daily_basic_loaded(
-                db_start, end_date
+                db_start, end_date, progress_cb
             )
             # Validate coverage even when cache appears up-to-date
             self._validate_coverage(fetch_start, end_date)
@@ -213,6 +213,16 @@ class DataProvider:
         # Without this, wave33 scan silently produces 0 results (all stocks
         # filtered out by missing market-cap data).
         if not self.cache.daily_basic_has_range(check_start, end_date):
+            return False
+
+        # Also verify the target date specifically — daily_basic_has_range()
+        # only checks dates that HAVE data; a missing end_date (0 rows)
+        # won't appear in the GROUP BY and slips through.
+        if self.cache.count_daily_basic_date(end_date) < self._BREADTH_CACHE_MIN_STOCKS:
+            log.info("check_cache_coverage: daily_basic for %s has only %d stocks "
+                     "(need >= %d), fast path denied",
+                     end_date, self.cache.count_daily_basic_date(end_date),
+                     self._BREADTH_CACHE_MIN_STOCKS)
             return False
 
         return True
@@ -811,17 +821,26 @@ class DataProvider:
         """
         pages = 0
         chunks = _date_chunks(start_date, end_date, _BASIC_CHUNK_DAYS)
-        for chunk_start, chunk_end in chunks:
+        total_chunks = len(chunks)
+        for ci, (chunk_start, chunk_end) in enumerate(chunks, 1):
             # Skip if already cached
             if self.cache.daily_basic_has_range(chunk_start, chunk_end):
+                log.debug("daily_basic(%s~%s): cached, skip", chunk_start, chunk_end)
                 continue
 
+            if progress_cb:
+                progress_cb("basic", ci, total_chunks,
+                            f"{chunk_start[:4]}-{chunk_start[4:6]}-{chunk_start[6:8]}"
+                            f"~{chunk_end[:4]}-{chunk_end[4:6]}-{chunk_end[6:8]}")
+
+            log.info("daily_basic(%s~%s): fetching...", chunk_start, chunk_end)
             offset = 0
+            chunk_pages = 0
             while pages < MAX_PAGES_PER_CHUNK * len(chunks):
                 try:
                     df = self._api.daily_basic(
                         start_date=chunk_start, end_date=chunk_end,
-                        fields="ts_code,trade_date,total_mv",
+                        fields="ts_code,trade_date,total_mv,circ_mv",
                         offset=offset, limit=_PAGE_SIZE,
                     )
                 except Exception as e:
@@ -832,9 +851,11 @@ class DataProvider:
                     break
 
                 pages += 1
+                chunk_pages += 1
                 df = df.copy()
                 df["trade_date"] = df["trade_date"].astype(str)
                 df["total_mv"] = df["total_mv"].astype(float)
+                df["circ_mv"] = df["circ_mv"].astype(float)
 
                 rows = []
                 for _, r in df.iterrows():
@@ -842,6 +863,7 @@ class DataProvider:
                         "ts_code": r["ts_code"],
                         "trade_date": r["trade_date"],
                         "total_mv": float(r["total_mv"]),
+                        "circ_mv": float(r["circ_mv"]),
                     })
 
                 if rows:
@@ -850,6 +872,10 @@ class DataProvider:
                 if len(df) < _PAGE_SIZE:
                     break
                 offset += _PAGE_SIZE
+
+            if chunk_pages > 0:
+                log.info("daily_basic(%s~%s): fetched %d pages",
+                         chunk_start, chunk_end, chunk_pages)
 
         return pages
 
@@ -862,6 +888,17 @@ class DataProvider:
         rows = self.cache.get_daily_basic(trade_date)
         return {r["ts_code"]: float(r["total_mv"])
                 for r in rows if r.get("total_mv")}
+
+    def get_circ_mv(self, trade_date: str) -> dict[str, float]:
+        """
+        Return {ts_code: circ_mv} (流通市值) for all stocks on a given trade_date.
+        Used for dynamic index weight calculation — circ_mv reflects actual
+        tradable shares, which is closer to what index providers use.
+        """
+        trade_date = trade_date.replace("-", "")
+        rows = self.cache.get_daily_basic(trade_date)
+        return {r["ts_code"]: float(r["circ_mv"])
+                for r in rows if r.get("circ_mv")}
 
     # ═══════════════════════════════════════════════════════════════
     #  Utility
