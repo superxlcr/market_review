@@ -726,13 +726,13 @@ _display_date = f"{_trade_date_yyyymmdd[:4]}-{_trade_date_yyyymmdd[4:6]}-{_trade
 st.title(f"📊 市场全景 — {_display_date}")
 st.caption("Agent 1 — 大盘分析")
 
+# ============ AI 市场全景总览 ============
+_ai_cache = _service.get_ai_summary(_trade_date_yyyymmdd)
+if _ai_cache and "summary" in _ai_cache:
+    st.info(f"🤖 {_ai_cache['summary']['content']}")
+
 # ============ 市场概览 ============
 st.header("📈 市场概览")
-
-# AI 导语：市场概览
-_ai_cache = _service.get_ai_summary(_trade_date_yyyymmdd)
-if _ai_cache and "guide/market_breadth" in _ai_cache:
-    st.info(f"🤖 {_ai_cache['guide/market_breadth']['content']}")
 
 
 @st.cache_data(ttl=300)
@@ -1044,12 +1044,3 @@ with st.expander("📉 创业板指 399006.SZ", expanded=True):
         st.info(f"🤖 {_ai_cache['guide/cz_index']['content']}")
     render_index_section(_service, "399006.SZ", "创业板指", end_date=_trade_date_yyyymmdd)
 
-# ============ AI 每日总结 ============
-st.divider()
-st.header("🤖 每日总结")
-if _ai_cache and "summary" in _ai_cache:
-    st.info(_ai_cache["summary"]["content"])
-elif _ai_cache and "error" in _ai_cache:
-    st.caption("AI 总结生成失败，请稍后重试")
-else:
-    st.caption("AI 总结尚未生成（切换日期时将自动生成）")

@@ -108,7 +108,7 @@ if apply_btn:
 # ── Phase 2: execute data loading (when pending_load_date is set) ──
 _pending = st.session_state.pop("pending_load_date", None)
 if _pending:
-    _expected_guides = {"guide/market_breadth", "guide/sh_index", "guide/cz_index", "summary"}
+    _expected_guides = {"guide/sh_index", "guide/cz_index", "summary"}
     # Quick check — if K-line + daily_basic cache covers this date,
     # skip the heavy K-line loading, but still ensure wave33 is computed
     # with detailed progress.
@@ -141,7 +141,9 @@ if _pending:
         with st.status("正在生成 AI 总结...", expanded=True) as _ai_status:
             _cached = _service.get_ai_summary(_pending)
             if not _expected_guides.issubset(_cached.keys()):
-                _service.generate_ai_summary(_pending)
+                def _ai_progress(phase: str, label: str):
+                    _ai_status.update(label=f"🤖 {label}")
+                _service.generate_ai_summary(_pending, progress_cb=_ai_progress)
             _ai_status.update(label="✅ AI 总结已就绪", state="complete")
         st.session_state.trade_date = _pending
         st.cache_data.clear()
@@ -188,7 +190,9 @@ if _pending:
             status.update(label="正在生成 AI 总结...")
             _cached = _service.get_ai_summary(_pending)
             if not _expected_guides.issubset(_cached.keys()):
-                _service.generate_ai_summary(_pending)
+                def _ai_progress2(phase: str, label: str):
+                    status.update(label=f"🤖 {label}")
+                _service.generate_ai_summary(_pending, progress_cb=_ai_progress2)
             status.update(
                 label=f"✅ 全部就绪！（数据 {result['elapsed']:.0f}秒，"
                       f"K线 {result.get('raw_pages', '?')} 页，"
@@ -215,15 +219,14 @@ if _current_td:
     _ai = _service.get_ai_summary(_current_td)
     if _ai and "summary" in _ai:
         st.markdown("---")
-        st.markdown("### 🤖 当日复盘总结")
+        st.markdown("### 🤖 市场全景总览")
         _summary_content = _ai["summary"]["content"]
         st.info(_summary_content)
         # Also show individual guides collapsed
         with st.expander("📋 查看各板块导语"):
-            for _gk in ["guide/market_breadth", "guide/sh_index", "guide/cz_index"]:
+            for _gk in ["guide/sh_index", "guide/cz_index"]:
                 if _gk in _ai:
                     _label = {
-                        "guide/market_breadth": "市场概览",
                         "guide/sh_index": "上证指数",
                         "guide/cz_index": "创业板指",
                     }.get(_gk, _gk)

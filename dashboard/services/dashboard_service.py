@@ -849,15 +849,19 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：generate_ai_summary() 启动时 → stderr: [AI vX.Y.Z]
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.0.1"
+    _AI_VERSION = "1.1.1"
 
-    def generate_ai_summary(self, trade_date: str) -> dict:
+    def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
         Generate AI guides + summary for market_overview, store in DB, return result.
         Same dict shape as get_ai_summary().
 
         If all LLM calls fail, returns dict with a single 'error' key.
         Individual guide failures are replaced with a placeholder string.
+
+        progress_cb(phase, label): called at each stage for UI status updates.
+            phase: "market_data" | "index_start" | "index_progress" | "index_done" | "summary_start" | "summary_done"
+            label: human-readable description of current stage
         """
         import json as _json, sys as _sys
 
@@ -871,11 +875,13 @@ class DashboardService:
         sys_prompt = self._load_system_prompt()
 
         # --- 1. Market overview data ---
+        if progress_cb:
+            progress_cb("market_data", "正在准备市场数据...")
         overview = self.get_market_overview(trade_date)
         if overview is None or "error" in overview:
             return {"error": "无法获取市场概览数据"}
 
-        # --- 2. Guide: market breadth ---
+        # --- 2. Build market data (shared by index guides + summary) ---
         today = overview["today"]
         yesterday = overview["yesterday"]
         trend = overview["trend"]
@@ -946,44 +952,62 @@ class DashboardService:
             "3浪3选股_近15日": wave33_list,
         }
 
-        try:
-            user_tmpl = self._load_prompt("guide_market_breadth")
-            guide_breadth = llm.chat(
-                sys_prompt,
-                user_tmpl.format(data=_json.dumps(breadth_data, ensure_ascii=False)))
-        except Exception as e:
-            import traceback as _tb
-            log.warning("guide_market_breadth LLM call failed: %s\n%s", e, _tb.format_exc())
-            guide_breadth = FAIL_PLACEHOLDER
+        market_data_json = _json.dumps(breadth_data, ensure_ascii=False)
 
-        if guide_breadth != FAIL_PLACEHOLDER:
-            self._dp.cache.save_ai_summary(
-                trade_date, "market_overview", "guide/market_breadth",
-                guide_breadth, model,
-            )
-        result["guide/market_breadth"] = {"content": guide_breadth, "model": model}
-
-        # --- 3. Guide: SH index (with market breadth as context) ---
+        # --- 3. Prepare index data (fast, local cache reads) ---
         sh_rows = self._dp.get_daily("000001.SH", end_date=trade_date, lookback_days=360)
         sh_summary = build_technical_summary("000001.SH", "上证指数", sh_rows)
         sh_contrib = self.get_index_contribution("000001.SH", trade_date)
         sh_freq = self.get_industry_frequency("000001.SH", trade_date)
+        sh_data_json = _json.dumps(
+            self._build_index_ai_data("000001.SH", "上证指数", sh_rows, sh_summary,
+                                      contrib=sh_contrib, freq=sh_freq),
+            ensure_ascii=False)
+        sh_user_tmpl = self._load_prompt("guide_sh_index")
+        sh_user_msg = sh_user_tmpl.format(market_data=market_data_json, data=sh_data_json)
 
-        try:
-            user_tmpl = self._load_prompt("guide_sh_index")
-            guide_sh = llm.chat(sys_prompt, user_tmpl.format(
-                market_breadth_guide=guide_breadth,
-                data=_json.dumps(
-                    self._build_index_ai_data("000001.SH", "上证指数", sh_rows, sh_summary,
-                                              contrib=sh_contrib, freq=sh_freq),
-                    ensure_ascii=False),
-            ))
-        except Exception as e:
-            import traceback as _tb, sys as _sys
-            log.warning("guide_sh_index LLM call failed: %s", e)
-            _sys.stderr.write(f"[TRACEBACK sh_index] {e}\n{_tb.format_exc()}\n")
-            _sys.stderr.flush()
-            guide_sh = FAIL_PLACEHOLDER
+        cz_rows = self._dp.get_daily("399006.SZ", end_date=trade_date, lookback_days=360)
+        cz_summary = build_technical_summary("399006.SZ", "创业板指", cz_rows)
+        cz_contrib = self.get_index_contribution("399006.SZ", trade_date)
+        cz_freq = self.get_industry_frequency("399006.SZ", trade_date)
+        cz_data_json = _json.dumps(
+            self._build_index_ai_data("399006.SZ", "创业板指", cz_rows, cz_summary,
+                                      contrib=cz_contrib, freq=cz_freq),
+            ensure_ascii=False)
+        cz_user_tmpl = self._load_prompt("guide_cz_index")
+        cz_user_msg = cz_user_tmpl.format(market_data=market_data_json, data=cz_data_json)
+
+        # --- 4. Guide: SH + CZ index (concurrent LLM calls) ---
+        from marketreview.llm.concurrent import batch_chat
+
+        INDEX_TASKS = [
+            {"label": "guide/sh_index", "user_message": sh_user_msg},
+            {"label": "guide/cz_index", "user_message": cz_user_msg},
+        ]
+
+        def _index_progress(phase: str, current: int, total: int, label: str):
+            if progress_cb is None:
+                return
+            label_map = {"guide/sh_index": "上证指数", "guide/cz_index": "创业板指"}
+            if phase == "start":
+                progress_cb("index_start", f"正在生成指数总结（共 {total} 个）...")
+            elif phase == "progress":
+                name = label_map.get(label, label)
+                progress_cb("index_progress", f"✅ {name} 总结完成（{current}/{total}）")
+            elif phase == "done":
+                progress_cb("index_done", f"指数总结全部完成（{total}/{total}）")
+
+        if progress_cb:
+            progress_cb("index_start", f"正在生成指数总结（共 2 个）...")
+        index_results = batch_chat(
+            llm, sys_prompt, INDEX_TASKS,
+            max_workers=2,
+            progress_cb=_index_progress,
+            fail_placeholder=FAIL_PLACEHOLDER,
+        )
+
+        guide_sh = index_results["guide/sh_index"]
+        guide_cz = index_results["guide/cz_index"]
 
         if guide_sh != FAIL_PLACEHOLDER:
             self._dp.cache.save_ai_summary(
@@ -992,26 +1016,6 @@ class DashboardService:
             )
         result["guide/sh_index"] = {"content": guide_sh, "model": model}
 
-        # --- 4. Guide: CZ index (with market breadth as context) ---
-        cz_rows = self._dp.get_daily("399006.SZ", end_date=trade_date, lookback_days=360)
-        cz_summary = build_technical_summary("399006.SZ", "创业板指", cz_rows)
-        cz_contrib = self.get_index_contribution("399006.SZ", trade_date)
-        cz_freq = self.get_industry_frequency("399006.SZ", trade_date)
-
-        try:
-            user_tmpl = self._load_prompt("guide_cz_index")
-            guide_cz = llm.chat(sys_prompt, user_tmpl.format(
-                market_breadth_guide=guide_breadth,
-                data=_json.dumps(
-                    self._build_index_ai_data("399006.SZ", "创业板指", cz_rows, cz_summary,
-                                              contrib=cz_contrib, freq=cz_freq),
-                    ensure_ascii=False),
-            ))
-        except Exception as e:
-            import traceback as _tb2
-            log.warning("guide_cz_index LLM call failed: %s\n%s", e, _tb2.format_exc())
-            guide_cz = FAIL_PLACEHOLDER
-
         if guide_cz != FAIL_PLACEHOLDER:
             self._dp.cache.save_ai_summary(
                 trade_date, "market_overview", "guide/cz_index",
@@ -1019,11 +1023,13 @@ class DashboardService:
             )
         result["guide/cz_index"] = {"content": guide_cz, "model": model}
 
-        # --- 5. Summary ---
+        # --- 5. Summary (market panorama overview, placed at top of page) ---
+        if progress_cb:
+            progress_cb("summary_start", "正在生成市场全景总览...")
         try:
             user_tmpl = self._load_prompt("summary")
             summary = llm.chat(sys_prompt, user_tmpl.format(
-                guide_breadth=guide_breadth,
+                market_data=market_data_json,
                 guide_sh=guide_sh,
                 guide_cz=guide_cz,
             ))
