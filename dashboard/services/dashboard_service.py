@@ -592,6 +592,9 @@ class DashboardService:
         if not rows:
             return {"error": "无数据"}
 
+        # get_daily returns date DESC; sort to ASC so [-1]/[-2] indexing is correct
+        rows = sorted(rows, key=lambda r: r["date"])
+
         latest = rows[-1]
         close = float(latest["close"])
         open_val = float(latest["open"])
@@ -618,7 +621,6 @@ class DashboardService:
                 "实体占比": f"{kp.get('body_pct', 0)}%",
                 "上影线占比": f"{kp.get('upper_wick_pct', 0)}%",
                 "下影线占比": f"{kp.get('lower_wick_pct', 0)}%",
-                "解读": kp.get("interpretation", ""),
             },
         }
 
@@ -717,20 +719,64 @@ class DashboardService:
         kd_div = tech_summary.get("kd_divergence") or {}
         rsi_div = tech_summary.get("rsi_divergence") or {}
 
+        # --- KD 背离详情 ---
+        if kd_div.get("type"):
+            parts = []
+            if kd_div.get("kd_divergence"):
+                parts.append("KD")
+            elif kd_div.get("k_divergence"):
+                parts.append("K")
+            elif kd_div.get("d_divergence"):
+                parts.append("D")
+            kd_div_detail: dict = {
+                "类型": kd_div["type"],
+                "背离线": "/".join(parts),
+                "背离起始日": kd_div.get("divergence_date", "")[:10] if kd_div.get("divergence_date") else "",
+                "持续天数": kd_div.get("days", 0) or 0,
+            }
+        else:
+            kd_div_detail = "无"
+
+        # --- RSI 背离详情 ---
+        if rsi_div.get("type"):
+            rsi_div_detail: dict = {
+                "类型": rsi_div["type"],
+                "背离起始日": rsi_div.get("divergence_date", "")[:10] if rsi_div.get("divergence_date") else "",
+                "持续天数": rsi_div.get("days", 0) or 0,
+            }
+        else:
+            rsi_div_detail = "无"
+
         indicator_data: dict = {
             "KD": {
                 "K": tech_summary.get("kd_k"),
                 "D": tech_summary.get("kd_d"),
                 "区间": kd_zone,
-                "背离": kd_div.get("type", "无"),
+                "背离": kd_div_detail,
             },
             "RSI": {
                 "值": rsi_val,
                 "区间": rsi_zone,
-                "背离": rsi_div.get("type", "无"),
+                "背离": rsi_div_detail,
             },
-            "BIAS6": f"{tech_summary.get('bias6', 0):+.2f}%",
+            "BIAS10": {
+                "值": f"{tech_summary.get('bias10', 0):+.2f}%",
+                "状态": tech_summary.get("bias10_status") or "—",
+            },
+            "BIAS20": {
+                "值": f"{tech_summary.get('bias20', 0):+.2f}%",
+                "状态": tech_summary.get("bias20_status") or "—",
+            },
         }
+
+        # === 多K线形态（dashboard 同款量化分析） ===
+        try:
+            from marketreview.tools.technical import rows_to_df
+            from marketreview.tools.kline_patterns import detect_patterns
+            _df = rows_to_df(rows)
+            pattern_results = detect_patterns(_df, obj_type="index")
+        except Exception:
+            pattern_results = []
 
         return {
             "指数": name,
@@ -738,6 +784,7 @@ class DashboardService:
             "均线": ma_data,
             "成交量": volume_data,
             "技术指标": indicator_data,
+            "K线形态": pattern_results,
         }
 
     # ── AI 功能版本号 ─────────────────────────────────────────────
@@ -747,7 +794,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：generate_ai_summary() 启动时 → stderr: [AI vX.Y.Z]
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.0.0"
+    _AI_VERSION = "1.0.1"
 
     def generate_ai_summary(self, trade_date: str) -> dict:
         """

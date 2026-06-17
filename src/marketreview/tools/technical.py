@@ -929,22 +929,7 @@ def kline_pattern(df: pd.DataFrame) -> dict[str, Any]:
         "body_pct": body_pct,
         "upper_wick_pct": round(upper_wick / total * 100, 1),
         "lower_wick_pct": round(lower_wick / total * 100, 1),
-        "interpretation": _interpret_candle(is_bullish, body_pct, upper_wick/total, lower_wick/total),
     }
-
-
-def _interpret_candle(bullish: bool, body_pct: float, upper_pct: float, lower_pct: float) -> str:
-    """Simple candle interpretation."""
-    parts = []
-    if body_pct > 60:
-        parts.append("强势" if bullish else "弱势")
-    elif body_pct < 20:
-        parts.append("十字星/多空均衡")
-    if upper_pct > 0.5:
-        parts.append("上方压力大")
-    if lower_pct > 0.5:
-        parts.append("下方支撑强")
-    return "；".join(parts) if parts else "普通K线"
 
 
 # ------- MA offset / role helpers (shared by Agent tools & dashboard) -------
@@ -1019,7 +1004,7 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
     # Latest indicator values
     kd = calc_kd(df)
     rsi = calc_rsi(df)
-    bias = calc_bias(df)
+    bias = calc_bias(df, [10, 20])
 
     k_latest = round(float([v for v in kd["K"] if not np.isnan(v)][-1]), 1)
     d_latest = round(float([v for v in kd["D"] if not np.isnan(v)][-1]), 1)
@@ -1027,6 +1012,9 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
     rsi1 = [v for v in rsi["RSI1"] if not np.isnan(v)]
     rsi_latest = round(float(rsi1[-1]), 1) if rsi1 else None
     rsi_divergence = detect_rsi_divergence(df, rsi["RSI1"], kd["K"], kd["D"])
+
+    # BIAS status (matching dashboard display)
+    bstatus = bias_status(bias, [10, 20])
 
     return {
         "code": code,
@@ -1045,5 +1033,8 @@ def build_technical_summary(code: str, name: str, rows: list[dict]) -> dict[str,
         "kd_divergence": kd_divergence,
         "rsi": rsi_latest,
         "rsi_divergence": rsi_divergence,
-        "bias6": round(float([v for v in bias["BIAS6"] if not np.isnan(v)][-1]), 2),
+        "bias10": round(float([v for v in bias["BIAS10"] if not np.isnan(v)][-1]), 2),
+        "bias20": round(float([v for v in bias["BIAS20"] if not np.isnan(v)][-1]), 2),
+        "bias10_status": bstatus.get("BIAS10", {}).get("status"),
+        "bias20_status": bstatus.get("BIAS20", {}).get("status"),
     }

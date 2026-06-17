@@ -31,7 +31,6 @@ from marketreview.tools.technical import (
     bias_status,
     detect_kd_divergence,
     detect_rsi_divergence,
-    kline_pattern,
     get_offset_info,
     get_ma_role,
 )
