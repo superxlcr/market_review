@@ -71,6 +71,16 @@ CREATE TABLE IF NOT EXISTS index_contribution_cache (
     PRIMARY KEY (index_code, trade_date, top_n)
 );
 
+CREATE TABLE IF NOT EXISTS stk_limit_cache (
+    ts_code    TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    up_limit   REAL NOT NULL,
+    down_limit REAL NOT NULL,
+    PRIMARY KEY (ts_code, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_slc_date ON stk_limit_cache(trade_date);
+
 CREATE TABLE IF NOT EXISTS ai_summary (
     trade_date   TEXT NOT NULL,
     summary_type TEXT NOT NULL,

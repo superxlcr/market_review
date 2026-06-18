@@ -48,6 +48,9 @@ class CacheManager:
             "index_code", "trade_date", "top_n",
             "weight_type", "data", "created_at",
         },
+        "stk_limit_cache": {
+            "ts_code", "trade_date", "up_limit", "down_limit",
+        },
         "ai_summary": {
             "trade_date", "summary_type", "guide_key",
             "content", "model", "created_at",
@@ -514,6 +517,44 @@ class CacheManager:
                  _json.dumps(data, ensure_ascii=False)),
             )
             conn.commit()
+
+    # ------- stk_limit_cache -------
+
+    def upsert_stk_limits(self, trade_date: str, rows: list[dict]):
+        """Insert or replace stk_limit rows for a single trade_date."""
+        sql = """INSERT OR REPLACE INTO stk_limit_cache
+                 (ts_code, trade_date, up_limit, down_limit)
+                 VALUES (:ts_code, :trade_date, :up_limit, :down_limit)"""
+        with self._get_conn() as conn:
+            conn.executemany(sql, [
+                {
+                    "ts_code": r["ts_code"],
+                    "trade_date": trade_date,
+                    "up_limit": float(r["up_limit"]),
+                    "down_limit": float(r["down_limit"]),
+                }
+                for r in rows
+            ])
+            conn.commit()
+
+    def has_stk_limits(self, trade_date: str) -> bool:
+        """Return True if stk_limit_cache has this date."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM stk_limit_cache WHERE trade_date = ? LIMIT 1",
+                [trade_date],
+            ).fetchone()
+        return row is not None
+
+    def get_stk_limits(self, trade_date: str) -> dict[str, tuple[float, float]]:
+        """Return {ts_code: (up_limit, down_limit)} for a trade_date."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT ts_code, up_limit, down_limit FROM stk_limit_cache "
+                "WHERE trade_date = ?",
+                [trade_date],
+            ).fetchall()
+        return {r["ts_code"]: (r["up_limit"], r["down_limit"]) for r in rows}
 
     # ------- ai_summary -------
 

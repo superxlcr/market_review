@@ -542,6 +542,26 @@ class DataProvider:
     # before we trust the cache over the API (≥ 4000 for a normal trading day).
     _BREADTH_CACHE_MIN_STOCKS = 4000
 
+    def _get_stk_limits(self, trade_date: str) -> dict[str, tuple[float, float]]:
+        """Return {ts_code: (up_limit, down_limit)} for a date, caching on first access."""
+        if self.cache.has_stk_limits(trade_date):
+            result = self.cache.get_stk_limits(trade_date)
+            log.info("_get_stk_limits(%s): cache hit, %d stocks", trade_date, len(result))
+            return result
+        try:
+            limits = self._api.stk_limit(trade_date=trade_date)
+            if limits is not None and not limits.empty:
+                rows = limits.to_dict(orient="records")
+                self.cache.upsert_stk_limits(trade_date, rows)
+                result = {r["ts_code"]: (r["up_limit"], r["down_limit"]) for r in rows}
+                log.info("_get_stk_limits(%s): API ok, cached %d stocks", trade_date, len(result))
+                return result
+            else:
+                log.warning("_get_stk_limits(%s): API returned empty", trade_date)
+        except Exception as e:
+            log.warning("_get_stk_limits(%s): API failed: %s", trade_date, e)
+        return {}
+
     def get_market_breadth(self, trade_date: str) -> dict | None:
         """
         Fetch single-day market breadth (up/down counts, turnover by exchange).
@@ -598,12 +618,24 @@ class DataProvider:
             else:
                 flat += 1
 
-        # up_limit / down_limit still require the live stk_limit API
-        # (not cached).  Skip in cache path — it's best-effort anyway.
+        # up_limit / down_limit from stk_limit (cache-first)
+        up_limit = down_limit = 0
+        limit_map = self._get_stk_limits(trade_date)
+        if limit_map:
+            for r in today_rows:
+                code = r["code"]
+                if code in limit_map:
+                    close = float(r["close"]) if r["close"] else 0.0
+                    ul, dl = limit_map[code]
+                    if close == ul:
+                        up_limit += 1
+                    elif close == dl:
+                        down_limit += 1
+
         return {
             "trade_date": trade_date,
             "up": up, "down": down, "flat": flat,
-            "up_limit": 0, "down_limit": 0,
+            "up_limit": up_limit, "down_limit": down_limit,
             "total_yi": round(total_amount / 1e5, 0),
             "sh_yi": round(sh_amount / 1e5, 0),
             "sz_yi": round(sz_amount / 1e5, 0),
@@ -632,15 +664,18 @@ class DataProvider:
         sz_yi = round(float(sz["amount"].sum()) / 1e5, 0) if len(sz) > 0 else 0
         bj_yi = round(float(bj["amount"].sum()) / 1e5, 0) if len(bj) > 0 else 0
 
+        # stk_limit — cache-first, fall back to live API
+        limit_map = self._get_stk_limits(trade_date)
         up_limit = down_limit = 0
-        try:
-            limits = self._api.stk_limit(trade_date=trade_date)
-            if limits is not None and not limits.empty:
-                merged = daily.merge(limits, on="ts_code")
-                up_limit = int(len(merged[merged["close"] == merged["up_limit"]]))
-                down_limit = int(len(merged[merged["close"] == merged["down_limit"]]))
-        except Exception:
-            pass
+        if limit_map:
+            for _, row in daily.iterrows():
+                code = row["ts_code"]
+                if code in limit_map:
+                    ul, dl = limit_map[code]
+                    if row["close"] == ul:
+                        up_limit += 1
+                    elif row["close"] == dl:
+                        down_limit += 1
 
         return {
             "trade_date": trade_date,
