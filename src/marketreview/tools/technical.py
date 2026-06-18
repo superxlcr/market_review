@@ -502,7 +502,11 @@ def _ma_trend_at(mas: dict, idx: int) -> str:
 
 
 def _determine_divergence_direction(
-    mas: dict, latest_idx: int, lookback: int = 20
+    mas: dict, latest_idx: int, lookback: int = 20,
+    k_val: float | None = None, d_val: float | None = None,
+    rsi_val: float | None = None,
+    at_new_high: bool = False,
+    at_new_low: bool = False,
 ) -> str | None:
     """
     Determine whether to look for top or bottom divergence.
@@ -510,20 +514,64 @@ def _determine_divergence_direction(
     Checks today's MA trend first (MA5/MA10/MA20).
     If today is 缠绕, walks back up to `lookback` days to find the last
     clear trend.  Returns 'top', 'bottom', or None.
+
+    Staleness guards — even when a clear trend direction is found, the
+    signal is suppressed if the market has already reversed:
+
+    - 空头 → bottom:  at_new_high (price already making new highs),
+      KD overbought (K>80, D>80), or RSI overbought (>70)
+      → downtrend has already reversed; signal is stale.
+    - 多头 → top:     at_new_low (price already making new lows),
+      KD oversold (K<20, D<20), or RSI oversold (<30)
+      → uptrend has already broken; signal is stale.
     """
+
+    def _is_stale_bottom() -> bool:
+        """Bearish trend is stale — market has already reversed upward."""
+        if at_new_high:
+            return True
+        if k_val is not None and d_val is not None and k_val > 80 and d_val > 80:
+            return True
+        if rsi_val is not None and rsi_val > 70:
+            return True
+        return False
+
+    def _is_stale_top() -> bool:
+        """Bullish trend is stale — market has already broken downward."""
+        if at_new_low:
+            return True
+        if k_val is not None and d_val is not None and k_val < 20 and d_val < 20:
+            return True
+        if rsi_val is not None and rsi_val < 30:
+            return True
+        return False
+
     trend = _ma_trend_at(mas, latest_idx)
     if trend == "多头":
-        return "top"
+        stale = _is_stale_top()
+        log.debug("_det_dir: today=多头 stale_top(new_low=%s KD<%s,%s> RSI=%s)=%s",
+                  at_new_low, k_val, d_val, rsi_val, stale)
+        return None if stale else "top"
     elif trend == "空头":
-        return "bottom"
+        stale = _is_stale_bottom()
+        log.debug("_det_dir: today=空头 stale_bottom(new_high=%s KD<%s,%s> RSI=%s)=%s",
+                  at_new_high, k_val, d_val, rsi_val, stale)
+        return None if stale else "bottom"
 
     for i in range(latest_idx - 1, max(latest_idx - lookback, -1), -1):
         trend = _ma_trend_at(mas, i)
         if trend == "多头":
-            return "top"
+            stale = _is_stale_top()
+            log.debug("_det_dir: walkback idx=%d 多头 stale_top(new_low=%s KD<%s,%s> RSI=%s)=%s",
+                      i, at_new_low, k_val, d_val, rsi_val, stale)
+            return None if stale else "top"
         elif trend == "空头":
-            return "bottom"
+            stale = _is_stale_bottom()
+            log.debug("_det_dir: walkback idx=%d 空头 stale_bottom(new_high=%s KD<%s,%s> RSI=%s)=%s",
+                      i, at_new_high, k_val, d_val, rsi_val, stale)
+            return None if stale else "bottom"
 
+    log.debug("_det_dir: no clear trend found, returning None")
     return None
 
 
@@ -712,7 +760,14 @@ def detect_kd_divergence(
     mas = calc_ma(df, [5, 10, 20])
     latest_idx = n - 1
 
-    direction = _determine_divergence_direction(mas, latest_idx, trend_lookback)
+    close_series = df["close"]
+    at_new_high = bool(close_series.iloc[-1] >= close_series.iloc[-20:].max())
+    at_new_low = bool(close_series.iloc[-1] <= close_series.iloc[-20:].min())
+
+    direction = _determine_divergence_direction(
+        mas, latest_idx, trend_lookback,
+        k[-1] if k else None, d[-1] if d else None, rsi_val=None,
+        at_new_high=at_new_high, at_new_low=at_new_low)
 
     if direction is None:
         return {
@@ -890,7 +945,15 @@ def detect_rsi_divergence(
     mas = calc_ma(df, [5, 10, 20])
     latest_idx = n - 1
 
-    direction = _determine_divergence_direction(mas, latest_idx, trend_lookback)
+    close_series = df["close"]
+    at_new_high = bool(close_series.iloc[-1] >= close_series.iloc[-20:].max())
+    at_new_low = bool(close_series.iloc[-1] <= close_series.iloc[-20:].min())
+
+    direction = _determine_divergence_direction(
+        mas, latest_idx, trend_lookback,
+        k[-1] if k else None, d[-1] if d else None,
+        rsi[-1] if rsi else None,
+        at_new_high=at_new_high, at_new_low=at_new_low)
 
     if direction is None:
         return {

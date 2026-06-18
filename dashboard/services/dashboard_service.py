@@ -723,7 +723,13 @@ class DashboardService:
 
         # === 技术指标 ===
         kd_k = tech_summary.get("kd_k", 0) or 0
-        kd_zone = "超买区" if kd_k > 80 else ("超卖区" if kd_k < 20 else "常态区")
+        kd_d = tech_summary.get("kd_d", 0) or 0
+        if kd_k > 80 and kd_d > 80:
+            kd_zone = "超买区"
+        elif kd_k < 20 and kd_d < 20:
+            kd_zone = "超卖区"
+        else:
+            kd_zone = "常态区"
         rsi_val = tech_summary.get("rsi")
         rsi_zone = "超买区" if (rsi_val and rsi_val > 70) else ("超卖区" if (rsi_val and rsi_val < 30) else "常态区")
 

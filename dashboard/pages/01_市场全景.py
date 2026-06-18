@@ -335,17 +335,19 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
 
     # ---- helpers ----
 
-    def _short_date(d: str) -> str:
+    def _short_date(d: str | None) -> str:
         """Normalize date string to MM-DD."""
+        if not d:
+            return ""
         clean = d.replace("-", "").strip()
         return f"{clean[4:6]}-{clean[6:8]}" if len(clean) >= 8 else d
 
-    def _kd_zone(kv: float | None) -> str:
-        if kv is None:
+    def _kd_zone(kv: float | None, dv: float | None) -> str:
+        if kv is None or dv is None:
             return "N/A"
-        if kv > 80:
+        if kv > 80 and dv > 80:
             return "超买区"
-        if kv < 20:
+        if kv < 20 and dv < 20:
             return "超卖区"
         return "常态区"
 
@@ -403,7 +405,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
             div_signal += f"\n{ref} 新高" if div["direction"] == "top" else f"\n{ref} 新低"
 
     # Zone color: 超买=看空=绿, 超卖=看多=红
-    kd_zone = _kd_zone(k_val)
+    kd_zone = _kd_zone(k_val, d_val)
     if kd_zone == "超买区":
         zone_color = "#2e7d32"
     elif kd_zone == "超卖区":
@@ -433,7 +435,7 @@ def render_index_section(service: DashboardService, code: str, name: str, end_da
         </tr></tbody>
     </table>
     """)
-    st.caption("K > 80 超买 | K < 20 超卖 | 背离周期边界 = 20 / 80 | |K-D| ≥ 20 大概率收敛")
+    st.caption("K,D 双线 > 80 超买 | K,D 双线 < 20 超卖 | 背离周期边界 = 20 / 80 | |K-D| ≥ 20 大概率收敛")
     if kd_diff is not None and kd_diff >= 20:
         st.caption(f"💡 {diff_hint}")
 
