@@ -169,8 +169,8 @@ def detect_bullish_engulfing_shadow(
     if len(df) < 2:
         return None
 
-    # ④ 均线多头时（高档）偏中性，不触发
-    if _short_term_trend(df) == "多头":
+    # ④ 高档时偏中性，不触发
+    if _high_low_position(df) == "高档":
         return None
 
     prev = df.iloc[-2]
@@ -371,31 +371,49 @@ def detect_neck_inside(
 # Helpers shared across detectors
 
 
-def _short_term_trend(df: pd.DataFrame) -> str:
-    """Determine short-term trend from MA5/MA10/MA20.
+def _high_low_position(df: pd.DataFrame) -> str:
+    """Determine whether current price is at a 高档 or 低档 position.
 
-    Returns "多头" (MA5 > MA10 > MA20), "空头" (MA5 < MA10 < MA20),
-    or "盘整" (everything else).
+    Returns "高档", "低档", or "盘整" (neither).
+
+    高档 — satisfies EITHER:
+      - MA5 > MA10 > MA20 (均线多头排列)
+      - 今日最高价 = 近120日最高价 (短期暴涨创阶段新高)
+
+    低档 — satisfies EITHER:
+      - MA5 < MA10 < MA20 (均线空头排列)
+      - 今日最低价 = 近120日最低价 (短期暴跌创阶段新低)
     """
     from .technical import calc_ma
 
+    # ── MA alignment ──
     mas = calc_ma(df, [5, 10, 20])
     vals = {}
     for period in [5, 10, 20]:
         key = f"MA{period}"
         arr = mas[key]
-        # Get latest non-NaN
         vals[key] = next(
             (float(v) for v in reversed(arr) if not np.isnan(v)), None
         )
 
     m5, m10, m20 = vals.get("MA5"), vals.get("MA10"), vals.get("MA20")
-    if m5 is None or m10 is None or m20 is None:
-        return "盘整"
-    if m5 > m10 > m20:
-        return "多头"
-    if m5 < m10 < m20:
-        return "空头"
+    ma_bullish = m5 is not None and m10 is not None and m20 is not None and m5 > m10 > m20
+    ma_bearish = m5 is not None and m10 is not None and m20 is not None and m5 < m10 < m20
+
+    # ── 120-day extreme check ──
+    lookback = min(120, len(df))
+    recent = df.iloc[-lookback:]
+    today_high = float(df["high"].iloc[-1])
+    today_low = float(df["low"].iloc[-1])
+    extreme_high = float(recent["high"].max())
+    extreme_low = float(recent["low"].min())
+    is_120d_high = today_high >= extreme_high
+    is_120d_low = today_low <= extreme_low
+
+    if ma_bullish or is_120d_high:
+        return "高档"
+    if ma_bearish or is_120d_low:
+        return "低档"
     return "盘整"
 
 
@@ -437,14 +455,14 @@ def detect_spinning_top(
         return None
 
     # ③ 确定高档/低档：趋势方向 + 日涨跌须一致
-    trend = _short_term_trend(df)
-    if trend == "多头" and close > prev_close:
+    position = _high_low_position(df)
+    if position == "高档" and close > prev_close:
         return {
             "name": "高档纺锤线",
             "direction": "偏空",
             "note": "在上涨之后出现，已经出现空方的进攻苗头和多方不是那么再有强烈持续上攻的念头",
         }
-    elif trend == "空头" and close < prev_close:
+    elif position == "低档" and close < prev_close:
         return {
             "name": "低档纺锤线",
             "direction": "偏多",
@@ -452,6 +470,57 @@ def detect_spinning_top(
         }
     else:
         return None
+
+
+def detect_high_level_long_yang(
+    df: pd.DataFrame, obj_type: str = "index",
+) -> dict[str, Any] | None:
+    """检测高档长阳。
+
+    条件:
+      1. 高档（_high_low_position 判定）
+      2. 今日为长阳（|chg%| > 1.5% 且收涨）
+      3. 几乎无上影线（上影线 < 实体 × 0.3）
+
+    → 偏空解读：高档出现长阳几无上影线，若后续缩量则上攻动能不足，提防回调。
+    """
+    if len(df) < 2:
+        return None
+
+    position = _high_low_position(df)
+    if position != "高档":
+        return None
+
+    curr = df.iloc[-1]
+    close = float(curr["close"])
+    open_ = float(curr["open"])
+    high = float(curr["high"])
+
+    body = abs(close - open_)
+    upper_wick = high - max(open_, close)
+
+    # ② 今日收阳
+    if close <= open_:
+        return None
+
+    # ③ 长阳：|chg%| > 1.5%（复用现有阈值）
+    prev_close = float(df.iloc[-2]["close"])
+    chg_pct = abs((close / prev_close - 1) * 100)
+    if chg_pct <= INDEX_LONG_PCT:
+        return None
+
+    # ④ 几乎无上影线：上影线 < 实体 × 0.3
+    if body > 0 and upper_wick >= body * 0.3:
+        return None
+
+    return {
+        "name": "高档长阳",
+        "direction": "偏空",
+        "note": (
+            "经过一段上涨后，出现实体较大的阳线创波段新高且几乎无上影线，"
+            "若后续缩量或无法持续放量，则上攻动能不足，提防回调"
+        ),
+    }
 
 
 def detect_patterns(
@@ -497,4 +566,5 @@ _PATTERN_DETECTORS = [
     detect_neck_above,
     detect_neck_inside,
     detect_spinning_top,
+    detect_high_level_long_yang,
 ]
