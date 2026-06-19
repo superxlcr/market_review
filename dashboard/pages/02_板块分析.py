@@ -189,11 +189,14 @@ else:
         chg = ind["chg_pct"]
         sign = "+" if chg >= 0 else ""
         color = up_down_color(chg)
-        title = (
-            f"{ind['name']} ({ind['level']})  "
-            f"<span style='color:{color};'>{sign}{chg:.2f}%</span>  "
-            f"{reasons_html}"
-        )
+        # st.expander label is plain-text only — put rich info inside
+        title = f"{ind['name']} ({ind['level']})  {sign}{chg:.2f}%"
 
         with st.expander(title, expanded=False):
+            st.html(f"""
+            <div style="margin-bottom:6px;font-size:15px;">
+                <span style="color:{color};font-weight:bold;">{sign}{chg:.2f}%</span>
+                &nbsp;{reasons_html}
+            </div>
+            """)
             _render_industry_expander(_service, ind["code"], ind["name"], _td)
