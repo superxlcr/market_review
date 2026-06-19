@@ -28,7 +28,7 @@ _CHUNK_DAYS = 20           # calendar days per date-range chunk (~14 trading day
 _FETCH_DAYS = 1000         # calendar days to FETCH (~670 trading days)
 _CHECK_DAYS = 500          # calendar days to REQUIRE in cache (tighter, leaves headroom)
 MAX_PAGES_PER_CHUNK = 30   # safety cap per chunk: ~150k records max
-_DB_FETCH_DAYS = 180       # calendar days for daily_basic fetch (wave33 window: 80td ≈ 110cal)
+_DB_FETCH_DAYS = 500       # calendar days for daily_basic fetch (industry USE: 420cd)
 _BASIC_CHUNK_DAYS = 10    # smaller chunks for daily_basic: its pagination limit is ~100k offset
 
 # Indices tracked by the dashboard (api.daily doesn't return index data,
@@ -999,27 +999,70 @@ class DataProvider:
                  fetched, total, total)
         return industries
 
+    # ── Industry daily window constants (two-window pattern) ──
+    _IND_USE_WINDOW_CD = 420      # ~280 trading days — for MA240 + indicators
+    _IND_CACHE_WINDOW_CD = 750    # ~500 trading days — 2x USE, amortize date switches
+    _IND_FAST_PATH_MIN = 200       # min rows in USE window to take fast path
+
     def ensure_industry_daily(
         self, trade_date: str, progress_cb=None,
     ) -> int:
         """
-        Ensure industry_daily has aggregated data for trade_date.
+        Ensure industry_daily has enough history for technical analysis.
 
-        For each industry: get constituents → read stock OHLCV from cache
-        → read circ_mv from daily_basic_cache → compute market-cap-weighted
-        returns → build industry OHLCV → upsert into industry_daily.
+        Two-window pattern (aligned with two-window-cache-design):
+        - USE:  420 calendar days (~280 trading) — MA240 + indicators + buffer
+        - CACHE: 750 calendar days (~500 trading) — ~2x USE, amortizes date switches
 
-        Skips industries already cached for this date.
-        Returns number of industries computed.
+        Fast path: if first industry has ≥200 trading days in USE window,
+        only compute today's date.
+        Slow path: backfill full CACHE window for all industries.
+        Returns total rows computed.
         """
         from marketreview.tools.industry import build_industry_list
 
         trade_date = trade_date.replace("-", "")
         industries = build_industry_list(self._api)
         total = len(industries)
-        computed = 0
 
-        # Pre-fetch circ_mv for the date (shared across all industries)
+        end_dt = datetime.strptime(trade_date, "%Y%m%d")
+        use_start = (end_dt - timedelta(days=self._IND_USE_WINDOW_CD)).strftime("%Y%m%d")
+
+        # ── Fast path check: spot-check first industry ──
+        if industries:
+            first_code = industries[0]["code"]
+            first_dates = self.cache.get_industry_daily_dates_in_range(
+                first_code, use_start, trade_date,
+            )
+            if len(first_dates) >= self._IND_FAST_PATH_MIN:
+                log.info(
+                    "ensure_industry_daily: fast path — %s has %d rows in USE window",
+                    first_code, len(first_dates),
+                )
+                return self._compute_industry_date(
+                    trade_date, industries, total, progress_cb,
+                )
+
+        # ── Slow path: backfill full CACHE window ──
+        cache_start = (end_dt - timedelta(days=self._IND_CACHE_WINDOW_CD)).strftime("%Y%m%d")
+        log.info(
+            "ensure_industry_daily: slow path — backfill %s ~ %s",
+            cache_start, trade_date,
+        )
+        return self._backfill_industry_range(
+            cache_start, trade_date, industries, total, progress_cb,
+        )
+
+    def _compute_industry_date(
+        self, trade_date: str, industries: list,
+        total: int, progress_cb=None,
+    ) -> int:
+        """Compute industry_daily for a single date (incremental fast path).
+
+        Skips industries already cached. Uses circ_mv-weighted returns
+        from constituent stock data (today vs previous trading day).
+        """
+        computed = 0
         circ_mv_map = self.get_circ_mv(trade_date)
 
         for i, ind in enumerate(industries):
@@ -1027,14 +1070,11 @@ class DataProvider:
             if self.cache.has_industry_daily(code, trade_date):
                 continue
 
-            # 1. Get constituent list
             con_codes = self.cache.get_industry_members(code)
             if not con_codes:
-                log.debug("ensure_industry_daily: %s (%s) — no constituents, skip",
-                          ind["name"], code)
                 continue
 
-            # 2. Read stock OHLCV for today + previous day
+            # Read stock OHLCV for today + previous day
             stock_today: dict[str, dict] = {}
             stock_prev: dict[str, dict] = {}
             for con in con_codes:
@@ -1045,15 +1085,10 @@ class DataProvider:
                         stock_prev[con] = dict(rows[1])
 
             if not stock_today:
-                log.debug("ensure_industry_daily: %s (%s) — no stock data for %s",
-                          ind["name"], code, trade_date)
                 continue
 
-            # 3. Compute weights from circ_mv
             total_mv = sum(circ_mv_map.get(c, 0) for c in stock_today)
             if total_mv <= 0:
-                log.debug("ensure_industry_daily: %s (%s) — zero total circ_mv, skip",
-                          ind["name"], code)
                 continue
 
             weights: dict[str, float] = {}
@@ -1061,11 +1096,11 @@ class DataProvider:
                 mv = circ_mv_map.get(c, 0)
                 weights[c] = mv / total_mv if mv > 0 else 0.0
 
-            # 4. Compute market-cap-weighted return
-            weighted_return = 0.0
-            weighted_open_return = 0.0
-            weighted_high_return = 0.0
-            weighted_low_return = 0.0
+            # Compute weighted returns and up/down structure
+            w_ret = 0.0
+            w_open_ret = 0.0
+            w_high_ret = 0.0
+            w_low_ret = 0.0
             up = down = flat = 0
             total_amount = 0.0
             total_vol = 0.0
@@ -1076,10 +1111,8 @@ class DataProvider:
                 open_t = float(today["open"])
                 high_t = float(today["high"])
                 low_t = float(today["low"])
-                amount_t = float(today.get("amount", 0))
-                vol_t = float(today.get("vol", 0))
-                total_amount += amount_t
-                total_vol += vol_t
+                total_amount += float(today.get("amount", 0))
+                total_vol += float(today.get("vol", 0))
 
                 prev = stock_prev.get(c)
                 if prev:
@@ -1092,16 +1125,16 @@ class DataProvider:
                     adj_prev = float(prev.get("adj_factor", 1.0))
                     if adj_today > 0:
                         ratio = adj_prev / adj_today
-                        prev_close = prev_close * ratio
-                        prev_open = prev_open * ratio
-                        prev_high = prev_high * ratio
-                        prev_low = prev_low * ratio
+                        prev_close *= ratio
+                        prev_open *= ratio
+                        prev_high *= ratio
+                        prev_low *= ratio
 
                     if prev_close > 0:
-                        weighted_return += w * (close_t / prev_close - 1)
-                        weighted_open_return += w * (open_t / prev_open - 1)
-                        weighted_high_return += w * (high_t / prev_high - 1)
-                        weighted_low_return += w * (low_t / prev_low - 1)
+                        w_ret += w * (close_t / prev_close - 1)
+                        w_open_ret += w * (open_t / prev_open - 1)
+                        w_high_ret += w * (high_t / prev_high - 1)
+                        w_low_ret += w * (low_t / prev_low - 1)
 
                     if close_t > prev_close:
                         up += 1
@@ -1112,28 +1145,19 @@ class DataProvider:
                 else:
                     flat += 1
 
-            # 5. Build price curve from previous industry close or base=1000
+            # Build price curve from previous industry close or base=1000
             prev_ind_rows = self.cache.get_industry_daily(
                 code, end_date=trade_date, lookback=1,
             )
-            if prev_ind_rows:
-                base_close = float(prev_ind_rows[0]["close"])
-            else:
-                base_close = 1000.0
+            base_close = float(prev_ind_rows[0]["close"]) if prev_ind_rows else 1000.0
 
-            industry_close = round(base_close * (1 + weighted_return), 4)
-            industry_open = round(base_close * (1 + weighted_open_return), 4)
-            industry_high = round(base_close * (1 + weighted_high_return), 4)
-            industry_low = round(base_close * (1 + weighted_low_return), 4)
-
-            # 6. Upsert
             self.cache.upsert_industry_daily([{
                 "industry_code": code,
                 "trade_date": trade_date,
-                "open": industry_open,
-                "high": industry_high,
-                "low": industry_low,
-                "close": industry_close,
+                "open": round(base_close * (1 + w_open_ret), 4),
+                "high": round(base_close * (1 + w_high_ret), 4),
+                "low": round(base_close * (1 + w_low_ret), 4),
+                "close": round(base_close * (1 + w_ret), 4),
                 "amount": round(total_amount, 2),
                 "vol": round(total_vol, 2),
                 "up_count": up,
@@ -1147,19 +1171,175 @@ class DataProvider:
                 progress_cb("industry_daily", i + 1, total,
                             f"{ind['name']} ({computed} computed)")
 
-        log.info("ensure_industry_daily: date=%s computed=%d/%d",
+        log.info("_compute_industry_date: date=%s computed=%d/%d",
                  trade_date, computed, total)
         return computed
+
+    def _backfill_industry_range(
+        self, start_date: str, end_date: str, industries: list,
+        total: int, progress_cb=None,
+    ) -> int:
+        """Backfill industry_daily for a date range (slow path).
+
+        Uses batch queries (get_daily_snapshot) — one query per date per
+        industry instead of one per constituent. Processes dates newest-first
+        so the price curve builds correctly from existing data.
+        """
+        total_computed = 0
+
+        for i, ind in enumerate(industries):
+            code = ind["code"]
+            con_codes = self.cache.get_industry_members(code)
+            if not con_codes:
+                continue
+
+            # Walk backwards from end_date to find all trading dates
+            all_dates: list[str] = []
+            cursor = end_date
+            while cursor and cursor >= start_date:
+                all_dates.append(cursor)
+                cursor = self.cache.get_previous_trade_date(cursor)
+            all_dates.reverse()  # chronological order
+
+            # Find which dates are missing
+            existing = set(
+                self.cache.get_industry_daily_dates_in_range(
+                    code, start_date, end_date,
+                )
+            )
+            missing = [d for d in all_dates if d not in existing]
+            if not missing:
+                continue
+
+            # Compute each missing date using batch queries
+            rows_to_upsert: list[dict] = []
+            for dt in missing:
+                # Batch query all constituents for this date (1 SQL query)
+                today_rows = self.cache.get_daily_snapshot(con_codes, dt)
+                stock_today = {r["code"]: dict(r) for r in today_rows}
+                if not stock_today:
+                    continue
+
+                # Batch query previous trading day
+                prev_dt = self.cache.get_previous_trade_date(dt)
+                stock_prev: dict[str, dict] = {}
+                if prev_dt:
+                    prev_rows = self.cache.get_daily_snapshot(
+                        con_codes, prev_dt,
+                    )
+                    stock_prev = {r["code"]: dict(r) for r in prev_rows}
+
+                circ_mv_map = self.get_circ_mv(dt)
+                total_mv = sum(circ_mv_map.get(c, 0) for c in stock_today)
+                if total_mv <= 0:
+                    continue
+
+                weights: dict[str, float] = {}
+                for c in stock_today:
+                    mv = circ_mv_map.get(c, 0)
+                    weights[c] = mv / total_mv if mv > 0 else 0.0
+
+                w_ret = 0.0
+                w_open_ret = 0.0
+                w_high_ret = 0.0
+                w_low_ret = 0.0
+                up = down = flat = 0
+                total_amount = 0.0
+                total_vol = 0.0
+
+                for c, today in stock_today.items():
+                    w = weights.get(c, 0)
+                    close_t = float(today["close"])
+                    open_t = float(today["open"])
+                    high_t = float(today["high"])
+                    low_t = float(today["low"])
+                    total_amount += float(today.get("amount", 0))
+                    total_vol += float(today.get("vol", 0))
+
+                    prev = stock_prev.get(c)
+                    if prev:
+                        prev_close = float(prev["close"])
+                        prev_open = float(prev["open"])
+                        prev_high = float(prev["high"])
+                        prev_low = float(prev["low"])
+
+                        adj_today = float(today.get("adj_factor", 1.0))
+                        adj_prev = float(prev.get("adj_factor", 1.0))
+                        if adj_today > 0:
+                            ratio = adj_prev / adj_today
+                            prev_close *= ratio
+                            prev_open *= ratio
+                            prev_high *= ratio
+                            prev_low *= ratio
+
+                        if prev_close > 0:
+                            w_ret += w * (close_t / prev_close - 1)
+                            w_open_ret += w * (open_t / prev_open - 1)
+                            w_high_ret += w * (high_t / prev_high - 1)
+                            w_low_ret += w * (low_t / prev_low - 1)
+
+                        if close_t > prev_close:
+                            up += 1
+                        elif close_t < prev_close:
+                            down += 1
+                        else:
+                            flat += 1
+                    else:
+                        flat += 1
+
+                # Build price curve from previous industry close or base=1000
+                prev_ind_rows = self.cache.get_industry_daily(
+                    code, end_date=dt, lookback=1,
+                )
+                base_close = (
+                    float(prev_ind_rows[0]["close"]) if prev_ind_rows else 1000.0
+                )
+
+                rows_to_upsert.append({
+                    "industry_code": code,
+                    "trade_date": dt,
+                    "open": round(base_close * (1 + w_open_ret), 4),
+                    "high": round(base_close * (1 + w_high_ret), 4),
+                    "low": round(base_close * (1 + w_low_ret), 4),
+                    "close": round(base_close * (1 + w_ret), 4),
+                    "amount": round(total_amount, 2),
+                    "vol": round(total_vol, 2),
+                    "up_count": up,
+                    "down_count": down,
+                    "flat_count": flat,
+                    "stock_count": len(stock_today),
+                })
+
+            if rows_to_upsert:
+                self.cache.upsert_industry_daily(rows_to_upsert)
+                total_computed += len(rows_to_upsert)
+
+            if progress_cb and (i + 1) % 5 == 0:
+                progress_cb(
+                    "industry_daily", i + 1, total,
+                    f"{ind['name']} (累计 {total_computed} 行)",
+                )
+
+        log.info(
+            "_backfill_industry_range: %s~%s — %d rows across %d industries",
+            start_date, end_date, total_computed, total,
+        )
+        return total_computed
 
     def get_industry_daily(
         self, industry_code: str,
         end_date: str | None = None,
         lookback: int = 360,
     ) -> list[dict]:
-        """Return industry daily rows (date DESC), read from cache only."""
-        return self.cache.get_industry_daily(
+        """Return industry daily rows (date DESC), read from cache only.
+        Column names are normalized: trade_date → date for downstream compat.
+        """
+        rows = self.cache.get_industry_daily(
             industry_code, end_date=end_date, lookback=lookback,
         )
+        for r in rows:
+            r["date"] = r.pop("trade_date", None)
+        return rows
 
     def get_industry_ranking(self, trade_date: str) -> list[dict]:
         """

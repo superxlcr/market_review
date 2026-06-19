@@ -11,6 +11,12 @@ from marketreview.log_util import get_logger
 
 log = get_logger(__name__)
 
+# ── Module-level cache for index_classify results ──
+# These are pure metadata (industry classification tree) that changes at most
+# annually (Shenwan rebalancing). Runtime lifetime is fine — on the rare occasion
+# SW2021 updates, the hardcoded SPLIT_L1/SPLIT_L2 sets likely need updating too.
+_FETCH_CACHE: dict[str, list[dict]] = {}
+
 # ── Split configuration ──
 # L1 industries that are replaced by their L2 children
 SPLIT_L1 = {'建筑材料', '有色金属', '汽车', '电力设备', '电子', '通信'}
@@ -23,7 +29,10 @@ def _fetch_sw_classification(level: str, api) -> list[dict]:
     """Fetch one level of Shenwan 2021 classification from tushare.
 
     Returns list of {index_code, industry_code, industry_name, parent_code}.
+    Results are cached at module level for the lifetime of the process.
     """
+    if level in _FETCH_CACHE:
+        return _FETCH_CACHE[level]
     try:
         df = api.index_classify(level=level, src='SW2021')
         if df is None or df.empty:
@@ -37,6 +46,7 @@ def _fetch_sw_classification(level: str, api) -> list[dict]:
                 "industry_name": str(r.get("industry_name", "")),
                 "parent_code": str(r.get("parent_code", "")),
             })
+        _FETCH_CACHE[level] = result
         return result
     except Exception as e:
         log.warning("index_classify(level=%s) failed: %s", level, e)

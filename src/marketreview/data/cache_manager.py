@@ -142,6 +142,24 @@ class CacheManager:
                   code, end, limit, len(result))
         return result
 
+    def get_daily_snapshot(
+        self, codes: list[str], date_str: str,
+    ) -> list[dict]:
+        """Return daily rows for multiple codes on a single date.
+        Efficient batch alternative to N × get_daily() for one date.
+        Returns rows with keys matching tushare_cache columns.
+        """
+        if not codes:
+            return []
+        placeholders = ",".join(["?"] * len(codes))
+        sql = (
+            f"SELECT * FROM tushare_cache "
+            f"WHERE code IN ({placeholders}) AND date = ?"
+        )
+        with self._get_conn() as conn:
+            rows = conn.execute(sql, codes + [date_str]).fetchall()
+        return [dict(r) for r in rows]
+
     def get_latest_date(self, code: str) -> str | None:
         """Return the most recent cached date for a code, or None."""
         with self._get_conn() as conn:

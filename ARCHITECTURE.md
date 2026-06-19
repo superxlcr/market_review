@@ -79,7 +79,7 @@ marketreview/
 
 ## 4. 数据层
 
-### 4.1 数据库（SQLite，8 表）
+### 4.1 数据库（SQLite，11 表）
 
 | 表 | 用途 | 关键字段 |
 |----|------|----------|
@@ -90,6 +90,9 @@ marketreview/
 | `daily_basic_cache` | 市值数据（日频） | ts_code, trade_date, total_mv, circ_mv |
 | `wave33_cache` | 33公式每日选股结果 | trade_date, count, profit_count, profit_pct, stock_codes(JSON) |
 | `index_contribution_cache` | 指数权重贡献缓存 | index_code, trade_date, top_n, weight_type, data(JSON) |
+| `stk_limit_cache` | 涨跌停价（日频） | ts_code, trade_date, up_limit, down_limit |
+| `industry_member_cache` | 申万行业成分股映射 | industry_code, con_code |
+| `industry_daily` | 行业合成日K线（自下而上加权） | industry_code, trade_date, OHLCV, up/down/flat/stock_count |
 | `ai_summary` | AI 总结缓存 | trade_date, summary_type, guide_key, content, model |
 
 ### 4.2 复权策略
@@ -103,6 +106,56 @@ marketreview/
 - **Schema 自动检测**：启动时逐表检查列结构，仅删除/重建不匹配的表（不丢弃整个数据库）
 - **日期边界检查**：`daily_basic_has_range()` 检查 end_date 是否有数据行（避免 SQL GROUP BY 对零行日期不可见导致的隐性数据缺失）
 - **数据覆盖率验证**：`DataProvider._validate_coverage()` 在数据加载后自动检测每日期望股票数是否 >= 90%，不足则自动重新拉取
+
+### 4.4 缓存分级设计
+
+系统有三层缓存，边界清晰，不可混用：
+
+#### L1: Streamlit `@st.cache_data` — 进程级, TTL 过期
+
+- **位置**: `dashboard/pages/01_市场全景.py:742`, `load_market_overview(date)`
+- **用途**: 防止页面交互（点击 widget）触发的重复计算。是整个聚合结果的 UI 层缓存。
+- **适用**: 计算结果几秒到几分钟后会失效的场景。
+
+#### L2: 模块级 `_FETCH_CACHE: dict` — 进程级, 无过期
+
+- **位置**: `src/marketreview/tools/industry.py:18`
+- **用途**: 缓存 `index_classify` 返回的申万行业分类树元数据（~200 行，几 KB）。
+- **适用**: 数据量小、拉取成本低（几次 API 调用）、不需要跨重启。典型场景：外部 API 返回的分类/枚举/配置，其更新频率和代码里的硬编码常量一样低。
+- **规则**: 空结果和异常不缓存 — 防止瞬态失败永久损坏。
+
+#### L3: SQLite DB — 持久化, 跨重启
+
+所有 `CacheManager` 管理的 11 张表。这是系统的主力缓存层。
+
+| 表 | 数据类型 | 拉取成本 | 被谁消费 |
+|---|----------|----------|----------|
+| `tushare_cache` | 原始日K线 + adj_factor | 极高（全市场逐日分页） | Agent 1/2/3 |
+| `daily_basic_cache` | 市值 (total_mv/circ_mv) | 高（全市场分页） | Agent 1/2 |
+| `stock_basic_cache` | 股票基础列表 | 低（一次性） | Agent 1/3 |
+| `stock_industry_cache` | 个股→行业映射 | 中（逐股查询） | Agent 2 |
+| `industry_member_cache` | 行业→成分股列表 | 中（逐行业查询） | Agent 2 |
+| `industry_daily` | 行业合成日K线 | 极高（自下而上计算） | Agent 2 |
+| `stk_limit_cache` | 涨跌停价 | 低（单日查询） | Agent 1 |
+| `wave33_cache` | 扫描结果 | 高（全市场扫描） | Agent 1 |
+| `index_weight_cache` | 指数权重 | 低（逐指数查询） | Agent 1 |
+| `index_contribution_cache` | 贡献分析结果 | 中（计算） | Agent 1 |
+| `ai_summary` | AI 导语文本 | 中（LLM 调用） | 三大页面 |
+
+#### 判断标准
+
+一个数据放哪个层级，看三个维度：
+
+| 维度 | L1 (Streamlit TTL) | L2 (模块 dict) | L3 (SQLite DB) |
+|------|-------------------|----------------|----------------|
+| 数据量 | 任意（但 TTL 短） | < 几 KB | > 几千行 |
+| 跨重启 | 不需要 | 不需要 | 需要 |
+| 变化频率 | 分钟级 | 年更 | 日更以上 |
+
+**访问规则**（参见两窗口缓存设计）：
+- 所有 tushare API 调用必须经过 `DataProvider`，`DashboardService` 不得直接访问 API
+- 时间序列数据遵循两窗口模式：USE 窗口检查 → CACHE 窗口回填
+- DB 查询必须带 `trade_date` 过滤
 
 ## 5. 数据加载流程
 
@@ -308,7 +361,7 @@ LLM 配置通过环境变量：
 |----|------|
 | 前端 | Streamlit（Plotly K线图表） |
 | 服务层 | Python（DashboardService 门面模式） |
-| 数据层 | SQLite（8 表，自愈 schema） |
+| 数据层 | SQLite（11 表，自愈 schema） |
 | LLM | DeepSeek / OpenAI-compatible API（并发调用） |
 | 数据源 | Tushare Pro API |
 | 日志 | Python logging（每模块独立文件 + errors.log 汇总） |

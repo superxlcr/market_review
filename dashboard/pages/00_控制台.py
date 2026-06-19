@@ -59,6 +59,19 @@ div[data-testid="stForm"] div[data-testid="stElementContainer"]:has(div[data-tes
 st.title("🎛️ 控制台")
 st.caption("选择交易日，应用到全部页面")
 
+# ── Industry Classification Rules ──
+with st.expander("📋 行业分类规则", expanded=False):
+    from marketreview.tools.industry import SPLIT_L1, SPLIT_L2
+    st.markdown(f"""
+    **默认按申万一级行业（31个）展示**
+
+    **拆分 L1 → L2：** {', '.join(sorted(SPLIT_L1))}
+
+    **拆分 L2 → L3：** {', '.join(sorted(SPLIT_L2))}
+
+    **最终板块数：** 25 L1 + 24 L2 + 14 L3 = **63**
+    """)
+
 _service = DashboardService()
 
 # ── Default date ──
@@ -265,24 +278,6 @@ if _current_td:
     elif _ai and "error" not in _ai:
         st.markdown("---")
         st.caption("🤖 AI 总结尚未生成（切换日期时将自动生成）")
-
-# ── Industry Classification Rules ──
-with st.expander("📋 行业分类规则", expanded=False):
-    try:
-        config = _service.get_industry_split_config()
-        split_l1 = config["split_l1"]
-        split_l2 = config["split_l2"]
-        st.markdown(f"""
-        **默认按申万一级行业（31个）展示**
-
-        **拆分 L1 → L2：** {', '.join(split_l1)}
-
-        **拆分 L2 → L3：** {', '.join(split_l2)}
-
-        **最终板块数：** 25 L1 + 24 L2 + 14 L3 = **63**
-        """)
-    except Exception:
-        st.caption("行业分类配置暂不可用")
 
 st.markdown("---")
 st.caption("快速跳转：左侧导航 → 市场全景 | 板块分析 | 个股追踪")
