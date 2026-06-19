@@ -5,6 +5,7 @@
 import streamlit as st
 import sys
 import os
+import threading
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -111,7 +112,6 @@ if st.session_state["_init_start"]:
 
         def _init_progress(phase: str, label: str):
             if phase == "phase_start":
-                # label starts with "K线 — ...", "市值 — ...", etc.
                 for pk, name in _phase_name.items():
                     if label.startswith(name):
                         _ps[pk] = "⏳"
@@ -121,6 +121,9 @@ if st.session_state["_init_start"]:
                     if label.startswith(f"✅ {name}"):
                         _ps[pk] = "✅"
                         break
+            # Streamlit elements are NOT thread-safe — skip updates from worker threads
+            if threading.current_thread() is not threading.main_thread():
+                return
             # Build combined status label
             _combined = (
                 f"📈{_ps['kline']}  💰{_ps['market_cap']}  "
@@ -198,9 +201,7 @@ elif not _db_ready["all_ready"]:
         "· 总计约 **15 分钟**"
     )
 
-    _init_btn = st.button(
-        "🔄 开始初始化", type="primary", use_container_width=True,
-    )
+    _init_btn = st.button("🔄 开始初始化", type="primary")
 
     if _init_btn:
         st.session_state["_init_start"] = True

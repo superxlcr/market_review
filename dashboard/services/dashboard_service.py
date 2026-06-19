@@ -27,7 +27,7 @@ class DashboardService:
         self._llm_client = None  # lazy init
 
         # Fixed start date for DB initialization
-        self._INIT_START = "20210101"
+        self._INIT_START = "20210104"  # 2021 first trading day (Jan 1-3 are New Year holiday)
         # MAX(date) must be within this many days of today
         self._INIT_FRESHNESS_DAYS = 15
 
