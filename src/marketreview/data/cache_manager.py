@@ -64,6 +64,9 @@ class CacheManager:
             "amount", "vol",
             "up_count", "down_count", "flat_count", "stock_count",
         },
+        "init_status": {
+            "key", "value",
+        },
     }
 
     def _init_schema(self):
@@ -104,6 +107,8 @@ class CacheManager:
     def _get_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     # ------- write / read -------
@@ -719,5 +724,22 @@ class CacheManager:
                 "(trade_date, summary_type, guide_key, content, model, created_at) "
                 "VALUES (?, ?, ?, ?, ?, datetime('now'))",
                 (trade_date, summary_type, guide_key, content, model),
+            )
+            conn.commit()
+
+    # ------- init_status -------
+
+    def get_init_status(self) -> dict:
+        """Return all init_status rows as {key: value}. Empty dict if uninitialized."""
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT key, value FROM init_status").fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+    def set_init_status(self, key: str, value: str):
+        """Set one init_status key-value pair (INSERT OR REPLACE)."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO init_status (key, value) VALUES (?, ?)",
+                [key, value],
             )
             conn.commit()

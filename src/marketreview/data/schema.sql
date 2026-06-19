@@ -115,3 +115,8 @@ CREATE TABLE IF NOT EXISTS industry_daily (
 
 CREATE INDEX IF NOT EXISTS idx_industry_daily_code_date
     ON industry_daily(industry_code, trade_date DESC);
+
+CREATE TABLE IF NOT EXISTS init_status (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
