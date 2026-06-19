@@ -24,62 +24,35 @@ from ..log_util import get_logger
 log = get_logger(__name__)
 
 
-# Industry label override logic:
-#   默认 → L2
-#   命中 L1_OVERRIDE_L1 (by L1 code) → L1 name
-#   命中 L3_OVERRIDE_L3 (by L3 code) → L3 name
-# L3 override 现在直接用 l3_code 做键，粒度最精确。
+# Industry label resolution follows the same recursive split rules as
+# the sector analysis page.  SPLIT_L1 and SPLIT_L2 are imported from
+# the canonical source in industry.py.
 
-L1_OVERRIDE_L1 = {
-    "801780.SI",  # 银行     -> "银行" is sufficient
-    "801960.SI",  # 石油石化  -> "石油石化" is sufficient
-    "801950.SI",  # 煤炭     -> "煤炭" is sufficient
-    "801750.SI",  # 计算机   -> "计算机" is sufficient
-    "801150.SI",  # 医药生物  -> "医药生物" is sufficient
-    "801790.SI",  # 非银金融  -> "非银金融" is sufficient
-    "801120.SI",  # 食品饮料  -> "食品饮料" is sufficient
-    "801890.SI",  # 机械设备  -> "机械设备" is sufficient
-}
-
-L3_OVERRIDE_L3 = {
-    "850781.SI",  # 机器人       (L2=自动化设备)
-    "850814.SI",  # 数字芯片设计   (L2=半导体)
-    "850813.SI",  # 半导体材料    (L2=半导体)
-    "850818.SI",  # 半导体设备    (L2=半导体)
-    "850817.SI",  # 集成电路封测   (L2=半导体)
-    "850816.SI",  # 集成电路制造   (L2=半导体)
-    "850812.SI",  # 分立器件      (L2=半导体)
-    "850823.SI",  # 被动元件      (L2=元件)
-    "850822.SI",  # 印制电路板    (L2=元件)
-    "850543.SI",  # 锂           (L2=能源金属)
-    "850542.SI",  # 钨           (L2=小金属)
-    "857353.SI",  # 逆变器       (L2=光伏设备)
-}
+from marketreview.tools.industry import SPLIT_L1, SPLIT_L2
 
 
 def pick_industry_label(l1_code: str, l1_name: str,
                         l2_code: str, l2_name: str,
                         l3_code: str = "", l3_name: str = "") -> str:
-    """Choose the display label for a stock's industry (L1 / L2 / L3)."""
-    if l1_code in L1_OVERRIDE_L1:
-        return l1_name
-    if l3_code in L3_OVERRIDE_L3:
-        return l3_name or l2_name  # fall back to L2 if L3 is empty
-    return l2_name
+    """Choose the display label for a stock's industry (recursive split).
+
+    Priority: L3 (if L2 in SPLIT_L2) > L2 (if L1 in SPLIT_L1) > L1
+    """
+    if l1_name in SPLIT_L1 and l2_name:
+        if l2_name in SPLIT_L2 and l3_name:
+            return l3_name
+        return l2_name
+    return l1_name
 
 
 def pick_industry_code(l1_code: str, l2_code: str,
                        l3_code: str = "") -> str:
-    """Return the industry code that matches pick_industry_label's choice.
-
-    This is the code corresponding to whichever level was selected for
-    display — used when aggregating by industry for drill-down purposes.
-    """
-    if l1_code in L1_OVERRIDE_L1:
-        return l1_code
-    if l3_code in L3_OVERRIDE_L3:
-        return l3_code or l2_code
-    return l2_code
+    """Return the industry code that matches pick_industry_label's choice."""
+    if l3_code:
+        return l3_code
+    if l2_code:
+        return l2_code
+    return l1_code
 
 
 def build_index_contribution(
