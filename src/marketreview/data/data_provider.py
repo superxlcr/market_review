@@ -116,8 +116,15 @@ class DataProvider:
                 fetch_start, end_date, progress_cb
             )
             self._fetch_stock_basic_once()
+            # Only ensure recent daily_basic (last 20 calendar days).
+            # Full-range scan (_DB_FETCH_DAYS=500cd) was done during initial
+            # backfill; re-scanning every time wastes ~70s on API calls for
+            # chunks that are already cached.
+            db_recent = (end_dt - timedelta(days=20)).strftime("%Y%m%d")
+            log.info("ensure_data_loaded: daily_basic recent-only window %s~%s",
+                     db_recent, end_date)
             db_pages = self._ensure_daily_basic_loaded(
-                db_start, end_date, progress_cb
+                db_recent, end_date, progress_cb
             )
             # Validate coverage even when cache appears up-to-date
             ind_members = self.ensure_industry_members(progress_cb)
