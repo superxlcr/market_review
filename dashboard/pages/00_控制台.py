@@ -74,6 +74,170 @@ with st.expander("📋 行业分类规则", expanded=False):
 
 _service = DashboardService()
 
+# ═══════════════════════════════════════════════════════════════
+# DB Initialization Gate (three-state: A → B → C)
+# ═══════════════════════════════════════════════════════════════
+
+# Run quick check on every page load (<1s, 4 SQL queries)
+_db_ready = _service.check_db_ready()
+
+# Session-state flags for init flow
+if "_init_start" not in st.session_state:
+    st.session_state["_init_start"] = False
+if "_init_logs" not in st.session_state:
+    st.session_state["_init_logs"] = []
+
+st.markdown("---")
+
+# ═══════════════════════════════════════════════════════════════
+# STATE B: Initialization in progress
+# ═══════════════════════════════════════════════════════════════
+# This block runs BEFORE state A/C rendering. When the user clicks
+# the init button, we set _init_start=True and st.rerun(). On the
+# next execution, this block catches the flag, runs the sync init
+# (which may take ~15 min), then clears the flag and reruns again.
+#
+# During the sync init, st.status streams label updates to the
+# browser in real-time (same pattern as lines 179-221, 223-295).
+
+if st.session_state["_init_start"]:
+    with st.status("🔄 数据库初始化进行中...", expanded=True) as status:
+        # Track per-phase status for the combined label
+        _ps = {"kline": "⏸", "market_cap": "⏸", "industry": "⏸", "wave33": "⏸"}
+        _phase_name = {
+            "kline": "K线", "market_cap": "市值",
+            "industry": "行业", "wave33": "3浪3",
+        }
+
+        def _init_progress(phase: str, label: str):
+            if phase == "phase_start":
+                # label starts with "K线 — ...", "市值 — ...", etc.
+                for pk, name in _phase_name.items():
+                    if label.startswith(name):
+                        _ps[pk] = "⏳"
+                        break
+            elif phase == "phase_done":
+                for pk, name in _phase_name.items():
+                    if label.startswith(f"✅ {name}"):
+                        _ps[pk] = "✅"
+                        break
+            # Build combined status label
+            _combined = (
+                f"📈{_ps['kline']}  💰{_ps['market_cap']}  "
+                f"🏭{_ps['industry']}  🌊{_ps['wave33']}  |  {label}"
+            )
+            status.update(label=_combined)
+
+        def _init_log(msg: str):
+            st.session_state["_init_logs"].append(msg)
+
+        result = _service.run_initialization(
+            progress_cb=_init_progress, log_cb=_init_log,
+        )
+
+        if result["status"] == "ok":
+            status.update(
+                label=f"✅ 初始化完成! 总耗时 {result['elapsed']:.0f}s "
+                      f"({result['elapsed'] / 60:.1f}min)",
+                state="complete",
+            )
+        else:
+            status.update(
+                label=f"❌ 初始化失败: {result.get('msg', '未知错误')}",
+                state="error",
+            )
+
+    # Show log after completion
+    if st.session_state["_init_logs"]:
+        with st.expander("📋 初始化日志", expanded=False):
+            st.code("\n".join(st.session_state["_init_logs"]), language="text")
+
+    if result["status"] == "ok":
+        st.session_state["_init_start"] = False
+        st.session_state["_init_logs"] = []
+        st.cache_data.clear()
+        st.rerun()
+    else:
+        # Allow retry
+        st.session_state["_init_start"] = False
+        st.stop()
+
+# ═══════════════════════════════════════════════════════════════
+# STATE A: Uninitialized
+# ═══════════════════════════════════════════════════════════════
+
+elif not _db_ready["all_ready"]:
+    st.markdown("### 🔧 数据库初始化")
+
+    # Per-table status lines
+    _details = _db_ready["details"]
+    for _key, _label in [
+        ("kline", "📈 K线数据"),
+        ("daily_basic", "💰 市值数据"),
+        ("industry_daily", "🏭 行业指数"),
+        ("wave33", "🌊 3浪3"),
+    ]:
+        _d = _details[_key]
+        _icon = "✅" if _d["ok"] else "❌"
+        if _key == "wave33":
+            _info = f"{_d['count']} 天 · 最新 {_d['max']}"
+        elif _key == "industry_daily":
+            _info = f"{_d['count']} 行 · {_d['min']}~{_d['max']}"
+        else:
+            _info = f"{_d['min']}~{_d['max']}"
+        st.markdown(f"{_icon} **{_label}**: {_info}")
+
+    _missing_count = sum(1 for d in _details.values() if not d["ok"])
+    st.warning(
+        f"⚠️ {_missing_count}/4 数据表未就绪。"
+        f"需要拉取 2021-01-01 ~ 今天 的历史数据。"
+    )
+
+    st.caption(
+        "预计耗时：K线 ~4min · 市值 ~2min · 行业指数 ~8min · 3浪3 ~1min  "
+        "· 总计约 **15 分钟**"
+    )
+
+    _init_btn = st.button(
+        "🔄 开始初始化", type="primary", use_container_width=True,
+    )
+
+    if _init_btn:
+        st.session_state["_init_start"] = True
+        st.session_state["_init_logs"] = []
+        st.rerun()
+
+    # Date picker grayed out (unusable until init completes)
+    st.markdown("---")
+    st.caption("📅 日期选择器（初始化完成后可用）")
+    st.date_input(
+        "📅 选择交易日",
+        value=datetime.now(),
+        disabled=True,
+        format="YYYY-MM-DD",
+        key="ctrl_date_picker_disabled",
+    )
+
+    # Stop — don't show normal date picker or AI card
+    st.stop()
+
+# ═══════════════════════════════════════════════════════════════
+# STATE C: Ready (normal use)
+# ═══════════════════════════════════════════════════════════════
+
+else:
+    _d = _db_ready["details"]
+    _kl_min = _d["kline"]["min"]
+    _kl_max = _d["kline"]["max"]
+    _ind_count = _d["industry_daily"]["count"]
+    st.markdown(
+        f"✅ **数据库已就绪** · "
+        f"{_kl_min} ~ {_kl_max} · "
+        f"行业指数 {_ind_count} 行"
+    )
+
+# ═══════════════════════════════════════════════════════════════
+
 # ── Default date ──
 _default_str = st.session_state.get("trade_date")
 if _default_str:
@@ -102,6 +266,7 @@ with st.form("ctrl_form", clear_on_submit=False):
     selected_date = st.date_input(
         "📅 选择交易日",
         value=_default_date,
+        min_value=datetime(2023, 1, 1),
         max_value=datetime.now(),
         format="YYYY-MM-DD",
         key="ctrl_date_picker",
