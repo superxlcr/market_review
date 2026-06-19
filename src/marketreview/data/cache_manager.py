@@ -55,6 +55,15 @@ class CacheManager:
             "trade_date", "summary_type", "guide_key",
             "content", "model", "created_at",
         },
+        "industry_member_cache": {
+            "industry_code", "con_code",
+        },
+        "industry_daily": {
+            "industry_code", "trade_date",
+            "open", "high", "low", "close",
+            "amount", "vol",
+            "up_count", "down_count", "flat_count", "stock_count",
+        },
     }
 
     def _init_schema(self):
@@ -336,6 +345,114 @@ class CacheManager:
                 "SELECT COUNT(*) as cnt FROM stock_basic_cache"
             ).fetchone()
         return row["cnt"] if row else 0
+
+    # ------- industry_member_cache -------
+
+    def get_industry_members(self, industry_code: str) -> list[str]:
+        """Return list of con_code for an industry. Empty list if not cached."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT con_code FROM industry_member_cache WHERE industry_code = ?",
+                [industry_code],
+            ).fetchall()
+        return [r["con_code"] for r in rows]
+
+    def upsert_industry_members(self, industry_code: str, con_codes: list[str]):
+        """Replace all constituent stocks for an industry (DELETE + INSERT batch)."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "DELETE FROM industry_member_cache WHERE industry_code = ?",
+                [industry_code],
+            )
+            conn.executemany(
+                "INSERT OR REPLACE INTO industry_member_cache "
+                "(industry_code, con_code) VALUES (?, ?)",
+                [(industry_code, c) for c in con_codes],
+            )
+            conn.commit()
+
+    def has_industry_members(self, industry_code: str) -> bool:
+        """Return True if this industry has cached members."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM industry_member_cache "
+                "WHERE industry_code = ? LIMIT 1",
+                [industry_code],
+            ).fetchone()
+        return row is not None
+
+    # ------- industry_daily -------
+
+    def get_industry_daily(
+        self, industry_code: str,
+        end_date: str | None = None,
+        lookback: int = 360,
+    ) -> list[dict]:
+        """Return daily rows for one industry, date DESC, limited to lookback."""
+        end_date = (end_date or "").replace("-", "")
+        sql = "SELECT * FROM industry_daily WHERE industry_code = ?"
+        params: list = [industry_code]
+        if end_date:
+            sql += " AND trade_date <= ?"
+            params.append(end_date)
+        sql += " ORDER BY trade_date DESC"
+        if lookback:
+            sql += " LIMIT ?"
+            params.append(lookback)
+        with self._get_conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_industry_daily(self, rows: list[dict]):
+        """Bulk upsert industry_daily rows."""
+        sql = """
+            INSERT OR REPLACE INTO industry_daily
+                (industry_code, trade_date, open, high, low, close,
+                 amount, vol, up_count, down_count, flat_count, stock_count)
+            VALUES (:industry_code, :trade_date, :open, :high, :low, :close,
+                    :amount, :vol, :up_count, :down_count, :flat_count,
+                    :stock_count)
+        """
+        with self._get_conn() as conn:
+            conn.executemany(sql, rows)
+            conn.commit()
+
+    def has_industry_daily(self, industry_code: str, trade_date: str) -> bool:
+        """Return True if this industry has daily data for this date."""
+        trade_date = trade_date.replace("-", "")
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM industry_daily "
+                "WHERE industry_code = ? AND trade_date = ? LIMIT 1",
+                [industry_code, trade_date],
+            ).fetchone()
+        return row is not None
+
+    def get_industry_daily_dates_in_range(
+        self, industry_code: str, start: str, end: str,
+    ) -> list[str]:
+        """Return distinct trade dates in industry_daily for a range."""
+        start = start.replace("-", "")
+        end = end.replace("-", "")
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT trade_date FROM industry_daily "
+                "WHERE industry_code = ? AND trade_date >= ? "
+                "AND trade_date <= ? ORDER BY trade_date",
+                [industry_code, start, end],
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def count_industry_daily_date(self, trade_date: str) -> int:
+        """Return number of industries with daily data for a given date."""
+        trade_date = trade_date.replace("-", "")
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT industry_code) FROM industry_daily "
+                "WHERE trade_date = ?",
+                [trade_date],
+            ).fetchone()
+        return row[0] if row else 0
 
     # ------- daily_basic_cache -------
 
