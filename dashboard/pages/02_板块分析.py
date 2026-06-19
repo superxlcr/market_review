@@ -196,9 +196,11 @@ else:
         sign = "+" if chg >= 0 else ""
         color = up_down_color(chg)
 
-        # Rich info line above expander
+        # Rich info line above expander: 行业名称 + 涨跌幅 + 理由
         st.html(f"""
         <div style="margin-bottom:2px;font-size:15px;">
+            <span style="font-weight:bold;font-size:15px;">{ind['name']} ({ind['level']})</span>
+            &nbsp;
             <span style="color:{color};font-weight:bold;font-size:16px;">{sign}{chg:.2f}%</span>
             &nbsp;{reasons_html}
         </div>

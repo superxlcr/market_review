@@ -1167,9 +1167,9 @@ class DataProvider:
             }])
             computed += 1
 
-            if progress_cb and computed % 10 == 0:
+            if progress_cb:
                 progress_cb("industry_daily", i + 1, total,
-                            f"{ind['name']} ({computed} computed)")
+                            f"{ind['name']} ({computed}/{total})")
 
         log.info("_compute_industry_date: date=%s computed=%d/%d",
                  trade_date, computed, total)
@@ -1187,32 +1187,57 @@ class DataProvider:
         """
         total_computed = 0
 
+        # Normalize date range to dash-format for consistent comparison
+        # (get_previous_trade_date returns "YYYY-MM-DD" while callers
+        # may pass "YYYYMMDD" — both must match tushare_cache format.)
+        start_date = _with_dashes(start_date)
+        end_date_d = _with_dashes(end_date)
+
         for i, ind in enumerate(industries):
             code = ind["code"]
+            name = ind["name"]
             con_codes = self.cache.get_industry_members(code)
             if not con_codes:
+                log.info("_backfill_industry_range: %s (%s) — no constituents, skip",
+                         name, code)
                 continue
 
             # Walk backwards from end_date to find all trading dates
             all_dates: list[str] = []
-            cursor = end_date
+            cursor = end_date_d
             while cursor and cursor >= start_date:
                 all_dates.append(cursor)
                 cursor = self.cache.get_previous_trade_date(cursor)
             all_dates.reverse()  # chronological order
 
+            if not all_dates:
+                log.info("_backfill_industry_range: %s (%s) — 0 trading dates "
+                         "in range, skip", name, code)
+                continue
+
             # Find which dates are missing
             existing = set(
                 self.cache.get_industry_daily_dates_in_range(
-                    code, start_date, end_date,
+                    code, start_date, end_date_d,
                 )
             )
             missing = [d for d in all_dates if d not in existing]
             if not missing:
+                log.info("_backfill_industry_range: %s (%s) — all %d dates "
+                         "already cached", name, code, len(all_dates))
                 continue
 
-            # Compute each missing date using batch queries
-            rows_to_upsert: list[dict] = []
+            log.info("_backfill_industry_range: %s (%s) — %d constituents, "
+                     "%d/%d dates missing, computing...",
+                     name, code, len(con_codes), len(missing), len(all_dates))
+
+            if progress_cb:
+                progress_cb("industry_daily", i + 1, total,
+                            f"{name} — {len(missing)} 天待算")
+
+            # Compute each missing date, upserting immediately so the
+            # price curve chains correctly across consecutive dates.
+            ind_computed = 0
             for dt in missing:
                 # Batch query all constituents for this date (1 SQL query)
                 today_rows = self.cache.get_daily_snapshot(con_codes, dt)
@@ -1287,7 +1312,10 @@ class DataProvider:
                     else:
                         flat += 1
 
-                # Build price curve from previous industry close or base=1000
+                # Build price curve from previous industry close or base=1000.
+                # Upsert immediately so subsequent dates can chain correctly
+                # (batch upsert would make every date read base_close=1000 for
+                # all but the first date, breaking price compounding).
                 prev_ind_rows = self.cache.get_industry_daily(
                     code, end_date=dt, lookback=1,
                 )
@@ -1295,7 +1323,7 @@ class DataProvider:
                     float(prev_ind_rows[0]["close"]) if prev_ind_rows else 1000.0
                 )
 
-                rows_to_upsert.append({
+                self.cache.upsert_industry_daily([{
                     "industry_code": code,
                     "trade_date": dt,
                     "open": round(base_close * (1 + w_open_ret), 4),
@@ -1308,16 +1336,17 @@ class DataProvider:
                     "down_count": down,
                     "flat_count": flat,
                     "stock_count": len(stock_today),
-                })
+                }])
+                total_computed += 1
+                ind_computed += 1
 
-            if rows_to_upsert:
-                self.cache.upsert_industry_daily(rows_to_upsert)
-                total_computed += len(rows_to_upsert)
+            log.info("_backfill_industry_range: %s (%s) — %d rows computed",
+                     name, code, ind_computed)
 
-            if progress_cb and (i + 1) % 5 == 0:
+            if progress_cb:
                 progress_cb(
                     "industry_daily", i + 1, total,
-                    f"{ind['name']} (累计 {total_computed} 行)",
+                    f"{name} — {ind_computed} 天 (累计 {total_computed} 行)",
                 )
 
         log.info(
@@ -1508,6 +1537,16 @@ def _yesterday(date_str: str) -> str:
     """Return the day before date_str (YYYYMMDD)."""
     dt = datetime.strptime(date_str, "%Y%m%d")
     return (dt - timedelta(days=1)).strftime("%Y%m%d")
+
+
+def _with_dashes(date_str: str) -> str:
+    """Normalize a date string to YYYY-MM-DD format.
+    Handles both "YYYYMMDD" and "YYYY-MM-DD" inputs.
+    """
+    if "-" in date_str:
+        return date_str
+    dt = datetime.strptime(date_str, "%Y%m%d")
+    return dt.strftime("%Y-%m-%d")
 
 
 def _next_day(date_str: str) -> str:
