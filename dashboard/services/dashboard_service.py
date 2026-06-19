@@ -26,6 +26,11 @@ class DashboardService:
         self._dp = DataProvider(tushare_token=token)
         self._llm_client = None  # lazy init
 
+        # Fixed start date for DB initialization
+        self._INIT_START = "20210101"
+        # MAX(date) must be within this many days of today
+        self._INIT_FRESHNESS_DAYS = 15
+
     @property
     def is_configured(self) -> bool:
         return bool(os.environ.get("TUSHARE_TOKEN", ""))
@@ -55,6 +60,133 @@ class DashboardService:
     def check_cache_coverage(self, trade_date: str) -> bool:
         """Return True if cache already covers this date (no loading needed)."""
         return self._dp.check_cache_coverage(trade_date)
+
+    # ---- DB initialization status check ----
+
+    # ---- DB initialization readiness check ----
+
+    def check_db_ready(self) -> dict:
+        """
+        4 quick read-only SQL queries to determine if the DB is fully initialized.
+
+        Runs in <1s. Called automatically on page load.
+        No API calls, no heavy computation.
+
+        Returns:
+          {"all_ready": bool, "details": {
+              "kline": {"min": str, "max": str, "ok": bool},
+              "daily_basic": {"min": str, "max": str, "ok": bool},
+              "industry_daily": {"min": str, "max": str, "count": int, "ok": bool},
+              "wave33": {"count": int, "max": str, "ok": bool},
+          }}
+        """
+        import sqlite3
+        from datetime import datetime, timedelta
+
+        db = self._dp.cache.db_path
+        freshness_cutoff = (
+            datetime.now() - timedelta(days=self._INIT_FRESHNESS_DAYS)
+        ).strftime("%Y%m%d")
+
+        def _query(sql, params=()):
+            with sqlite3.connect(db) as conn:
+                return conn.execute(sql, params).fetchone()
+
+        details = {}
+
+        # 1. K-line (tushare_cache, stocks only)
+        kl = _query(
+            "SELECT MIN(date), MAX(date) "
+            "FROM tushare_cache WHERE asset_type='stock'"
+        )
+        kline_ok = bool(
+            kl[0] and kl[0] <= self._INIT_START
+            and kl[1] and kl[1] >= freshness_cutoff
+        )
+        details["kline"] = {
+            "min": (kl[0] or "-").replace("-", ""),
+            "max": (kl[1] or "-").replace("-", ""),
+            "ok": kline_ok,
+        }
+
+        # 2. Market cap (daily_basic_cache)
+        db_info = _query(
+            "SELECT MIN(trade_date), MAX(trade_date) FROM daily_basic_cache"
+        )
+        db_ok = bool(
+            db_info[0] and db_info[0] <= self._INIT_START
+            and db_info[1] and db_info[1] >= freshness_cutoff
+        )
+        details["daily_basic"] = {
+            "min": db_info[0] or "-",
+            "max": db_info[1] or "-",
+            "ok": db_ok,
+        }
+
+        # 3. Industry daily
+        ind = _query(
+            "SELECT MIN(trade_date), MAX(trade_date), COUNT(*) "
+            "FROM industry_daily"
+        )
+        ind_ok = bool(
+            ind[2] > 0
+            and ind[0] and ind[0] <= self._INIT_START
+            and ind[1] and ind[1] >= freshness_cutoff
+        )
+        details["industry_daily"] = {
+            "min": ind[0] or "-",
+            "max": ind[1] or "-",
+            "count": ind[2] or 0,
+            "ok": ind_ok,
+        }
+
+        # 4. Wave33
+        w33 = _query(
+            "SELECT COUNT(*), MAX(trade_date) FROM wave33_cache"
+        )
+        w33_ok = bool(
+            w33[0] > 0
+            and w33[1] and w33[1] >= freshness_cutoff
+        )
+        details["wave33"] = {
+            "count": w33[0] or 0,
+            "max": w33[1] or "-",
+            "ok": w33_ok,
+        }
+
+        all_ready = all(d["ok"] for d in details.values())
+
+        return {"all_ready": all_ready, "details": details}
+
+    def run_initialization(self, progress_cb=None, log_cb=None) -> dict:
+        """
+        Run the full 4-phase DB initialization.
+
+        Thin wrapper around DataProvider.ensure_full_init().
+        On success, writes init_status marker via CacheManager.
+
+        progress_cb(phase: str, label: str):
+          phase = "phase_start" | "phase_progress" | "phase_done"
+        log_cb(message: str):
+          called for each [INIT] log line
+
+        Returns {"status": "ok"|"error", "elapsed": float, "phases": dict}
+        """
+        from datetime import datetime
+
+        result = self._dp.ensure_full_init(
+            progress_cb=progress_cb, log_cb=log_cb,
+        )
+
+        if result["status"] == "ok":
+            self._dp.cache.set_init_status("initialized", "1")
+            self._dp.cache.set_init_status(
+                "completed_at", datetime.now().isoformat(),
+            )
+            if log_cb:
+                log_cb("[INIT] init_status 标记已写入")
+
+        return result
 
     # ---- trading day validation ----
 
