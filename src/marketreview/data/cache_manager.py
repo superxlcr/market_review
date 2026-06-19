@@ -528,11 +528,16 @@ class CacheManager:
         # All existing dates must be ≥ 90% of max
         if not all(c >= max_cnt * 0.9 for c in counts):
             return False
-        # Boundary check: end_date must have rows (dates without rows are
-        # invisible in GROUP BY).  This may cause a redundant fetch when
-        # end_date falls on a weekend, but that is far cheaper than silently
-        # skipping missing data on an actual trading day.
-        if self.count_daily_basic_date(end_date) == 0:
+        # Boundary check: the most recent trading date ≤ end_date must exist.
+        # Use MAX(trade_date) instead of count_daily_basic_date(end_date)
+        # because end_date often lands on a weekend/holiday when chunks are
+        # calendar-based (every run was re-fetching 10+ chunks solely because
+        # their end_date fell on Saturday/Sunday/May Day/etc.).
+        last_td = conn.execute(
+            "SELECT MAX(trade_date) FROM daily_basic_cache WHERE trade_date <= ?",
+            [end_date],
+        ).fetchone()
+        if not last_td or not last_td[0] or last_td[0] < start_date:
             return False
         return True
 
