@@ -124,12 +124,11 @@ if st.session_state["_init_start"]:
             # Streamlit elements are NOT thread-safe — skip updates from worker threads
             if threading.current_thread() is not threading.main_thread():
                 return
-            # Build combined status label
-            _combined = (
-                f"📈{_ps['kline']}  💰{_ps['market_cap']}  "
-                f"🏭{_ps['industry']}  🌊{_ps['wave33']}  |  {label}"
+            # Same pattern as working 应用 flow: direct status.update()
+            status.update(
+                label=f"📈{_ps['kline']}  💰{_ps['market_cap']}  "
+                      f"🏭{_ps['industry']}  🌊{_ps['wave33']}  |  {label}"
             )
-            status.update(label=_combined)
 
         def _init_log(msg: str):
             st.session_state["_init_logs"].append(msg)
