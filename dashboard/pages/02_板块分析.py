@@ -11,7 +11,6 @@ load_dotenv()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from marketreview.tools.technical import ma_arrangement
 from services.dashboard_service import DashboardService
 from rendering.styles import up_down_color, PAGE_CSS
 from rendering.charts import plot_kline_with_ma
@@ -19,6 +18,7 @@ from rendering.technical_section import (
     render_ohlc_card,
     render_kline_patterns,
     render_ma_table,
+    render_ma_arrangement,
     render_volume_section,
     render_short_term_trend,
     render_kd_section,
@@ -136,34 +136,30 @@ def _render_industry_expander(service, code, name, end_date):
     ma_col, vol_col = st.columns([3, 2])
 
     with ma_col:
-        render_ma_table(df, show_avg_amount=False)
-        arrangement = ma_arrangement(df)
-        st.caption(f"排列：{arrangement}")
+        render_ma_table(df, show_avg_amount=True)
+        render_ma_arrangement(df)
 
     with vol_col:
-        render_volume_section(df, variant="compact")
+        render_volume_section(df, variant="full")
 
     st.divider()
 
-    # ── 技术指标行 ──
+    # ── 技术指标 ──
+    st.markdown("**技术指标**")
     trend_label = render_short_term_trend(df)
+    render_kd_section(df, layout="table")
+    render_rsi_section(df, trend_label, layout="table")
+    render_bias_section(df, layout="table")
 
-    ic1, ic2, ic3, ic4 = st.columns(4)
+    # ── 涨跌结构 ──
+    st.divider()
+    st.markdown("**涨跌结构**")
+    up_c = latest.get("up_count", 0)
+    down_c = latest.get("down_count", 0)
+    flat_c = latest.get("flat_count", 0)
 
-    with ic1:
-        render_kd_section(df, layout="card")
-
-    with ic2:
-        render_rsi_section(df, trend_label, layout="card")
-
-    with ic3:
-        render_bias_section(df, layout="card")
-
-    with ic4:
-        st.markdown("**涨跌结构**")
-        up_c = latest.get("up_count", 0)
-        down_c = latest.get("down_count", 0)
-        flat_c = latest.get("flat_count", 0)
+    sl, sr = st.columns(2)
+    with sl:
         st.html(f"""
         <div style="font-size:15px;line-height:2;">
             <div>上涨：<b style="color:#e53935;">{up_c}</b></div>
@@ -171,6 +167,16 @@ def _render_industry_expander(service, code, name, end_date):
             <div>平盘：<b style="color:#999;">{flat_c}</b></div>
         </div>
         """)
+    with sr:
+        total = up_c + down_c + flat_c
+        if total:
+            st.html(f"""
+            <div style="font-size:15px;line-height:2;">
+                <div>上涨占比：<b>{up_c / total * 100:.1f}%</b></div>
+                <div>下跌占比：<b>{down_c / total * 100:.1f}%</b></div>
+                <div>上涨/下跌：<b>{up_c / down_c:.1f}</b></div>
+            </div>
+            """)
 
 
 # ── Section 3: 行业详细分析 Expander 列表 ──
@@ -189,14 +195,15 @@ else:
         chg = ind["chg_pct"]
         sign = "+" if chg >= 0 else ""
         color = up_down_color(chg)
-        # st.expander label is plain-text only — put rich info inside
-        title = f"{ind['name']} ({ind['level']})  {sign}{chg:.2f}%"
 
+        # Rich info line above expander
+        st.html(f"""
+        <div style="margin-bottom:2px;font-size:15px;">
+            <span style="color:{color};font-weight:bold;font-size:16px;">{sign}{chg:.2f}%</span>
+            &nbsp;{reasons_html}
+        </div>
+        """)
+
+        title = f"{ind['name']} ({ind['level']})"
         with st.expander(title, expanded=False):
-            st.html(f"""
-            <div style="margin-bottom:6px;font-size:15px;">
-                <span style="color:{color};font-weight:bold;">{sign}{chg:.2f}%</span>
-                &nbsp;{reasons_html}
-            </div>
-            """)
             _render_industry_expander(_service, ind["code"], ind["name"], _td)
