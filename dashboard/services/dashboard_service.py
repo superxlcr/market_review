@@ -224,6 +224,126 @@ class DashboardService:
             log.warning("get_industry_frequency failed: %s", e)
             return None
 
+    # ---- industry sector data ----
+
+    def get_industry_split_config(self) -> dict:
+        """Return SPLIT_L1 / SPLIT_L2 configuration for display."""
+        from marketreview.tools.industry import SPLIT_L1, SPLIT_L2
+        return {"split_l1": sorted(SPLIT_L1), "split_l2": sorted(SPLIT_L2)}
+
+    def get_industry_list(self) -> list[dict]:
+        """Return the 63-industry list [{code, name, level}, ...]."""
+        from marketreview.tools.industry import build_industry_list
+        return build_industry_list(self._dp._api)
+
+    def ensure_industry_members(self, progress_cb=None) -> list[dict]:
+        """Ensure constituent lists are cached for all industries."""
+        return self._dp.ensure_industry_members(progress_cb=progress_cb)
+
+    def ensure_industry_daily(self, trade_date: str, progress_cb=None) -> int:
+        """Ensure industry_daily has aggregated data for trade_date."""
+        return self._dp.ensure_industry_daily(trade_date, progress_cb=progress_cb)
+
+    def get_industry_daily(
+        self, industry_code: str,
+        end_date: str | None = None,
+        lookback: int = 360,
+    ):
+        """
+        Read industry K-line data, return as DataFrame (date ASC).
+        Industry data is already in price form; add dummy adj_factor=1.0
+        so downstream technical analysis code works unchanged.
+        """
+        from marketreview.tools.technical import rows_to_df
+        rows = self._dp.get_industry_daily(
+            industry_code, end_date=end_date, lookback=lookback,
+        )
+        df = rows_to_df(rows)
+        if not df.empty:
+            df["adj_factor"] = 1.0
+        return df
+
+    def get_industry_ranking(self, trade_date: str) -> list[dict]:
+        """Return all 63 industries sorted by daily return (descending)."""
+        return self._dp.get_industry_ranking(trade_date)
+
+    def get_industry_analysis_set(self, trade_date: str) -> list[dict]:
+        """
+        Build the deduplicated set of industries to display in expanders.
+
+        Sources (deduplicated by industry code):
+          1. TOP 5 gainers
+          2. TOP 5 losers
+          3. Contribution上榜 industries
+          4. Frequent ≥3d industries
+
+        Returns [{code, name, level, chg_pct, up_count, down_count,
+                  stock_count, amount_yi, reasons: [str]}, ...],
+        sorted by abs(chg_pct) DESC.
+        """
+        ranking = self.get_industry_ranking(trade_date)
+        if not ranking:
+            return []
+
+        ind_map = {r["code"]: r for r in ranking}
+        analysis: dict[str, dict] = {}
+
+        def _add(code: str, reason: str):
+            if code not in ind_map:
+                return
+            if code in analysis:
+                if reason not in analysis[code]["reasons"]:
+                    analysis[code]["reasons"].append(reason)
+                return
+            r = ind_map[code]
+            analysis[code] = {
+                "code": code,
+                "name": r["name"],
+                "level": r["level"],
+                "chg_pct": r["chg_pct"],
+                "up_count": r["up_count"],
+                "down_count": r["down_count"],
+                "stock_count": r["stock_count"],
+                "amount_yi": r["amount_yi"],
+                "reasons": [reason],
+            }
+
+        # 1. TOP 5 gainers
+        for i, r in enumerate(ranking[:5]):
+            _add(r["code"], f"🥇涨幅第{i + 1}")
+
+        # 2. TOP 5 losers
+        for i, r in enumerate(ranking[-5:]):
+            _add(r["code"], f"📉跌幅第{5 - i}")
+
+        # 3. Contribution上榜 industries
+        for idx_code in ["000001.SH", "399006.SZ"]:
+            contrib = self.get_index_contribution(idx_code, trade_date)
+            if not contrib:
+                continue
+            for g in contrib.get("gainers", []):
+                ic = g.get("industry_code", "")
+                if ic:
+                    _add(ic, "📊权重贡献上榜")
+            for l in contrib.get("losers", []):
+                ic = l.get("industry_code", "")
+                if ic:
+                    _add(ic, "📊权重贡献上榜")
+
+        # 4. Frequent ≥3d industries
+        for idx_code in ["000001.SH", "399006.SZ"]:
+            freq = self.get_industry_frequency(idx_code, trade_date)
+            if not freq:
+                continue
+            for f in freq.get("gainers", []):
+                _add(f["code"], f"🔁近5日频繁领涨({f['days']}天)")
+            for f in freq.get("losers", []):
+                _add(f["code"], f"🔁近5日频繁领跌({f['days']}天)")
+
+        result = sorted(analysis.values(),
+                        key=lambda x: abs(x["chg_pct"]), reverse=True)
+        return result
+
     # ---- wave33 ----
 
     def ensure_wave33_computed(self, trade_date: str, progress_cb=None) -> dict:
