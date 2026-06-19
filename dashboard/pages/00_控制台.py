@@ -144,6 +144,14 @@ if _pending:
                 def _ai_progress(phase: str, label: str):
                     _ai_status.update(label=f"🤖 {label}")
                 _service.generate_ai_summary(_pending, progress_cb=_ai_progress)
+            # Sector AI
+            _sector_cached = _service.get_ai_sector_summary(_pending)
+            if _sector_cached is None:
+                def _ai_sector_progress(phase: str, label: str):
+                    _ai_status.update(label=f"🏭 {label}")
+                _service.generate_ai_sector_analysis(
+                    _pending, progress_cb=_ai_sector_progress,
+                )
             _ai_status.update(label="✅ AI 总结已就绪", state="complete")
         st.session_state.trade_date = _pending
         st.cache_data.clear()
@@ -179,6 +187,10 @@ if _pending:
             elif phase == "wave33_date":
                 date_str = extra or "?"
                 status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
+            elif phase == "industry_members":
+                status.update(label=extra or "正在拉取行业成分股...")
+            elif phase == "industry_daily":
+                status.update(label=extra or "正在聚合行业日线...")
             elif phase == "validate":
                 status.update(label=extra or "正在验证数据覆盖率...")
             elif phase == "done":
@@ -196,12 +208,22 @@ if _pending:
                 def _ai_progress2(phase: str, label: str):
                     status.update(label=f"🤖 {label}")
                 _service.generate_ai_summary(_pending, progress_cb=_ai_progress2)
+            # Sector AI
+            _sector_cached = _service.get_ai_sector_summary(_pending)
+            if _sector_cached is None:
+                def _ai_sector_progress2(phase: str, label: str):
+                    status.update(label=f"🏭 {label}")
+                _service.generate_ai_sector_analysis(
+                    _pending, progress_cb=_ai_sector_progress2,
+                )
+            ind_days = result.get("industry_days", 0)
             status.update(
                 label=f"✅ 全部就绪！（数据 {result['elapsed']:.0f}秒，"
                       f"K线 {result.get('raw_pages', '?')} 页，"
                       f"因子 {result.get('adj_pages', '?')} 页，"
                       f"指数 {result.get('index_chunks', 0)} 个，"
                       f"市值 {result.get('db_pages', 0)} 页，"
+                      f"行业 {ind_days} 天，"
                       f"3浪3 扫描 {w33_result['scanned']} 天（已缓存 {w33_result['cached']} 天，"
                       f"{w33_result['elapsed']:.0f}秒））",
                 state="complete",
@@ -235,9 +257,32 @@ if _current_td:
                     }.get(_gk, _gk)
                     st.caption(f"**{_label}**")
                     st.text(_ai[_gk]["content"])
+            # Sector guides
+            _sector_ai = _service.get_ai_sector_summary(_current_td)
+            if _sector_ai:
+                st.caption("**🏭 行业总结**")
+                st.text(_sector_ai["content"])
     elif _ai and "error" not in _ai:
         st.markdown("---")
         st.caption("🤖 AI 总结尚未生成（切换日期时将自动生成）")
+
+# ── Industry Classification Rules ──
+with st.expander("📋 行业分类规则", expanded=False):
+    try:
+        config = _service.get_industry_split_config()
+        split_l1 = config["split_l1"]
+        split_l2 = config["split_l2"]
+        st.markdown(f"""
+        **默认按申万一级行业（31个）展示**
+
+        **拆分 L1 → L2：** {', '.join(split_l1)}
+
+        **拆分 L2 → L3：** {', '.join(split_l2)}
+
+        **最终板块数：** 25 L1 + 24 L2 + 14 L3 = **63**
+        """)
+    except Exception:
+        st.caption("行业分类配置暂不可用")
 
 st.markdown("---")
 st.caption("快速跳转：左侧导航 → 市场全景 | 板块分析 | 个股追踪")
