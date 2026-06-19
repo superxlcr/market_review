@@ -120,12 +120,15 @@ class DataProvider:
                 db_start, end_date, progress_cb
             )
             # Validate coverage even when cache appears up-to-date
+            ind_members = self.ensure_industry_members(progress_cb)
+            ind_days = self.ensure_industry_daily(end_date, progress_cb)
             self._validate_coverage(fetch_start, end_date)
             return {
                 "status": "ok", "elapsed": 0.0,
                 "chunks": 0, "note": "cache up to date",
                 "index_chunks": idx_missing,
                 "db_pages": db_pages,
+                "industry_days": ind_days,
             }
 
         # ── Fetch each missing range ──
@@ -165,6 +168,10 @@ class DataProvider:
             db_start, end_date, progress_cb
         )
 
+        # ── Load industry data ──
+        self.ensure_industry_members(progress_cb)
+        industry_days = self.ensure_industry_daily(end_date, progress_cb)
+
         # ── Validate coverage (catches silent data gaps like missing 0506-0507) ──
         self._validate_coverage(fetch_start, end_date, progress_cb)
 
@@ -180,6 +187,7 @@ class DataProvider:
             "adj_pages": adj_pages_total,
             "index_chunks": idx_chunks,
             "db_pages": db_pages,
+            "industry_days": industry_days,
         }
 
     def check_cache_coverage(self, end_date: str) -> bool:
@@ -223,6 +231,14 @@ class DataProvider:
                      "(need >= %d), fast path denied",
                      end_date, self.cache.count_daily_basic_date(end_date),
                      self._BREADTH_CACHE_MIN_STOCKS)
+            return False
+
+        # Verify industry_daily has data for the target date
+        ind_cnt = self.cache.count_industry_daily_date(end_date)
+        if ind_cnt < 50:
+            log.info("check_cache_coverage: industry_daily for %s has only %d "
+                     "industries (need >= 50), fast path denied",
+                     end_date, ind_cnt)
             return False
 
         return True
@@ -934,6 +950,255 @@ class DataProvider:
         rows = self.cache.get_daily_basic(trade_date)
         return {r["ts_code"]: float(r["circ_mv"])
                 for r in rows if r.get("circ_mv")}
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Industry data (bottom-up market-cap-weighted aggregation)
+    # ═══════════════════════════════════════════════════════════════
+
+    def ensure_industry_members(self, progress_cb=None) -> list[dict]:
+        """
+        Ensure industry_member_cache has constituent lists for all
+        industries in the split configuration.
+
+        Fetches via tushare index_member(is_new="Y") per industry code.
+        Skips industries already cached.
+
+        Returns the industry list [{code, name, level}, ...].
+        """
+        from marketreview.tools.industry import build_industry_list
+
+        industries = build_industry_list(self._api)
+        total = len(industries)
+        fetched = 0
+
+        for i, ind in enumerate(industries):
+            code = ind["code"]
+            if self.cache.has_industry_members(code):
+                continue
+
+            try:
+                df = self._api.index_member(index_code=code, is_new="Y")
+                if df is not None and not df.empty:
+                    con_codes = [str(r["con_code"]) for _, r in df.iterrows()]
+                    if con_codes:
+                        self.cache.upsert_industry_members(code, con_codes)
+                        fetched += 1
+                        log.info("ensure_industry_members: %s (%s) — %d constituents",
+                                 ind["name"], code, len(con_codes))
+                    else:
+                        log.warning("ensure_industry_members: %s (%s) — empty",
+                                    ind["name"], code)
+            except Exception as e:
+                log.warning("index_member(%s %s) failed: %s", code, ind["name"], e)
+
+            if progress_cb:
+                progress_cb("industry_members", i + 1, total,
+                            f"{ind['name']} ({fetched} fetched)")
+
+        log.info("ensure_industry_members: %d/%d industries fetched, %d total",
+                 fetched, total, total)
+        return industries
+
+    def ensure_industry_daily(
+        self, trade_date: str, progress_cb=None,
+    ) -> int:
+        """
+        Ensure industry_daily has aggregated data for trade_date.
+
+        For each industry: get constituents → read stock OHLCV from cache
+        → read circ_mv from daily_basic_cache → compute market-cap-weighted
+        returns → build industry OHLCV → upsert into industry_daily.
+
+        Skips industries already cached for this date.
+        Returns number of industries computed.
+        """
+        from marketreview.tools.industry import build_industry_list
+
+        trade_date = trade_date.replace("-", "")
+        industries = build_industry_list(self._api)
+        total = len(industries)
+        computed = 0
+
+        # Pre-fetch circ_mv for the date (shared across all industries)
+        circ_mv_map = self.get_circ_mv(trade_date)
+
+        for i, ind in enumerate(industries):
+            code = ind["code"]
+            if self.cache.has_industry_daily(code, trade_date):
+                continue
+
+            # 1. Get constituent list
+            con_codes = self.cache.get_industry_members(code)
+            if not con_codes:
+                log.debug("ensure_industry_daily: %s (%s) — no constituents, skip",
+                          ind["name"], code)
+                continue
+
+            # 2. Read stock OHLCV for today + previous day
+            stock_today: dict[str, dict] = {}
+            stock_prev: dict[str, dict] = {}
+            for con in con_codes:
+                rows = self.cache.get_daily(con, end=trade_date, limit=2)
+                if rows and rows[0]["date"].replace("-", "") == trade_date:
+                    stock_today[con] = dict(rows[0])
+                    if len(rows) >= 2:
+                        stock_prev[con] = dict(rows[1])
+
+            if not stock_today:
+                log.debug("ensure_industry_daily: %s (%s) — no stock data for %s",
+                          ind["name"], code, trade_date)
+                continue
+
+            # 3. Compute weights from circ_mv
+            total_mv = sum(circ_mv_map.get(c, 0) for c in stock_today)
+            if total_mv <= 0:
+                log.debug("ensure_industry_daily: %s (%s) — zero total circ_mv, skip",
+                          ind["name"], code)
+                continue
+
+            weights: dict[str, float] = {}
+            for c in stock_today:
+                mv = circ_mv_map.get(c, 0)
+                weights[c] = mv / total_mv if mv > 0 else 0.0
+
+            # 4. Compute market-cap-weighted return
+            weighted_return = 0.0
+            weighted_open_return = 0.0
+            weighted_high_return = 0.0
+            weighted_low_return = 0.0
+            up = down = flat = 0
+            total_amount = 0.0
+            total_vol = 0.0
+
+            for c, today in stock_today.items():
+                w = weights.get(c, 0)
+                close_t = float(today["close"])
+                open_t = float(today["open"])
+                high_t = float(today["high"])
+                low_t = float(today["low"])
+                amount_t = float(today.get("amount", 0))
+                vol_t = float(today.get("vol", 0))
+                total_amount += amount_t
+                total_vol += vol_t
+
+                prev = stock_prev.get(c)
+                if prev:
+                    prev_close = float(prev["close"])
+                    prev_open = float(prev["open"])
+                    prev_high = float(prev["high"])
+                    prev_low = float(prev["low"])
+
+                    adj_today = float(today.get("adj_factor", 1.0))
+                    adj_prev = float(prev.get("adj_factor", 1.0))
+                    if adj_today > 0:
+                        ratio = adj_prev / adj_today
+                        prev_close = prev_close * ratio
+                        prev_open = prev_open * ratio
+                        prev_high = prev_high * ratio
+                        prev_low = prev_low * ratio
+
+                    if prev_close > 0:
+                        weighted_return += w * (close_t / prev_close - 1)
+                        weighted_open_return += w * (open_t / prev_open - 1)
+                        weighted_high_return += w * (high_t / prev_high - 1)
+                        weighted_low_return += w * (low_t / prev_low - 1)
+
+                    if close_t > prev_close:
+                        up += 1
+                    elif close_t < prev_close:
+                        down += 1
+                    else:
+                        flat += 1
+                else:
+                    flat += 1
+
+            # 5. Build price curve from previous industry close or base=1000
+            prev_ind_rows = self.cache.get_industry_daily(
+                code, end_date=trade_date, lookback=1,
+            )
+            if prev_ind_rows:
+                base_close = float(prev_ind_rows[0]["close"])
+            else:
+                base_close = 1000.0
+
+            industry_close = round(base_close * (1 + weighted_return), 4)
+            industry_open = round(base_close * (1 + weighted_open_return), 4)
+            industry_high = round(base_close * (1 + weighted_high_return), 4)
+            industry_low = round(base_close * (1 + weighted_low_return), 4)
+
+            # 6. Upsert
+            self.cache.upsert_industry_daily([{
+                "industry_code": code,
+                "trade_date": trade_date,
+                "open": industry_open,
+                "high": industry_high,
+                "low": industry_low,
+                "close": industry_close,
+                "amount": round(total_amount, 2),
+                "vol": round(total_vol, 2),
+                "up_count": up,
+                "down_count": down,
+                "flat_count": flat,
+                "stock_count": len(stock_today),
+            }])
+            computed += 1
+
+            if progress_cb and computed % 10 == 0:
+                progress_cb("industry_daily", i + 1, total,
+                            f"{ind['name']} ({computed} computed)")
+
+        log.info("ensure_industry_daily: date=%s computed=%d/%d",
+                 trade_date, computed, total)
+        return computed
+
+    def get_industry_daily(
+        self, industry_code: str,
+        end_date: str | None = None,
+        lookback: int = 360,
+    ) -> list[dict]:
+        """Return industry daily rows (date DESC), read from cache only."""
+        return self.cache.get_industry_daily(
+            industry_code, end_date=end_date, lookback=lookback,
+        )
+
+    def get_industry_ranking(self, trade_date: str) -> list[dict]:
+        """
+        Return all industries sorted by daily return (descending).
+        Returns [{code, name, level, chg_pct, close, up_count, down_count,
+                  flat_count, stock_count, amount_yi}, ...].
+        """
+        from marketreview.tools.industry import build_industry_list
+
+        trade_date = trade_date.replace("-", "")
+        ind_list = build_industry_list(self._api)
+        results = []
+
+        for ind in ind_list:
+            rows = self.cache.get_industry_daily(
+                ind["code"], end_date=trade_date, lookback=2,
+            )
+            if len(rows) >= 2 and rows[0]["trade_date"] == trade_date:
+                today = rows[0]
+                prev = rows[1]
+                close = float(today["close"])
+                prev_close = float(prev["close"])
+                chg_pct = (round((close / prev_close - 1) * 100, 2)
+                           if prev_close > 0 else 0.0)
+                results.append({
+                    "code": ind["code"],
+                    "name": ind["name"],
+                    "level": ind["level"],
+                    "chg_pct": chg_pct,
+                    "close": close,
+                    "up_count": today["up_count"],
+                    "down_count": today["down_count"],
+                    "flat_count": today["flat_count"],
+                    "stock_count": today["stock_count"],
+                    "amount_yi": round(float(today["amount"]) / 1e5, 2),
+                })
+
+        results.sort(key=lambda x: x["chg_pct"], reverse=True)
+        return results
 
     # ═══════════════════════════════════════════════════════════════
     #  Utility
