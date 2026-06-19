@@ -90,3 +90,28 @@ CREATE TABLE IF NOT EXISTS ai_summary (
     created_at   TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (trade_date, summary_type, guide_key)
 );
+
+CREATE TABLE IF NOT EXISTS industry_member_cache (
+    industry_code TEXT NOT NULL,
+    con_code      TEXT NOT NULL,
+    PRIMARY KEY (industry_code, con_code)
+);
+
+CREATE TABLE IF NOT EXISTS industry_daily (
+    industry_code TEXT NOT NULL,
+    trade_date    TEXT NOT NULL,
+    open          REAL,
+    high          REAL,
+    low           REAL,
+    close         REAL,
+    amount        REAL,
+    vol           REAL,
+    up_count      INTEGER,
+    down_count    INTEGER,
+    flat_count    INTEGER,
+    stock_count   INTEGER,
+    PRIMARY KEY (industry_code, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_industry_daily_code_date
+    ON industry_daily(industry_code, trade_date DESC);
