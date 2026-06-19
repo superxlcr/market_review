@@ -10,8 +10,10 @@ API surface:
   - raw_to_qfq(df)                  – convert to display prices
 """
 
+import threading
 import time as _time
 import tushare as ts
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from .cache_manager import CacheManager
 from marketreview.log_util import get_logger
@@ -45,6 +47,10 @@ _TRACKED_INDICES = [
 # Proxy stock used for cache-coverage checks (must be a STOCK that
 # api.daily actually returns; 000001.SZ = 平安银行).
 _PROXY_CODE = "000001.SZ"
+
+# ── DB initialization constants ──
+_INIT_START = "20210101"        # fixed start date for full init
+_INIT_FRESHNESS_DAYS = 15       # MAX(date) within 15d of today → fresh
 
 
 class DataProvider:
@@ -249,6 +255,251 @@ class DataProvider:
             return False
 
         return True
+
+    def ensure_full_init(self, progress_cb=None, log_cb=None) -> dict:
+        """
+        4-phase DB initialization from 2021-01-01 to today.
+
+        Smart gap-filling: only fetches missing date ranges, except
+        industry_daily which is wiped and recomputed due to chain compounding.
+
+        progress_cb(phase: str, label: str):
+          phase = "phase_start" | "phase_progress" | "phase_done"
+        log_cb(message: str):
+          called for each [INIT] log line
+
+        Returns {"status": "ok"|"error", "elapsed": float, "phases": dict}
+        """
+        import time as _time
+
+        t0 = _time.time()
+        today = datetime.now().strftime("%Y%m%d")
+        today_dt = datetime.strptime(today, "%Y%m%d")
+        freshness_cutoff = (today_dt - timedelta(days=_INIT_FRESHNESS_DAYS)).strftime("%Y%m%d")
+
+        phases_result = {}
+
+        def _log(msg: str):
+            log.info(msg)
+            if log_cb:
+                log_cb(msg)
+
+        # ═══════════════════════════════════════════════════════════
+        # Phase 1: K-line (tushare_cache stock + indices)
+        # ═══════════════════════════════════════════════════════════
+        _log("[INIT] Phase 1/4 K线: 检测中...")
+        if progress_cb:
+            progress_cb("phase_start", "K线 — 检测缓存覆盖...")
+
+        _t1 = _time.time()
+        with self.cache._get_conn() as conn:
+            kl_min_max = conn.execute(
+                "SELECT MIN(date), MAX(date) FROM tushare_cache "
+                "WHERE asset_type='stock'"
+            ).fetchone()
+
+        kl_min = kl_min_max[0] or ""
+        kl_max = kl_min_max[1] or ""
+        kline_ok = (
+            kl_min and kl_min <= _INIT_START
+            and kl_max and kl_max >= freshness_cutoff
+        )
+
+        kline_chunks = 0
+        if kline_ok:
+            _log(f"[INIT] K线: 已完整 ({kl_min}~{kl_max}), 跳过")
+        else:
+            _log(f"[INIT] K线: MIN={kl_min or '无'} MAX={kl_max or '无'}, 需要补拉")
+
+            # Determine missing ranges
+            missing_ranges: list[tuple[str, str]] = []
+            if not kl_max or kl_max < today:
+                gap_start = _next_day(kl_max) if kl_max else _INIT_START
+                missing_ranges.append((gap_start, today))
+            if kl_min and kl_min > _INIT_START:
+                missing_ranges.append((_INIT_START, _yesterday(kl_min)))
+
+            # Flatten chunks for progress tracking
+            all_chunks = []
+            for ms, me in missing_ranges:
+                all_chunks.extend(_date_chunks(ms, me, _CHUNK_DAYS))
+            total_chunks = len(all_chunks)
+
+            for ci, (cs, ce) in enumerate(all_chunks, 1):
+                _log(f"[INIT] K线: 开始补拉 {cs}~{ce} (chunk {ci}/{total_chunks})...")
+                if progress_cb:
+                    progress_cb(
+                        "phase_progress",
+                        f"K线 — {cs[:4]}-{cs[4:6]}-{cs[6:8]}~{ce[:4]}-{ce[4:6]}-{ce[6:8]} ({ci}/{total_chunks})",
+                    )
+                _tc = _time.time()
+                self._fetch_chunk(cs, ce)
+                kline_chunks += 1
+                _log(f"[INIT] K线: chunk {ci}/{total_chunks} 完成, 耗时 {_time.time() - _tc:.1f}s")
+
+            # Ensure indices are also loaded for the full range
+            idx_pages = self._ensure_indices_loaded(_INIT_START, today, None)
+            _log(f"[INIT] K线: 指数数据 {idx_pages} 页")
+            _log(f"[INIT] K线: 全部完成, {total_chunks} 段, 总耗时 {_time.time() - _t1:.1f}s")
+
+        kline_elapsed = round(_time.time() - _t1, 1)
+        phases_result["kline"] = {"ok": kline_ok, "chunks": kline_chunks, "elapsed": kline_elapsed}
+        if progress_cb:
+            progress_cb("phase_done", f"✅ K线 完成 ({kline_elapsed:.0f}s)")
+
+        # ═══════════════════════════════════════════════════════════
+        # Phase 2: Market cap (daily_basic_cache)
+        # ═══════════════════════════════════════════════════════════
+        _log("[INIT] Phase 2/4 市值: 检测中...")
+        if progress_cb:
+            progress_cb("phase_start", "市值 — 检测缓存覆盖...")
+
+        _t2 = _time.time()
+        with self.cache._get_conn() as conn:
+            db_min_max = conn.execute(
+                "SELECT MIN(trade_date), MAX(trade_date) FROM daily_basic_cache"
+            ).fetchone()
+
+        db_min = db_min_max[0] or ""
+        db_max = db_min_max[1] or ""
+        db_ok = (
+            db_min and db_min <= _INIT_START
+            and db_max and db_max >= freshness_cutoff
+        )
+
+        db_pages = 0
+        if db_ok:
+            _log(f"[INIT] 市值: 已完整 ({db_min}~{db_max}), 跳过")
+        else:
+            _log(f"[INIT] 市值: MIN={db_min or '无'} MAX={db_max or '无'}, 需要补拉")
+            db_pages = self._ensure_daily_basic_loaded(_INIT_START, today, None)
+            _log(f"[INIT] 市值: 全部完成, {db_pages} 页, 耗时 {_time.time() - _t2:.1f}s")
+
+        db_elapsed = round(_time.time() - _t2, 1)
+        phases_result["market_cap"] = {"ok": db_ok, "pages": db_pages, "elapsed": db_elapsed}
+        if progress_cb:
+            progress_cb("phase_done", f"✅ 市值 完成 ({db_elapsed:.0f}s)")
+
+        # ═══════════════════════════════════════════════════════════
+        # Phase 3: Industry index (industry_daily)
+        # ═══════════════════════════════════════════════════════════
+        _log("[INIT] Phase 3/4 行业指数: 检测中...")
+        if progress_cb:
+            progress_cb("phase_start", "行业指数 — 检测缓存覆盖...")
+
+        _t3 = _time.time()
+        from marketreview.tools.industry import build_industry_list
+
+        industries = build_industry_list(self._api)
+        total_ind = len(industries)
+
+        with self.cache._get_conn() as conn:
+            ind_min_max = conn.execute(
+                "SELECT MIN(trade_date), MAX(trade_date), COUNT(*) FROM industry_daily"
+            ).fetchone()
+
+        ind_min = ind_min_max[0] or ""
+        ind_max = ind_min_max[1] or ""
+        ind_rows_before = ind_min_max[2] or 0
+        ind_ok = (
+            ind_rows_before > 0
+            and ind_min and ind_min <= _INIT_START
+            and ind_max and ind_max >= freshness_cutoff
+        )
+
+        ind_computed = 0
+        if ind_ok:
+            _log(f"[INIT] 行业指数: 已完整 ({ind_min}~{ind_max}, {total_ind} 行业), 跳过")
+        else:
+            if ind_min and ind_min > _INIT_START:
+                _log(f"[INIT] 行业指数: MIN={ind_min} > {_INIT_START}, 清空重算")
+                with self.cache._get_conn() as conn:
+                    conn.execute("DELETE FROM industry_daily")
+                    conn.commit()
+                _log(f"[INIT] 行业指数: 已清空 industry_daily (原 {ind_rows_before} 行)")
+            else:
+                _log(f"[INIT] 行业指数: MIN={ind_min or '无'} MAX={ind_max or '无'}, 需补算")
+
+            _log(f"[INIT] 行业指数: {total_ind} 行业, 开始回填（6 线程并行）...")
+
+            # Build a progress adapter that forwards industry_daily progress
+            def _ind_progress(phase: str, current: int, total: int, extra: str = None):
+                if progress_cb and phase == "industry_daily":
+                    progress_cb(
+                        "phase_progress",
+                        f"行业指数 — {extra or f'{current}/{total}'}",
+                    )
+
+            ind_computed = self._backfill_industry_range(
+                _INIT_START, today, industries, total_ind,
+                progress_cb=_ind_progress,
+            )
+            _log(f"[INIT] 行业指数: 全部完成, {ind_computed} 行, 耗时 {_time.time() - _t3:.1f}s")
+
+        ind_elapsed = round(_time.time() - _t3, 1)
+        phases_result["industry"] = {
+            "ok": ind_ok, "rows_before": ind_rows_before,
+            "rows_computed": ind_computed, "elapsed": ind_elapsed,
+        }
+        if progress_cb:
+            progress_cb("phase_done", f"✅ 行业指数 完成 ({ind_elapsed:.0f}s)")
+
+        # ═══════════════════════════════════════════════════════════
+        # Phase 4: Wave33
+        # ═══════════════════════════════════════════════════════════
+        _log("[INIT] Phase 4/4 3浪3: 检测中...")
+        if progress_cb:
+            progress_cb("phase_start", "3浪3 — 扫描缺失日期...")
+
+        _t4 = _time.time()
+        from marketreview.tools.wave33 import scan_wave33
+
+        # Get all trading dates from K-line cache (already loaded in Phase 1).
+        # ~2000 calendar days since 2021-01-01 (~1350 trading days).
+        sh_rows = self.get_daily("000001.SH", end_date=today, lookback_days=2000)
+        all_trading_dates = sorted(set(
+            r["date"].replace("-", "") for r in sh_rows
+            if r["date"].replace("-", "") >= _INIT_START
+        ))
+
+        # Find which dates are missing from wave33_cache
+        missing_dates = []
+        for d in all_trading_dates:
+            if not self.cache.has_wave33_date(d):
+                missing_dates.append(d)
+
+        w33_scanned = 0
+        if not missing_dates:
+            _log(f"[INIT] 3浪3: 已完整 ({len(all_trading_dates)} 天), 跳过")
+        else:
+            _log(f"[INIT] 3浪3: 缺失 {len(missing_dates)} 天, 开始扫描...")
+            if progress_cb:
+                progress_cb("phase_progress", f"3浪3 — {len(missing_dates)} 天待扫描")
+
+            scan_wave33(missing_dates, self, progress_cb=progress_cb)
+            w33_scanned = len(missing_dates)
+            _log(f"[INIT] 3浪3: 全部完成, {w33_scanned} 天, 耗时 {_time.time() - _t4:.1f}s")
+
+        w33_elapsed = round(_time.time() - _t4, 1)
+        phases_result["wave33"] = {
+            "total_dates": len(all_trading_dates),
+            "scanned": w33_scanned, "elapsed": w33_elapsed,
+        }
+        if progress_cb:
+            progress_cb("phase_done", f"✅ 3浪3 完成 ({w33_elapsed:.0f}s)")
+
+        # ── Done ──
+        total_elapsed = round(_time.time() - t0, 1)
+        _log(f"[INIT] ✅ 全部完成! 总耗时 {total_elapsed:.1f}s ({total_elapsed / 60:.1f}min)")
+
+        # Ensure stock_basic is cached (needed by downstream checks)
+        self._fetch_stock_basic_once()
+
+        return {
+            "status": "ok",
+            "elapsed": total_elapsed,
+            "phases": phases_result,
+        }
 
     _COVERAGE_WARN_THRESHOLD = 0.90    # warn if < 90% stocks covered on a date
     _COVERAGE_MAX_RETRY = 2            # max re-fetch attempts per gapped date
@@ -1066,20 +1317,35 @@ class DataProvider:
     ) -> int:
         """Compute industry_daily for a single date (incremental fast path).
 
-        Skips industries already cached. Uses circ_mv-weighted returns
-        from constituent stock data (today vs previous trading day).
+        Parallelized across industries via ThreadPoolExecutor.
+        Each industry is independent — safe to compute concurrently.
         """
-        computed = 0
         circ_mv_map = self.get_circ_mv(trade_date)
+        state = {"completed": 0, "computed": 0}
+        lock = threading.Lock()
 
-        for i, ind in enumerate(industries):
+        def _report(delta: int, label: str):
+            with lock:
+                state["completed"] += 1
+                state["computed"] += delta
+                current = state["completed"]
+                comp = state["computed"]
+            if progress_cb:
+                progress_cb("industry_daily", current, total, label)
+
+        def _compute_one(ind: dict) -> int:
+            """Compute one industry for trade_date. Returns 1 if computed, 0 if skipped."""
             code = ind["code"]
+            name = ind["name"]
+
             if self.cache.has_industry_daily(code, trade_date):
-                continue
+                _report(0, f"{name} (已缓存)")
+                return 0
 
             con_codes = self.cache.get_industry_members(code)
             if not con_codes:
-                continue
+                _report(0, f"{name} (无成分股)")
+                return 0
 
             # Read stock OHLCV for today + previous day
             stock_today: dict[str, dict] = {}
@@ -1092,11 +1358,13 @@ class DataProvider:
                         stock_prev[con] = dict(rows[1])
 
             if not stock_today:
-                continue
+                _report(0, f"{name} (无行情)")
+                return 0
 
             total_mv = sum(circ_mv_map.get(c, 0) for c in stock_today)
             if total_mv <= 0:
-                continue
+                _report(0, f"{name} (无市值)")
+                return 0
 
             weights: dict[str, float] = {}
             for c in stock_today:
@@ -1172,15 +1440,19 @@ class DataProvider:
                 "flat_count": flat,
                 "stock_count": len(stock_today),
             }])
-            computed += 1
 
-            if progress_cb:
-                progress_cb("industry_daily", i + 1, total,
-                            f"{ind['name']} ({computed}/{total})")
+            _report(1, f"{name}")
+            return 1
 
-        log.info("_compute_industry_date: date=%s computed=%d/%d",
-                 trade_date, computed, total)
-        return computed
+        workers = min(6, total) if total > 0 else 1
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(_compute_one, ind) for ind in industries]
+            for future in as_completed(futures):
+                future.result()  # propagate exceptions
+
+        log.info("_compute_industry_date: date=%s computed=%d/%d (workers=%d)",
+                 trade_date, state["computed"], total, workers)
+        return state["computed"]
 
     def _backfill_industry_range(
         self, start_date: str, end_date: str, industries: list,
@@ -1188,26 +1460,41 @@ class DataProvider:
     ) -> int:
         """Backfill industry_daily for a date range (slow path).
 
-        Uses batch queries (get_daily_snapshot) — one query per date per
-        industry instead of one per constituent. Processes dates newest-first
-        so the price curve builds correctly from existing data.
+        Parallelized across industries via ThreadPoolExecutor.
+        Within each industry, dates are processed sequentially for correct
+        chain compounding.  Different industries are independent — safe to
+        run concurrently.
         """
-        total_computed = 0
-
         # Normalize date range to dash-format for consistent comparison
-        # (get_previous_trade_date returns "YYYY-MM-DD" while callers
-        # may pass "YYYYMMDD" — both must match tushare_cache format.)
         start_date = _with_dashes(start_date)
         end_date_d = _with_dashes(end_date)
 
-        for i, ind in enumerate(industries):
+        state = {"completed": 0, "total_computed": 0}
+        lock = threading.Lock()
+
+        def _report_progress(name: str, ind_computed: int):
+            with lock:
+                state["completed"] += 1
+                state["total_computed"] += ind_computed
+                current = state["completed"]
+                total_comp = state["total_computed"]
+            if progress_cb:
+                progress_cb(
+                    "industry_daily", current, total,
+                    f"{name} — {ind_computed} 天 (累计 {total_comp} 行)",
+                )
+
+        def _backfill_one(ind: dict) -> int:
+            """Backfill one industry's full date range. Returns rows computed."""
             code = ind["code"]
             name = ind["name"]
+
             con_codes = self.cache.get_industry_members(code)
             if not con_codes:
                 log.info("_backfill_industry_range: %s (%s) — no constituents, skip",
                          name, code)
-                continue
+                _report_progress(name, 0)
+                return 0
 
             # Walk backwards from end_date to find all trading dates
             all_dates: list[str] = []
@@ -1220,7 +1507,8 @@ class DataProvider:
             if not all_dates:
                 log.info("_backfill_industry_range: %s (%s) — 0 trading dates "
                          "in range, skip", name, code)
-                continue
+                _report_progress(name, 0)
+                return 0
 
             # Find which dates are missing
             existing = set(
@@ -1232,15 +1520,12 @@ class DataProvider:
             if not missing:
                 log.info("_backfill_industry_range: %s (%s) — all %d dates "
                          "already cached", name, code, len(all_dates))
-                continue
+                _report_progress(name, 0)
+                return 0
 
             log.info("_backfill_industry_range: %s (%s) — %d constituents, "
                      "%d/%d dates missing, computing...",
                      name, code, len(con_codes), len(missing), len(all_dates))
-
-            if progress_cb:
-                progress_cb("industry_daily", i + 1, total,
-                            f"{name} — {len(missing)} 天待算")
 
             # Compute each missing date, upserting immediately so the
             # price curve chains correctly across consecutive dates.
@@ -1319,10 +1604,7 @@ class DataProvider:
                     else:
                         flat += 1
 
-                # Build price curve from previous industry close or base=1000.
-                # Upsert immediately so subsequent dates can chain correctly
-                # (batch upsert would make every date read base_close=1000 for
-                # all but the first date, breaking price compounding).
+                # Build price curve from previous industry close or base=1000
                 prev_ind_rows = self.cache.get_industry_daily(
                     code, end_date=dt, lookback=1,
                 )
@@ -1344,23 +1626,25 @@ class DataProvider:
                     "flat_count": flat,
                     "stock_count": len(stock_today),
                 }])
-                total_computed += 1
                 ind_computed += 1
 
             log.info("_backfill_industry_range: %s (%s) — %d rows computed",
                      name, code, ind_computed)
+            _report_progress(name, ind_computed)
+            return ind_computed
 
-            if progress_cb:
-                progress_cb(
-                    "industry_daily", i + 1, total,
-                    f"{name} — {ind_computed} 天 (累计 {total_computed} 行)",
-                )
+        workers = min(6, total) if total > 0 else 1
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(_backfill_one, ind) for ind in industries]
+            for future in as_completed(futures):
+                # Each thread reports its own progress; just collect results
+                future.result()
 
         log.info(
-            "_backfill_industry_range: %s~%s — %d rows across %d industries",
-            start_date, end_date, total_computed, total,
+            "_backfill_industry_range: %s~%s — %d rows across %d industries (workers=%d)",
+            start_date, end_date, state["total_computed"], total, workers,
         )
-        return total_computed
+        return state["total_computed"]
 
     def get_industry_daily(
         self, industry_code: str,
