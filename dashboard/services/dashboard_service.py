@@ -860,7 +860,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：generate_ai_summary() 启动时 → stderr: [AI vX.Y.Z]
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.2.1"
+    _AI_VERSION = "1.3.0"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
