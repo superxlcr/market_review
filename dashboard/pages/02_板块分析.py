@@ -146,7 +146,7 @@ else:
         )
         st.html(f"<div style='margin-bottom:2px;font-size:15px;'>{_info_line}</div>")
 
-        with st.expander(_name, expanded=False):
+        with st.expander(f"{_name} ({_code})", expanded=False):
             # Load full K-line data for this industry
             _df = _service.get_industry_daily(_code, end_date=_trade_date, lookback=360)
 
