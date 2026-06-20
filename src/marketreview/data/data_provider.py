@@ -49,6 +49,13 @@ _TRACKED_INDICES = [
 # api.daily actually returns; 000001.SZ = 平安银行).
 _PROXY_CODE = "000001.SZ"
 
+# Industry (sector) data loading — sw_daily paid API.
+# Per-industry calls: ~659 rows per industry for 1000 calendar days,
+# well within a single API page.  63 display industries × 4 workers.
+_INDUSTRY_FETCH_DAYS = 1000     # calendar days to fetch from sw_daily
+_INDUSTRY_CHECK_DAYS = 40       # USE window: calendar days to check (≈27td)
+_INDUSTRY_MAX_WORKERS = 4       # concurrent industry fetchers
+
 
 class DataProvider:
     """Single entry point for all market data."""
@@ -112,9 +119,9 @@ class DataProvider:
                     (fetch_start, _yesterday(proxy_earliest_clean))
                 )
 
-        # ── If nothing missing, just verify indices + stock_basic + daily_basic ──
+        # ── If nothing missing, just verify indices + stock_basic + daily_basic + industry ──
         if not missing_ranges:
-            log.info("ensure_data_loaded: cache up to date, verifying indices+coverage")
+            log.info("ensure_data_loaded: cache up to date, verifying indices+industry+coverage")
             idx_missing = self._ensure_indices_loaded(
                 fetch_start, end_date, progress_cb
             )
@@ -124,11 +131,17 @@ class DataProvider:
             )
             # Validate coverage even when cache appears up-to-date
             self._validate_coverage(fetch_start, end_date)
+            # Industry daily may not be loaded yet on this date
+            ind_classify_count, ind_daily_count = self._ensure_industry_daily(
+                end_date, progress_cb
+            )
             return {
                 "status": "ok", "elapsed": 0.0,
                 "chunks": 0, "note": "cache up to date",
                 "index_chunks": idx_missing,
                 "db_pages": db_pages,
+                "ind_classify": ind_classify_count,
+                "ind_daily": ind_daily_count,
             }
 
         # ── Fetch each missing range (concurrent across chunks) ──
@@ -188,6 +201,11 @@ class DataProvider:
         # ── Validate coverage (catches silent data gaps like missing 0506-0507) ──
         self._validate_coverage(fetch_start, end_date, progress_cb)
 
+        # ── Load industry (sector) daily data ──
+        ind_classify_count, ind_daily_count = self._ensure_industry_daily(
+            end_date, progress_cb
+        )
+
         if progress_cb:
             progress_cb("done", 0, 0)
 
@@ -200,6 +218,8 @@ class DataProvider:
             "adj_pages": adj_pages_total,
             "index_chunks": idx_chunks,
             "db_pages": db_pages,
+            "ind_classify": ind_classify_count,
+            "ind_daily": ind_daily_count,
         }
 
     def check_cache_coverage(self, end_date: str) -> bool:
@@ -244,6 +264,23 @@ class DataProvider:
                      end_date, self.cache.count_daily_basic_date(end_date),
                      self._BREADTH_CACHE_MIN_STOCKS)
             return False
+
+        # Verify industry daily data covers the target date.
+        # Without this, 板块分析 renders empty while the spinner is skipped.
+        if not self.cache.has_industry_classify():
+            log.info("check_cache_coverage: industry_classify not yet loaded")
+            return False
+        display_codes = self._get_display_industry_codes()
+        if not display_codes:
+            log.info("check_cache_coverage: no display industry codes")
+            return False
+        # Spot-check first + last display industry — both must cover end_date
+        for code in (display_codes[0], display_codes[-1]):
+            latest = self.cache.get_latest_industry_date(code)
+            if not latest or latest < end_date:
+                log.info("check_cache_coverage: industry %s latest=%s (< %s)",
+                         code, latest, end_date)
+                return False
 
         return True
 
@@ -978,6 +1015,256 @@ class DataProvider:
                 for r in rows if r.get("circ_mv")}
 
     # ═══════════════════════════════════════════════════════════════
+    #  Industry (sector) daily — sw_daily paid API
+    # ═══════════════════════════════════════════════════════════════
+
+    def _ensure_industry_classify(self) -> int:
+        """
+        Lazy-init: fetch L1/L2/L3 industry classifications from
+        index_classify API, cache to industry_classify table.
+
+        Called once on first use.  Returns total row count cached.
+        """
+        if self.cache.has_industry_classify():
+            log.info("_ensure_industry_classify: already cached, skip")
+            return 0
+
+        rows = []
+        for level in ("L1", "L2", "L3"):
+            try:
+                df = self._api.index_classify(level=level, src="SW2021")
+            except Exception as e:
+                log.warning("index_classify(level=%s) failed: %s", level, e)
+                continue
+
+            if df is None or df.empty:
+                log.warning("index_classify(level=%s): empty response", level)
+                continue
+
+            for _, r in df.iterrows():
+                rows.append({
+                    "index_code": str(r["index_code"]),
+                    "industry_name": str(r.get("industry_name", "")),
+                    "level": level,
+                    "industry_code": str(r.get("industry_code", "")),
+                    "parent_code": str(r.get("parent_code", "0")),
+                    "src": str(r.get("src", "SW2021")),
+                })
+
+        if rows:
+            self.cache.upsert_industry_classify(rows)
+
+        log.info("_ensure_industry_classify: loaded %d industries (L1+L2+L3)",
+                 len(rows))
+        return len(rows)
+
+    def _get_display_industry_codes(self) -> list[str]:
+        """
+        Compute the display industry index_codes using SPLIT_L1/SPLIT_L2
+        recursive split rules.  Returns ~63 industry codes.
+        """
+        from marketreview.tools.industry import SPLIT_L1, SPLIT_L2
+
+        cl_map = self.cache.get_industry_classify_map()
+        if not cl_map:
+            return []
+
+        # Group by level
+        l1_list = [r for r in cl_map.values() if r["level"] == "L1"]
+        # Build parent→children maps for L2/L3 (keyed by parent_code)
+        l2_by_parent: dict[str, list[dict]] = {}
+        l3_by_parent: dict[str, list[dict]] = {}
+        for r in cl_map.values():
+            if r["level"] == "L2":
+                l2_by_parent.setdefault(r["parent_code"], []).append(r)
+            elif r["level"] == "L3":
+                l3_by_parent.setdefault(r["parent_code"], []).append(r)
+
+        codes = []
+        for l1 in l1_list:
+            name = l1["industry_name"]
+            if name in SPLIT_L1:
+                # Replace L1 with all its L2 children
+                for l2 in l2_by_parent.get(l1["industry_code"], []):
+                    l2_name = l2["industry_name"]
+                    if l2_name in SPLIT_L2:
+                        # Replace L2 with all its L3 children
+                        for l3 in l3_by_parent.get(l2["industry_code"], []):
+                            codes.append(l3["index_code"])
+                    else:
+                        codes.append(l2["index_code"])
+            else:
+                codes.append(l1["index_code"])
+
+        log.info("_get_display_industry_codes: %d display industries "
+                 "(from %d L1)", len(codes), len(l1_list))
+        return codes
+
+    def _ensure_industry_daily(self, end_date: str, progress_cb=None
+                               ) -> tuple[int, int]:
+        """
+        Ensure industry_daily table has data for all display industries.
+
+        Steps:
+          1. Lazy-init industry_classify (once)
+          2. Compute 63 display industry codes
+          3. Concurrently fetch sw_daily for each industry that has gaps
+
+        Returns (classify_rows, daily_industries_fetched).
+        """
+        t0 = _time.time()
+
+        # ── Step 1: lazy-init classifications ──
+        if progress_cb:
+            progress_cb("ind_classify", 0, 0)
+        classify_count = self._ensure_industry_classify()
+        if progress_cb:
+            progress_cb("ind_classify", classify_count, classify_count)
+
+        # ── Step 2: compute display codes ──
+        codes = self._get_display_industry_codes()
+        if not codes:
+            log.warning("_ensure_industry_daily: no display codes — skip")
+            return classify_count, 0
+
+        # Determine fetch range
+        end_date = end_date.replace("-", "")
+        end_dt = datetime.strptime(end_date, "%Y%m%d")
+        fetch_start = (end_dt - timedelta(days=_INDUSTRY_FETCH_DAYS)
+                       ).strftime("%Y%m%d")
+
+        # ── Step 3: find industries that need data ──
+        to_fetch: list[str] = []
+        already_ok = 0
+        for code in codes:
+            latest = self.cache.get_latest_industry_date(code)
+            if latest and latest >= end_date:
+                earliest = self.cache.get_earliest_industry_date(code)
+                if earliest and earliest <= fetch_start:
+                    already_ok += 1
+                    continue
+            to_fetch.append(code)
+
+        log.info("_ensure_industry_daily: end=%s fetch_start=%s "
+                 "%d/%d industries need fetch",
+                 end_date, fetch_start, len(to_fetch), len(codes))
+
+        if not to_fetch:
+            elapsed = _time.time() - t0
+            log.info("_ensure_industry_daily: all %d industries up to date (%.1fs)",
+                     already_ok, elapsed)
+            return classify_count, 0
+
+        # ── Step 4: concurrent fetch ──
+        total = len(to_fetch)
+        completed = 0
+        failed = 0
+        t_chunks_start = _time.time()
+
+        def _fetch_one(code: str) -> tuple[str, int, str]:
+            tid = threading.current_thread().name
+            t1 = _time.time()
+            rows = 0
+            try:
+                df = self._api.sw_daily(
+                    ts_code=code,
+                    start_date=fetch_start,
+                    end_date=end_date,
+                    limit=_PAGE_SIZE,
+                )
+                if df is not None and not df.empty:
+                    df = df.copy()
+                    df["trade_date"] = df["trade_date"].astype(str)
+                    batch = []
+                    for _, r in df.iterrows():
+                        batch.append({
+                            "industry_code": str(r["ts_code"]),
+                            "trade_date": str(r["trade_date"]),
+                            "open": float(r.get("open", 0) or 0),
+                            "high": float(r.get("high", 0) or 0),
+                            "low": float(r.get("low", 0) or 0),
+                            "close": float(r.get("close", 0) or 0),
+                            "vol": float(r.get("vol", 0) or 0),
+                            "amount": float(r.get("amount", 0) or 0),
+                            "pct_change": float(r.get("pct_change", 0) or 0),
+                        })
+                    if batch:
+                        self.cache.upsert_industry_daily_bulk(batch)
+                        rows = len(batch)
+            except Exception as e:
+                log.warning("[%s] sw_daily(%s) failed: %s", tid, code, e)
+                return code, -1, str(e)
+
+            elapsed = _time.time() - t1
+            return code, rows, f"{elapsed:.1f}s"
+
+        if progress_cb:
+            progress_cb("ind_daily", 0, total)
+
+        with ThreadPoolExecutor(max_workers=_INDUSTRY_MAX_WORKERS) as executor:
+            future_map = {
+                executor.submit(_fetch_one, code): code
+                for code in to_fetch
+            }
+            log.info("_ensure_industry_daily: dispatching %d industries "
+                     "across %d workers", total, _INDUSTRY_MAX_WORKERS)
+
+            for future in as_completed(future_map):
+                code = future_map[future]
+                try:
+                    code_out, nrows, info = future.result()
+                except Exception as e:
+                    log.warning("_ensure_industry_daily future(%s) error: %s", code, e)
+                    failed += 1
+                else:
+                    if nrows < 0:
+                        failed += 1
+                    else:
+                        completed += 1
+                    if nrows > 0:
+                        log.info("sw_daily(%s): %d rows in %s",
+                                 code, nrows, info)
+
+                if progress_cb:
+                    progress_cb("ind_daily", completed + failed, total,
+                                f"{completed}/{total} 行业已拉取")
+
+        t_chunks = _time.time() - t_chunks_start
+        elapsed = _time.time() - t0
+
+        log.info("_ensure_industry_daily: %d/%d industries fetched (%d failed) "
+                 "in %.1fs wall-clock (total %.1fs)",
+                 completed, total, failed, t_chunks, elapsed)
+
+        return classify_count, completed
+
+    def get_industry_daily(self, industry_code: str,
+                           end_date: str = None,
+                           lookback: int = 240) -> "pd.DataFrame":
+        """
+        Return industry daily K-line as a DataFrame (date ASC, close/high/low/open/vol/amount).
+
+        Data must be pre-loaded via ensure_data_loaded().
+        """
+        import pandas as pd
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y%m%d")
+        end_date = end_date.replace("-", "")
+
+        rows = self.cache.get_industry_daily(
+            industry_code, end_date=end_date, lookback=lookback
+        )
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows)
+        # Ensure numeric
+        for col in ["open", "high", "low", "close", "vol", "amount", "pct_change"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df.sort_values("trade_date", ascending=True).reset_index(drop=True)
+
+    # ═══════════════════════════════════════════════════════════════
     #  Utility
     # ═══════════════════════════════════════════════════════════════
 
@@ -1077,7 +1364,6 @@ def _upsert_adj_factors(cache: CacheManager, df) -> None:
     We UPDATE existing rows in tushare_cache rather than INSERT,
     because the raw data is already there from api.daily().
     """
-    import sqlite3
     df = df.copy()
     df["trade_date"] = df["trade_date"].astype(str)
     df["adj_factor"] = df["adj_factor"].astype(float)
@@ -1090,8 +1376,9 @@ def _upsert_adj_factors(cache: CacheManager, df) -> None:
             "adj_factor": float(r["adj_factor"]),
         })
 
-    # Use the cache's internal connection to do a bulk UPDATE
-    with sqlite3.connect(cache.db_path) as conn:
+    # Use cache's connection (sets busy_timeout=30s, WAL-ready) so
+    # concurrent writers (daily chunks + industry fetch) don't collide.
+    with cache._get_conn() as conn:
         conn.executemany(
             """UPDATE tushare_cache
                SET adj_factor = :adj_factor

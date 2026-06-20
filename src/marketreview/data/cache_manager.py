@@ -55,6 +55,15 @@ class CacheManager:
             "trade_date", "summary_type", "guide_key",
             "content", "model", "created_at",
         },
+        "industry_classify": {
+            "index_code", "industry_name", "level",
+            "industry_code", "parent_code", "src",
+        },
+        "industry_daily": {
+            "industry_code", "trade_date",
+            "open", "high", "low", "close",
+            "vol", "amount", "pct_change",
+        },
     }
 
     def _init_schema(self):
@@ -570,6 +579,136 @@ class CacheManager:
                 [trade_date],
             ).fetchall()
         return {r["ts_code"]: (r["up_limit"], r["down_limit"]) for r in rows}
+
+    # ------- industry_classify -------
+
+    def has_industry_classify(self) -> bool:
+        """Return True if industry_classify table has data (lazy-init guard)."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM industry_classify LIMIT 1"
+            ).fetchone()
+        return row is not None
+
+    def upsert_industry_classify(self, rows: list[dict]):
+        """
+        Batch upsert industry classification rows.
+        Each row: {index_code, industry_name, level, industry_code, parent_code, src}.
+        """
+        sql = """
+            INSERT OR REPLACE INTO industry_classify
+                (index_code, industry_name, level, industry_code, parent_code, src)
+            VALUES (:index_code, :industry_name, :level,
+                    :industry_code, :parent_code, :src)
+        """
+        with self._get_conn() as conn:
+            conn.executemany(sql, rows)
+            conn.commit()
+        log.info("upsert_industry_classify: %d rows", len(rows))
+
+    def get_industry_classify(self) -> list[dict]:
+        """
+        Return all cached industry classification rows.
+        Returns list of {index_code, industry_name, level, industry_code, parent_code, src}.
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT index_code, industry_name, level, industry_code, "
+                "parent_code, src FROM industry_classify"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_industry_classify_map(self) -> dict[str, dict]:
+        """
+        Return {index_code: {industry_name, level, industry_code, parent_code, src}}
+        for all cached classifications.
+        """
+        return {r["index_code"]: dict(r) for r in self.get_industry_classify()}
+
+    # ------- industry_daily -------
+
+    def upsert_industry_daily_bulk(self, rows: list[dict]):
+        """
+        Bulk upsert industry daily rows from sw_daily API.
+        Each row: {industry_code, trade_date, open, high, low, close, vol, amount, pct_change}.
+        """
+        sql = """
+            INSERT OR REPLACE INTO industry_daily
+                (industry_code, trade_date, open, high, low, close, vol, amount, pct_change)
+            VALUES (:industry_code, :trade_date, :open, :high, :low, :close,
+                    :vol, :amount, :pct_change)
+        """
+        with self._get_conn() as conn:
+            conn.executemany(sql, rows)
+            conn.commit()
+
+    def get_industry_daily(self, industry_code: str,
+                           end_date: str = None,
+                           lookback: int = 240) -> list[dict]:
+        """
+        Return industry daily rows ordered by trade_date DESC.
+        """
+        sql = "SELECT * FROM industry_daily WHERE industry_code = ?"
+        params = [industry_code]
+        if end_date:
+            sql += " AND trade_date <= ?"
+            params.append(end_date)
+        sql += " ORDER BY trade_date DESC"
+        if lookback:
+            sql += " LIMIT ?"
+            params.append(lookback)
+
+        with self._get_conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_latest_industry_date(self, industry_code: str) -> str | None:
+        """Return the most recent cached date for an industry code, or None."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT MAX(trade_date) FROM industry_daily "
+                "WHERE industry_code = ?",
+                [industry_code],
+            ).fetchone()
+        return row[0] if row and row[0] else None
+
+    def get_earliest_industry_date(self, industry_code: str) -> str | None:
+        """Return the earliest cached date for an industry code, or None."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT MIN(trade_date) FROM industry_daily "
+                "WHERE industry_code = ?",
+                [industry_code],
+            ).fetchone()
+        return row[0] if row and row[0] else None
+
+    def count_industry_daily_date(self, trade_date: str) -> int:
+        """Return number of industries with daily data for a given date."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT industry_code) FROM industry_daily "
+                "WHERE trade_date = ?",
+                [trade_date],
+            ).fetchone()
+        return row[0] if row else 0
+
+    def has_industry_daily_coverage(self, industry_code: str,
+                                     end_date: str,
+                                     min_trading_days: int = 30) -> bool:
+        """
+        Return True if industry_daily has adequate coverage for the given code.
+        Checks that the latest date >= end_date and has at least min_trading_days.
+        """
+        latest = self.get_latest_industry_date(industry_code)
+        if not latest or latest < end_date:
+            return False
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM industry_daily "
+                "WHERE industry_code = ? AND trade_date <= ?",
+                [industry_code, end_date],
+            ).fetchone()
+        return (row[0] or 0) >= min_trading_days
 
     # ------- ai_summary -------
 

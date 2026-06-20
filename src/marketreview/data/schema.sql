@@ -90,3 +90,30 @@ CREATE TABLE IF NOT EXISTS ai_summary (
     created_at   TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (trade_date, summary_type, guide_key)
 );
+
+-- ── Industry (sector) data ──
+
+CREATE TABLE IF NOT EXISTS industry_classify (
+    index_code    TEXT PRIMARY KEY,   -- 行业指数代码 (801081.SI / 850818.SI ...)
+    industry_name TEXT NOT NULL,      -- 行业名称
+    level         TEXT NOT NULL,      -- L1 / L2 / L3
+    industry_code TEXT NOT NULL,      -- 行业分类代码 (270000 ...)
+    parent_code   TEXT NOT NULL,      -- 父级分类代码 (L1 parent=0)
+    src           TEXT NOT NULL       -- 分类标准 (SW2021)
+);
+
+CREATE TABLE IF NOT EXISTS industry_daily (
+    industry_code TEXT NOT NULL,      -- 行业指数代码
+    trade_date    TEXT NOT NULL,      -- 交易日 YYYYMMDD
+    open          REAL,               -- 开盘价
+    high          REAL,               -- 最高价
+    low           REAL,               -- 最低价
+    close         REAL,               -- 收盘价
+    vol           REAL,               -- 成交量
+    amount        REAL,               -- 成交额（千元）
+    pct_change    REAL,               -- 涨跌幅 %
+    PRIMARY KEY (industry_code, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ind_daily_date
+    ON industry_daily(trade_date);
