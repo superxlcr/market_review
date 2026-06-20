@@ -225,6 +225,141 @@ class DashboardService:
             log.warning("get_industry_frequency failed: %s", e)
             return None
 
+    # ---- industry / sector analysis ----
+
+
+    def get_industry_split_config(self) -> dict:
+        """Return SPLIT_L1 / SPLIT_L2 configuration for UI display."""
+        from marketreview.tools.industry import get_split_summary
+        return get_split_summary()
+
+    def get_industry_list(self) -> list[dict]:
+        """
+        Return the display industry list (after SPLIT_L1 / SPLIT_L2 filtering).
+
+        Returns list of dicts with keys: code, name, level.
+        """
+        codes = self._dp._get_display_industry_codes()
+        classify_map = self._dp.cache.get_industry_classify_map()
+        result = []
+        for code in codes:
+            info = classify_map.get(code, {})
+            result.append({
+                "code": code,
+                "name": info.get("industry_name", code),
+                "level": info.get("level", ""),
+            })
+        return result
+
+    def get_industry_daily(self, industry_code: str,
+                           end_date: str = None,
+                           lookback: int = 240):
+        """
+        Load K-line data for an industry sector.
+
+        Returns a DataFrame (date ASC) with columns: date, open, high, low,
+        close, vol, amount, pct_change.  Compatible with render_ohlcv_section().
+        """
+        df = self._dp.get_industry_daily(
+            industry_code, end_date=end_date, lookback=lookback,
+        )
+        if not df.empty and "trade_date" in df.columns:
+            df = df.rename(columns={"trade_date": "date"})
+        return df
+
+    def get_industry_ranking(self, trade_date: str) -> list[dict]:
+        """
+        Return all display industries ranked by pct_change on trade_date.
+
+        Each entry: {code, name, level, pct_change, close, amount}.
+        Sorted descending (top gainers first).
+        """
+        td = trade_date.replace("-", "")
+        codes = self._dp._get_display_industry_codes()
+        classify_map = self._dp.cache.get_industry_classify_map()
+
+        rankings = []
+        for code in codes:
+            df = self._dp.get_industry_daily(code, end_date=td, lookback=1)
+            if df.empty:
+                continue
+            row = df.iloc[-1]
+            row_td = str(row.get("trade_date", ""))
+            if row_td != td:
+                continue
+            info = classify_map.get(code, {})
+            rankings.append({
+                "code": code,
+                "name": info.get("industry_name", code),
+                "level": info.get("level", ""),
+                "pct_change": float(row.get("pct_change", 0) or 0),
+                "close": float(row.get("close", 0) or 0),
+                "amount": float(row.get("amount", 0) or 0),
+            })
+
+        rankings.sort(key=lambda x: x["pct_change"], reverse=True)
+        log.info("get_industry_ranking(%s): %d industries", trade_date, len(rankings))
+        return rankings
+
+    def get_industry_analysis_set(self, trade_date: str) -> list[dict]:
+        """
+        Select industries for detailed analysis on the sector page.
+
+        Candidate sources (union, then dedup by code):
+          1. TOP 5 by pct_change   → 🥇 涨幅第N
+          2. BOTTOM 5 by pct_change → 📉 跌幅第N
+          3. Frequent leaders/laggards over last 5 days → 🔁 近5日频繁领涨/领跌
+
+        Returns list of dicts with keys: code, name, level, pct_change, close,
+        amount, reasons (list of label strings).
+        """
+        ranking = self.get_industry_ranking(trade_date)
+        if not ranking:
+            return []
+
+        # Collect frequent industries from both index contributions
+        freq_labels: dict[str, str] = {}  # industry_name → reason label
+        for idx_code in ["000001.SH", "399006.SZ"]:
+            freq = self.get_industry_frequency(idx_code, trade_date)
+            if freq:
+                for g in freq.get("gainers", []):
+                    freq_labels[g["industry"]] = "🔁 近5日频繁领涨"
+                for l in freq.get("losers", []):
+                    if l["industry"] not in freq_labels:
+                        freq_labels[l["industry"]] = "🔁 近5日频繁领跌"
+
+        seen: set[str] = set()
+        result: list[dict] = []
+
+        # 1. TOP 5
+        for i, r in enumerate(ranking[:5]):
+            reasons = [f"🥇 涨幅第{i + 1}"]
+            if r["name"] in freq_labels:
+                reasons.append(freq_labels[r["name"]])
+            result.append({**r, "reasons": reasons})
+            seen.add(r["code"])
+
+        # 2. BOTTOM 5
+        bottom = ranking[-5:] if len(ranking) >= 5 else []
+        for i, r in enumerate(reversed(bottom)):
+            if r["code"] in seen:
+                continue
+            reasons = [f"📉 跌幅第{i + 1}"]
+            if r["name"] in freq_labels:
+                reasons.append(freq_labels[r["name"]])
+            result.append({**r, "reasons": reasons})
+            seen.add(r["code"])
+
+        # 3. Frequent industries not yet included
+        for r in ranking:
+            if r["name"] in freq_labels and r["code"] not in seen:
+                reasons = [freq_labels[r["name"]]]
+                result.append({**r, "reasons": reasons})
+                seen.add(r["code"])
+
+        log.info("get_industry_analysis_set(%s): %d candidates", trade_date, len(result))
+        return result
+
     # ---- wave33 ----
 
     def ensure_wave33_computed(self, trade_date: str, progress_cb=None) -> dict:
@@ -861,7 +996,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.6.3"
+    _AI_VERSION = "1.7.0"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
