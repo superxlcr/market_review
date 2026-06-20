@@ -779,13 +779,14 @@ class DashboardService:
             self._llm_client = create_llm_client()
         return self._llm_client
 
-    def get_ai_summary(self, trade_date: str) -> dict:
+    def get_ai_summary(self, trade_date: str,
+                        summary_type: str = "market_overview") -> dict:
         """
-        Read cached AI summaries for a given trade_date.
+        Read cached AI summaries for a given trade_date and type.
         Returns dict keyed by guide_key, each value is {content, model, created_at}.
         Returns empty dict if nothing cached.
         """
-        rows = self._dp.cache.get_ai_summary(trade_date, "market_overview")
+        rows = self._dp.cache.get_ai_summary(trade_date, summary_type)
         result = {}
         for r in rows:
             if r.get("content") == "AI 摘要暂时不可用":
@@ -1056,6 +1057,472 @@ class DashboardService:
             "权重贡献": contrib_data,
         }
 
+    # ═══════════════════════════════════════════════════════════════
+    #  Sector AI guide helpers
+    # ═══════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _build_sector_ai_data(name: str, rows: list[dict],
+                               tech_summary: dict,
+                               constituents: dict,
+                               reason: str) -> dict:
+        """Build structured AI-ready data dict for a single industry guide.
+
+        Same structure as _build_index_ai_data, but replaces 权重贡献 with
+        大市值权重股 + 今日异动股 from the constituent analysis.
+        """
+        if not rows:
+            return {"error": "无数据"}
+
+        rows = sorted(rows, key=lambda r: r["date"])
+        latest = rows[-1]
+        close = float(latest["close"])
+        open_val = float(latest["open"])
+        high = float(latest["high"])
+        low = float(latest["low"])
+
+        # --- 涨跌幅 ---
+        if len(rows) >= 2:
+            prev_close = float(rows[-2]["close"])
+            chg_pct = (close / prev_close - 1) * 100
+        else:
+            chg_pct = 0.0
+
+        # === K线价格 ===
+        kp = tech_summary.get("kline_pattern", {})
+        price_data: dict = {
+            "今日": {
+                "开盘": round(open_val, 2),
+                "最高": round(high, 2),
+                "最低": round(low, 2),
+                "收盘": round(close, 2),
+                "涨跌幅": f"{chg_pct:+.2f}%",
+                "K线类型": kp.get("type", ""),
+                "实体占比": f"{kp.get('body_pct', 0)}%",
+                "上影线占比": f"{kp.get('upper_wick_pct', 0)}%",
+                "下影线占比": f"{kp.get('lower_wick_pct', 0)}%",
+            },
+        }
+
+        recent_5 = rows[-min(5, len(rows)):]
+        price_data["近5日K线"] = []
+        for i, r in enumerate(recent_5):
+            entry: dict = {
+                "日期": f"{r['date'][4:6]}-{r['date'][6:8]}",
+                "开": round(float(r["open"]), 2),
+                "高": round(float(r["high"]), 2),
+                "低": round(float(r["low"]), 2),
+                "收": round(float(r["close"]), 2),
+            }
+            if i > 0:
+                prev_r = recent_5[i - 1]
+                entry["涨跌幅"] = f"{(float(r['close']) / float(prev_r['close']) - 1) * 100:+.2f}%"
+            elif len(rows) > len(recent_5):
+                prev_r = rows[-len(recent_5) - 1]
+                entry["涨跌幅"] = f"{(float(r['close']) / float(prev_r['close']) - 1) * 100:+.2f}%"
+            price_data["近5日K线"].append(entry)
+
+        # === 均线 ===
+        mas = tech_summary.get("mas", {})
+        ma_dirs = tech_summary.get("ma_directions", {})
+        ma_arrangement = tech_summary.get("ma_arrangement", "")
+
+        ma_list: list[dict] = []
+        for period in [5, 10, 20, 60, 120, 240]:
+            key = f"MA{period}"
+            val = mas.get(key)
+            if val is None:
+                continue
+            direction = ma_dirs.get(key, "→")
+            role = "支撑" if direction == "↑" else ("压力" if direction == "↓" else "无(走平)")
+            ma_list.append({"均线": key, "值": val, "方向": direction, "作用": role})
+
+        ma_data = {"排列": ma_arrangement, "各均线": ma_list}
+
+        # === 成交量 ===
+        vol = tech_summary.get("volume", {})
+        recent_10 = rows[-min(10, len(rows)):]
+        turnover_10d: list[dict] = []
+        for r in recent_10:
+            amount_yi = round(float(r["amount"]) / 1e5, 2)
+            turnover_10d.append({
+                "日期": f"{r['date'][4:6]}-{r['date'][6:8]}",
+                "成交额": f"{amount_yi:,.0f}亿",
+            })
+
+        deduct_data: dict = {}
+        for period, label in [(5, "MA5"), (10, "MA10")]:
+            idx = len(rows) - 1 - period
+            if idx >= 0:
+                deduct_date = rows[idx]["date"]
+                deduct_amt = vol.get(f"ma{period}_deduct_yi")
+                vs_pct = vol.get(f"vs_ma{period}_deduct_pct")
+                deduct_data[label] = {
+                    "扣抵日": f"{deduct_date[4:6]}-{deduct_date[6:8]}",
+                    "扣抵量": f"{deduct_amt:,.0f}亿" if deduct_amt is not None else "N/A",
+                    "今日vs扣抵量": f"{vs_pct:+.1f}%" if vs_pct is not None else "N/A",
+                }
+
+        volume_data: dict = {
+            "今日成交额": f"{vol.get('latest_amount_yi', 0):,.0f}亿",
+            "5日均量": f"{vol.get('ma5_yi', 0):,.0f}亿",
+            "10日均量": f"{vol.get('ma10_yi', 0):,.0f}亿",
+            "今日vs5日均量": f"{vol.get('vs_ma5_pct', 0):+.1f}%",
+            "今日vs10日均量": f"{vol.get('vs_ma10_pct', 0):+.1f}%",
+            "量能趋势": vol.get("trend_5d", ""),
+            "均量状态": f"{vol.get('cross_state', '')}{'(' + str(vol.get('cross_days', 0)) + '天)' if vol.get('cross_days', 0) else ''}",
+            "扣抵量": deduct_data,
+            "近10日成交额": turnover_10d,
+        }
+
+        # === 技术指标 ===
+        kd_k = tech_summary.get("kd_k", 0) or 0
+        kd_d = tech_summary.get("kd_d", 0) or 0
+        if kd_k > 80 and kd_d > 80:
+            kd_zone = "超买区"
+        elif kd_k < 20 and kd_d < 20:
+            kd_zone = "超卖区"
+        else:
+            kd_zone = "常态区"
+        rsi_val = tech_summary.get("rsi")
+        rsi_zone = "超买区" if (rsi_val and rsi_val > 70) else ("超卖区" if (rsi_val and rsi_val < 30) else "常态区")
+
+        kd_div = tech_summary.get("kd_divergence") or {}
+        rsi_div = tech_summary.get("rsi_divergence") or {}
+
+        if kd_div.get("type"):
+            parts = []
+            if kd_div.get("kd_divergence"):
+                parts.append("KD")
+            elif kd_div.get("k_divergence"):
+                parts.append("K")
+            elif kd_div.get("d_divergence"):
+                parts.append("D")
+            kd_div_detail: dict = {
+                "类型": kd_div["type"],
+                "背离线": "/".join(parts),
+                "背离起始日": kd_div.get("divergence_date", "")[:10] if kd_div.get("divergence_date") else "",
+                "持续天数": kd_div.get("days", 0) or 0,
+            }
+        else:
+            kd_div_detail = "无"
+
+        if rsi_div.get("type"):
+            rsi_div_detail: dict = {
+                "类型": rsi_div["type"],
+                "背离起始日": rsi_div.get("divergence_date", "")[:10] if rsi_div.get("divergence_date") else "",
+                "持续天数": rsi_div.get("days", 0) or 0,
+            }
+        else:
+            rsi_div_detail = "无"
+
+        indicator_data: dict = {
+            "KD": {"K": tech_summary.get("kd_k"), "D": tech_summary.get("kd_d"),
+                   "区间": kd_zone, "背离": kd_div_detail},
+            "RSI": {"值": rsi_val, "区间": rsi_zone, "背离": rsi_div_detail},
+            "BIAS10": {"值": f"{tech_summary.get('bias10', 0):+.2f}%",
+                       "状态": tech_summary.get("bias10_status") or "—"},
+            "BIAS20": {"值": f"{tech_summary.get('bias20', 0):+.2f}%",
+                       "状态": tech_summary.get("bias20_status") or "—"},
+        }
+
+        # === K线形态 ===
+        try:
+            from marketreview.tools.technical import rows_to_df
+            from marketreview.tools.kline_patterns import detect_patterns
+            _df = rows_to_df(rows)
+            pattern_results = detect_patterns(_df, obj_type="index")
+        except Exception:
+            pattern_results = []
+
+        # === 成分股数据（替代权重贡献） ===
+        constituent_data: dict = {}
+        if constituents:
+            # 大市值权重股
+            if constituents.get("top_cap"):
+                constituent_data["大市值权重股"] = [
+                    {
+                        "代码": s["ts_code"],
+                        "名称": s["name"],
+                        "总市值": f"{s['total_mv'] / 1e4:,.0f}亿",
+                        "市值占比": f"{s.get('mv_pct', 0):.1f}%",
+                        "涨跌幅": f"{s['pct_change']:+.2f}%",
+                    }
+                    for s in constituents["top_cap"]
+                ]
+            # 今日异动股
+            if constituents.get("top_movers"):
+                constituent_data["今日异动股"] = [
+                    {
+                        "代码": s["ts_code"],
+                        "名称": s["name"],
+                        "涨跌幅": f"{s['pct_change']:+.2f}%",
+                        "总市值": f"{s['total_mv'] / 1e4:,.0f}亿",
+                        "市值占比": f"{s.get('mv_pct', 0):.1f}%",
+                    }
+                    for s in constituents["top_movers"]
+                ]
+
+        return {
+            "行业": name,
+            "入选理由": reason,
+            "K线价格": price_data,
+            "均线": ma_data,
+            "成交量": volume_data,
+            "技术指标": indicator_data,
+            "K线形态": pattern_results,
+            "成分股": constituent_data,
+        }
+
+    def generate_ai_sector_analysis(self, trade_date: str, progress_cb=None
+                                     ) -> dict:
+        """
+        Generate AI guides + summary for sector_analysis, store in DB.
+
+        Same 3-step pipeline as generate_ai_summary():
+          1. Build shared market_data
+          2. Concurrent per-industry guides (analysis set only, ~10-15)
+          3. Sector summary (synthesises all industry guides)
+
+        Uses batch_chat() for concurrent LLM calls.
+        Returns dict with keys: 'sector/<code>' guides + 'sector_summary'.
+        """
+        import json as _json, time as _time
+
+        _t_total_start = _time.perf_counter()
+        log.info("[AI v%s] generate_ai_sector_analysis(%s)",
+                 self._AI_VERSION, trade_date)
+
+        llm = self._get_llm()
+        model = llm.model_name
+        result = {}
+        FAIL_PLACEHOLDER = "AI 摘要暂时不可用"
+        sys_prompt = self._load_system_prompt()
+
+        # ── 1. Market data (shared) ──
+        if progress_cb:
+            progress_cb("sector_start", "正在准备行业数据...")
+        _t1 = _time.perf_counter()
+        overview = self.get_market_overview(trade_date)
+        log.info("stage=sector_market_data elapsed=%.1fs",
+                 _time.perf_counter() - _t1)
+        if overview is None or "error" in overview:
+            return {"error": "无法获取市场概览数据"}
+
+        today = overview["today"]
+        yesterday = overview["yesterday"]
+        trend = overview["trend"]
+
+        # Build market_data JSON (same structure as market_overview)
+        t_total = today["up"] + today["flat"] + today["down"]
+        breadth_structure = {
+            "今日": {
+                "上涨": today["up"],
+                "平盘": today["flat"],
+                "下跌": today["down"],
+                "上涨占比": f"{today['up'] / t_total * 100:.1f}%",
+                "涨停": today["up_limit"],
+                "跌停": today["down_limit"],
+            },
+        }
+        if yesterday:
+            y_total = yesterday["up"] + yesterday["flat"] + yesterday["down"]
+            breadth_structure["昨日"] = {
+                "上涨": yesterday["up"],
+                "平盘": yesterday["flat"],
+                "下跌": yesterday["down"],
+                "上涨占比": f"{yesterday['up'] / y_total * 100:.1f}%",
+                "涨停": yesterday["up_limit"],
+                "跌停": yesterday["down_limit"],
+            }
+
+        turnover_data = {"今日": f"{today['total_yi']:,.0f}亿"}
+        if yesterday:
+            turnover_data["昨日"] = f"{yesterday['total_yi']:,.0f}亿"
+        amounts = [d["total_yi"] for d in trend]
+        if len(amounts) >= 5:
+            turnover_data["5日均量"] = f"{sum(amounts[-5:]) / 5:,.0f}亿"
+        if len(amounts) >= 10:
+            turnover_data["10日均量"] = f"{sum(amounts[-10:]) / 10:,.0f}亿"
+        turnover_data["近10日每日"] = []
+        for d in trend:
+            up_n = d.get("up", 0)
+            down_n = d.get("down", 0)
+            side = "涨多" if up_n >= down_n else "跌多"
+            turnover_data["近10日每日"].append({
+                "日期": f"{d['date'][4:6]}-{d['date'][6:8]}",
+                "成交额": f"{d['total_yi']:,.0f}亿",
+                "涨跌": side,
+            })
+
+        w33 = self.get_wave33_data(chart_days=15, rolling_days=21,
+                                    end_date=trade_date)
+        wave33_list = []
+        if w33["dates"]:
+            for i, d in enumerate(w33["dates"]):
+                dc = d.replace("-", "")
+                wave33_list.append({
+                    "日期": f"{dc[4:6]}-{dc[6:8]}",
+                    "数量": w33["counts"][i],
+                    "20日盈利占比": f"{w33['profit_pcts'][i]}%",
+                })
+
+        market_data = {
+            "涨跌结构": breadth_structure,
+            "成交额": turnover_data,
+            "3浪3选股_近15日": wave33_list,
+        }
+        market_data_json = _json.dumps(market_data, ensure_ascii=False)
+
+        # ── 2. Prepare industry tasks ──
+        candidates = self.get_industry_analysis_set(trade_date)
+        if not candidates:
+            return {"error": "无行业分析候选"}
+
+        log.info("stage=sector_data_prep candidates=%d", len(candidates))
+
+        sector_tasks: list[dict] = []
+        for c in candidates:
+            code = c["code"]
+            name = c["name"]
+            level = c["level"]
+            reason = "、".join(c.get("reasons", []))
+
+            # Get industry OHLCV
+            ind_rows_raw = self._dp.cache.get_industry_daily(
+                code, end_date=trade_date, lookback=360
+            )
+            if not ind_rows_raw:
+                log.warning("generate_ai_sector_analysis: no data for %s (%s)", code, name)
+                continue
+
+            # Convert to row format compatible with build_technical_summary
+            from marketreview.tools.technical import build_technical_summary
+            rows = [{
+                "date": r["trade_date"],
+                "open": float(r["open"]),
+                "high": float(r["high"]),
+                "low": float(r["low"]),
+                "close": float(r["close"]),
+                "vol": float(r.get("vol", 0)),
+                "amount": float(r.get("amount", 0)),
+            } for r in ind_rows_raw]
+
+            tech_summary = build_technical_summary(code, name, rows)
+            constituents = self.get_industry_constituents(name, level, trade_date)
+
+            ind_data = self._build_sector_ai_data(
+                name, rows, tech_summary, constituents, reason,
+            )
+            ind_data_json = _json.dumps(ind_data, ensure_ascii=False)
+
+            user_tmpl = self._load_prompt("guide_sector_item")
+            user_msg = user_tmpl.format(
+                market_data=market_data_json,
+                data=ind_data_json,
+            )
+
+            sector_tasks.append({
+                "label": f"sector/{code}",
+                "user_message": user_msg,
+                # Store metadata for DB save later
+                "_code": code,
+                "_name": name,
+            })
+
+        log.info("stage=sector_data_prep elapsed=%.1fs tasks=%d",
+                 _time.perf_counter() - _t1, len(sector_tasks))
+
+        if not sector_tasks:
+            return {"error": "无行业数据可用"}
+
+        # ── 3. Concurrent per-industry guides ──
+        from marketreview.llm.concurrent import batch_chat
+
+        def _sector_progress(phase: str, current: int, total: int, label: str):
+            if progress_cb is None:
+                return
+            if phase == "start":
+                progress_cb("sector_start", f"正在生成行业导语（共 {total} 个）...")
+            elif phase == "progress":
+                # label is e.g. "sector/801081.SI" — extract readable name
+                short = label.replace("sector/", "")
+                progress_cb("sector_progress", f"✅ {short} 导语完成（{current}/{total}）")
+            elif phase == "done":
+                progress_cb("sector_done", f"行业导语全部完成（{total}/{total}）")
+
+        if progress_cb:
+            progress_cb("sector_start", f"正在生成行业导语（共 {len(sector_tasks)} 个）...")
+
+        sector_results = batch_chat(
+            llm, sys_prompt, sector_tasks,
+            max_workers=4,
+            progress_cb=_sector_progress,
+            fail_placeholder=FAIL_PLACEHOLDER,
+        )
+
+        # Save per-industry guides to DB
+        for t in sector_tasks:
+            label = t["label"]
+            content = sector_results.get(label, FAIL_PLACEHOLDER)
+            if content != FAIL_PLACEHOLDER:
+                self._dp.cache.save_ai_summary(
+                    trade_date, "sector_analysis", label,
+                    content, model,
+                )
+            result[label] = {"content": content, "model": model}
+
+        # ── 4. Sector summary ──
+        _t4 = _time.perf_counter()
+        if progress_cb:
+            progress_cb("sector_summary_start", "正在生成行业总览...")
+
+        # Build ranking text
+        ranking = self.get_industry_ranking(trade_date)
+        ranking_lines = []
+        for i, r in enumerate(ranking[:10] if ranking else []):
+            ranking_lines.append(
+                f"  {i + 1}. {r['name']} ({r['level']})  "
+                f"涨跌幅 {r['pct_change']:+.2f}%  "
+                f"成交额 {r['amount'] / 1e5:,.0f}亿"
+            )
+        ranking_text = "\n".join(ranking_lines) if ranking_lines else "无排名数据"
+
+        # Build sector guides text
+        guide_texts = []
+        for t in sector_tasks:
+            guide_key = t["label"]
+            guide_content = sector_results.get(guide_key, "")
+            if guide_content and guide_content != FAIL_PLACEHOLDER:
+                guide_texts.append(f"### {t['_name']}\n{guide_content}")
+        guides_blob = "\n\n".join(guide_texts) if guide_texts else "无行业导语"
+
+        try:
+            user_tmpl = self._load_prompt("guide_sector_summary")
+            summary = llm.chat(sys_prompt, user_tmpl.format(
+                market_data=market_data_json,
+                ranking=ranking_text,
+                sector_guides=guides_blob,
+            ))
+        except Exception as e:
+            import traceback as _tb3
+            log.warning("sector_summary LLM call failed: %s\n%s", e, _tb3.format_exc())
+            summary = FAIL_PLACEHOLDER
+
+        log.info("stage=sector_summary elapsed=%.1fs",
+                 _time.perf_counter() - _t4)
+
+        if summary != FAIL_PLACEHOLDER:
+            self._dp.cache.save_ai_summary(
+                trade_date, "sector_analysis", "sector_summary",
+                summary, model,
+            )
+        result["sector_summary"] = {"content": summary, "model": model}
+
+        log.info("generate_ai_sector_analysis DONE total=%.1fs model=%s keys=%d",
+                 _time.perf_counter() - _t_total_start, model, len(result))
+        return result
+
     # ── AI 功能版本号 ─────────────────────────────────────────────
     # X.Y.Z (语义化，仅用于验证代码是否热更成功)
     #   X — 大板块上线时 +1，Y/Z 归零  （例：市场全景→1，个股追踪→2）
@@ -1063,7 +1530,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.7.10"
+    _AI_VERSION = "1.8.2"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """

@@ -122,6 +122,7 @@ if apply_btn:
 _pending = st.session_state.pop("pending_load_date", None)
 if _pending:
     _expected_guides = {"guide/sh_index", "guide/cz_index", "summary"}
+    _expected_sector = {"sector_summary"}
 
     with st.status(f"正在加载 {_pending[:4]}-{_pending[4:6]}-{_pending[6:8]} 市场数据...", expanded=True) as status:
         _total_chunks = [None]  # mutable box for closure
@@ -177,6 +178,16 @@ if _pending:
                 def _ai_progress2(phase: str, label: str):
                     status.update(label=f"🤖 {label}")
                 _service.generate_ai_summary(_pending, progress_cb=_ai_progress2)
+
+            # ── Sector AI guides ──
+            _sector_cached = _service.get_ai_summary(
+                _pending, summary_type="sector_analysis")
+            if not _expected_sector.issubset(_sector_cached.keys()):
+                def _ai_sector_progress(phase: str, label: str):
+                    status.update(label=f"🤖 [行业] {label}")
+                _service.generate_ai_sector_analysis(
+                    _pending, progress_cb=_ai_sector_progress)
+
             status.update(
                 label=f"✅ 全部就绪！（数据 {result['elapsed']:.0f}秒，"
                       f"K线 {result.get('raw_pages', '?')} 页，"
@@ -216,6 +227,27 @@ if _current_td:
                     }.get(_gk, _gk)
                     st.caption(f"**{_label}**")
                     st.text(_ai[_gk]["content"])
+
+        # Sector guides expander
+        _sector_ai = _service.get_ai_summary(_current_td,
+                                              summary_type="sector_analysis")
+        if _sector_ai:
+            with st.expander("📋 查看各行业导语"):
+                if "sector_summary" in _sector_ai:
+                    st.caption("**行业总览**")
+                    st.text(_sector_ai["sector_summary"]["content"])
+                _industry_names = {
+                    r["code"]: r["name"] for r in _service.get_industry_list()
+                }
+                for _gk in sorted(_sector_ai.keys()):
+                    if _gk == "sector_summary":
+                        continue
+                    _sc = _sector_ai[_gk].get("content", "")
+                    if _sc and _sc != "AI 摘要暂时不可用":
+                        _ind_code = _gk.replace("sector/", "")
+                        _ind_name = _industry_names.get(_ind_code, _ind_code)
+                        st.caption(f"**{_ind_name}（{_ind_code}）**")
+                        st.text(_sc)
     elif _ai and "error" not in _ai:
         st.markdown("---")
         st.caption("🤖 AI 总结尚未生成（切换日期时将自动生成）")

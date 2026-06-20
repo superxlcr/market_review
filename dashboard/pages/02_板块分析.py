@@ -36,13 +36,15 @@ st.title(f"🏭 板块分析 — {_display_date}")
 st.caption("Agent 2 — 行业赚钱效应 & 轮动分析")
 
 # ═══════════════════════════════════════════════════════════
-#  1. AI 行业总结导语（Phase 3 接入，当前占位）
+#  1. AI 行业总结导语
 # ═══════════════════════════════════════════════════════════
 
-# TODO(Phase 3): 接入 generate_ai_sector_analysis() → sector_summary 缓存
-_ai_placeholder = st.empty()
-with _ai_placeholder.container():
-    st.info("🤖 AI 行业总结导语将在 Phase 3 接入，当前展示数据层面分析结果。")
+_sector_ai = _service.get_ai_summary(_trade_date, summary_type="sector_analysis")
+_sector_summary = _sector_ai.get("sector_summary", {}).get("content", "")
+if _sector_summary and _sector_summary != "AI 摘要暂时不可用":
+    st.info(f"🤖 {_sector_summary}")
+else:
+    st.info("🤖 AI 行业总结导语尚未生成，切换日期时将自动生成。")
 
 st.divider()
 
@@ -147,6 +149,12 @@ else:
         st.html(f"<div style='margin-bottom:2px;font-size:15px;'>{_info_line}</div>")
 
         with st.expander(f"{_name} ({_code})", expanded=False):
+            # ── AI industry guide ──
+            _guide_key = f"sector/{_code}"
+            _guide = _sector_ai.get(_guide_key, {}).get("content", "")
+            if _guide and _guide != "AI 摘要暂时不可用":
+                st.caption(f"🤖 {_guide}")
+
             # Load full K-line data for this industry
             _df = _service.get_industry_daily(_code, end_date=_trade_date, lookback=360)
 

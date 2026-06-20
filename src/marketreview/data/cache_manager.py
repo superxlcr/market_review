@@ -433,12 +433,13 @@ class CacheManager:
         # All existing dates must be ≥ 90% of max
         if not all(c >= max_cnt * 0.9 for c in counts):
             return False
-        # Boundary check: at least one date within 3 days of end_date must
-        # have data.  A 3-day lookback handles weekends without triggering
-        # false re-fetches when chunk_end falls on Saturday or Sunday.
+        # Boundary check: at least one date within 14 calendar days of
+        # end_date must have data.  14 days covers the longest A-share
+        # holiday (CNY can span 10-12 calendar days), preventing false
+        # re-fetches when a chunk_end falls inside a long holiday.
         end_dt = datetime.strptime(end_date, "%Y%m%d")
         found = False
-        for offset in range(4):  # 0, 1, 2, 3 days back
+        for offset in range(15):  # 0..14 days back
             check_date = (end_dt - timedelta(days=offset)).strftime("%Y%m%d")
             if self.count_daily_basic_date(check_date) > 0:
                 found = True
