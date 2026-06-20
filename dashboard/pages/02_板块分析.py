@@ -148,7 +148,7 @@ else:
 
         with st.expander(_name, expanded=False):
             # Load full K-line data for this industry
-            _df = _service.get_industry_daily(_code, end_date=_trade_date, lookback=240)
+            _df = _service.get_industry_daily(_code, end_date=_trade_date, lookback=360)
 
             if _df.empty:
                 st.warning(f"暂无 {_name}（{_code}）的日线数据")
