@@ -57,7 +57,7 @@ div[data-testid="stForm"] div[data-testid="stElementContainer"]:has(div[data-tes
 """, unsafe_allow_html=True)
 
 st.title("🎛️ 控制台")
-st.caption("选择交易日，应用到全部页面")
+st.caption(f"选择交易日，应用到全部页面 ｜ AI v{DashboardService._AI_VERSION}")
 
 # ── 行业分类规则 ──
 with st.expander("🏭 行业分类规则", expanded=False):

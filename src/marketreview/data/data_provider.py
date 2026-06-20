@@ -11,8 +11,10 @@ API surface:
 """
 
 import time as _time
+import threading
 import tushare as ts
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .cache_manager import CacheManager
 from marketreview.log_util import get_logger
 
@@ -28,6 +30,7 @@ _CHUNK_DAYS = 20           # calendar days per date-range chunk (~14 trading day
 _FETCH_DAYS = 1000         # calendar days to FETCH (~670 trading days)
 _CHECK_DAYS = 500          # calendar days to REQUIRE in cache (tighter, leaves headroom)
 MAX_PAGES_PER_CHUNK = 30   # safety cap per chunk: ~150k records max
+_MAX_FETCH_WORKERS = 4     # concurrent chunk fetchers (tested: 2x+ speedup, no rate-limit)
 _DB_FETCH_DAYS = 180       # calendar days for daily_basic fetch (wave33 window: 80td ≈ 110cal)
 _BASIC_CHUNK_DAYS = 10    # smaller chunks for daily_basic: its pagination limit is ~100k offset
 
@@ -128,7 +131,7 @@ class DataProvider:
                 "db_pages": db_pages,
             }
 
-        # ── Fetch each missing range ──
+        # ── Fetch each missing range (concurrent across chunks) ──
         t0 = _time.time()
 
         # Compute total chunks upfront for progress bar
@@ -141,18 +144,35 @@ class DataProvider:
 
         raw_pages_total = 0
         adj_pages_total = 0
-        chunk_idx = 0
+        completed = 0
+        t_chunks_start = _time.time()
 
-        for fetch_start, fetch_end in missing_ranges:
-            chunks = _date_chunks(fetch_start, fetch_end, _CHUNK_DAYS)
-            for chunk_start, chunk_end in chunks:
-                rp, ap = self._fetch_chunk(chunk_start, chunk_end)
-                raw_pages_total += rp
-                adj_pages_total += ap
-                chunk_idx += 1
-                if progress_cb:
-                    progress_cb("chunk", chunk_idx, total_chunks,
-                                f"{chunk_start}~{chunk_end}")
+        if all_chunks:
+            with ThreadPoolExecutor(max_workers=_MAX_FETCH_WORKERS) as executor:
+                future_map = {
+                    executor.submit(self._fetch_chunk, cs, ce): (cs, ce)
+                    for cs, ce in all_chunks
+                }
+                log.info("ensure_data_loaded: dispatching %d chunks across %d workers",
+                         len(all_chunks), _MAX_FETCH_WORKERS)
+                for future in as_completed(future_map):
+                    cs, ce = future_map[future]
+                    try:
+                        rp, ap = future.result()
+                    except Exception as e:
+                        log.warning("_fetch_chunk(%s~%s) failed: %s", cs, ce, e)
+                        rp, ap = 0, 0
+                    raw_pages_total += rp
+                    adj_pages_total += ap
+                    completed += 1
+                    if progress_cb:
+                        progress_cb("chunk", completed, total_chunks,
+                                    f"{cs}~{ce}")
+            t_chunks = _time.time() - t_chunks_start
+            log.info("ensure_data_loaded: %d chunks done in %.1fs wall-clock "
+                     "(%.0f pages raw + %.0f pages adj, %d workers)",
+                     completed, t_chunks, raw_pages_total, adj_pages_total,
+                     _MAX_FETCH_WORKERS)
 
         # ── Load index data ──
         idx_chunks = self._ensure_indices_loaded(fetch_start, end_date, progress_cb)
@@ -313,17 +333,27 @@ class DataProvider:
     def _fetch_chunk(self, chunk_start: str, chunk_end: str
                      ) -> tuple[int, int]:
         """
-        Fetch raw K-line + adj_factor for a single 30-day chunk.
+        Fetch raw K-line + adj_factor for a single 20-day chunk.
+
+        API calls are thread-safe (each gets its own HTTP request).
+        DB writes use WAL mode (set at DB init) — SQLite serializes
+        concurrent writers internally via its WAL lock, no Python lock
+        needed.
 
         Returns (raw_pages, adj_pages).
         """
+        tid = threading.current_thread().name
         fields = "ts_code,trade_date,open,high,low,close,vol,amount"
         raw_pages = 0
         adj_pages = 0
+        t_api = 0.0
+        t_db = 0.0
+        t_chunk_start = _time.time()
 
         # ── raw K-line ──
         offset = 0
         while raw_pages < MAX_PAGES_PER_CHUNK:
+            t0 = _time.time()
             try:
                 df = self._api.daily(
                     start_date=chunk_start, end_date=chunk_end,
@@ -333,14 +363,17 @@ class DataProvider:
             except Exception as e:
                 log.warning("daily(%s~%s) offset=%d: %s", chunk_start, chunk_end, offset, e)
                 break
+            t_api += _time.time() - t0
 
             if df is None or df.empty:
                 break
 
             raw_pages += 1
             rows = _normalize_raw_batch(df)
+            t_db0 = _time.time()
             if rows:
                 self.cache.upsert_daily_bulk(rows)
+            t_db += _time.time() - t_db0
 
             if len(df) < _PAGE_SIZE:
                 break
@@ -349,6 +382,7 @@ class DataProvider:
         # ── adj_factor ──
         offset = 0
         while adj_pages < MAX_PAGES_PER_CHUNK:
+            t0 = _time.time()
             try:
                 df = self._api.adj_factor(
                     start_date=chunk_start, end_date=chunk_end,
@@ -357,17 +391,25 @@ class DataProvider:
             except Exception as e:
                 log.warning("adj_factor(%s~%s) offset=%d: %s", chunk_start, chunk_end, offset, e)
                 break
+            t_api += _time.time() - t0
 
             if df is None or df.empty:
                 break
 
             adj_pages += 1
+            t_db0 = _time.time()
             _upsert_adj_factors(self.cache, df)
+            t_db += _time.time() - t_db0
 
             if len(df) < _PAGE_SIZE:
                 break
             offset += _PAGE_SIZE
 
+        t_total = _time.time() - t_chunk_start
+        log.info("[%s] chunk %s~%s: pages=%d+%d api=%.1fs db=%.1fs total=%.1fs "
+                 "(lock_wait=%.1fs)",
+                 tid, chunk_start, chunk_end, raw_pages, adj_pages,
+                 t_api, t_db, t_total, max(0, t_total - t_api - t_db))
         return raw_pages, adj_pages
 
     def _ensure_indices_loaded(

@@ -25,6 +25,7 @@ class DashboardService:
         token = tushare_token or os.environ.get("TUSHARE_TOKEN", "")
         self._dp = DataProvider(tushare_token=token)
         self._llm_client = None  # lazy init
+        log.info("[AI v%s] DashboardService started", self._AI_VERSION)
 
     @property
     def is_configured(self) -> bool:
@@ -858,9 +859,9 @@ class DashboardService:
     #   X — 大板块上线时 +1，Y/Z 归零  （例：市场全景→1，个股追踪→2）
     #   Y — 大板块内新增子版块时 +1，Z 归零 （例：加了市场概览导语、加了指数导语）
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
-    # 打印位置：generate_ai_summary() 启动时 → stderr: [AI vX.Y.Z]
+    # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.4.0"
+    _AI_VERSION = "1.5.8"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -877,8 +878,7 @@ class DashboardService:
         import json as _json, sys as _sys, time as _time
 
         _t_total_start = _time.perf_counter()
-        _sys.stderr.write(f"[AI v{self._AI_VERSION}] generate_ai_summary({trade_date})\n")
-        _sys.stderr.flush()
+        log.info("[AI v%s] generate_ai_summary(%s)", self._AI_VERSION, trade_date)
 
         llm = self._get_llm()
         model = llm.model_name

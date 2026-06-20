@@ -59,6 +59,17 @@ class CacheManager:
 
     def _init_schema(self):
         with sqlite3.connect(self.db_path) as conn:
+            # WAL mode: writers don't block readers, writes are append-only
+            # (much faster for concurrent bulk inserts).
+            conn.execute("PRAGMA journal_mode=WAL")
+            # NORMAL: sync on checkpoint boundaries instead of every commit.
+            # Safe trade-off: on OS crash we lose at most the last WAL
+            # checkpoint (~1MB of recent writes), never corrupt the DB.
+            conn.execute("PRAGMA synchronous=NORMAL")
+            # Wait up to 30s instead of immediately throwing "database is
+            # locked" when multiple threads write concurrently.
+            conn.execute("PRAGMA busy_timeout=30000")
+
             # Check each table individually — only drop mismatched ones
             any_change = False
             for table, expected in self._EXPECTED_COLUMNS.items():
@@ -95,6 +106,10 @@ class CacheManager:
     def _get_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        # Per-connection pragmas (journal_mode=WAL is persistent on the DB
+        # file; these two must be set on every new connection).
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     # ------- write / read -------
