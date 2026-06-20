@@ -51,12 +51,6 @@ class DashboardService:
         """Convert raw (不复权) DataFrame to qfq (前复权) for display."""
         return DataProvider.raw_to_qfq(df)
 
-    # ---- cache coverage check ----
-
-    def check_cache_coverage(self, trade_date: str) -> bool:
-        """Return True if cache already covers this date (no loading needed)."""
-        return self._dp.check_cache_coverage(trade_date)
-
     # ---- trading day validation ----
 
     def is_trading_day(self, trade_date: str) -> bool:
@@ -359,6 +353,79 @@ class DashboardService:
 
         log.info("get_industry_analysis_set(%s): %d candidates", trade_date, len(result))
         return result
+
+    def get_industry_constituents(
+        self, industry_name: str, level: str, trade_date: str
+    ) -> dict:
+        """
+        Get constituent stock analysis for an industry on a given date.
+
+        Returns two ranked lists:
+          - top_cap: top 10 by total market cap (desc)
+          - top_movers: top 10 by absolute daily pct_change (desc)
+
+        Each entry: {ts_code, name, total_mv, circ_mv, pct_change, mv_pct}.
+        """
+        td = trade_date.replace("-", "")
+
+        # 1. Find constituent stocks by industry name + level
+        stocks = self._dp.cache.get_stocks_by_industry_level(
+            industry_name, level
+        )
+        if not stocks:
+            log.info(
+                "get_industry_constituents(%s, L=%s): no stocks found",
+                industry_name, level,
+            )
+            return {"top_cap": [], "top_movers": []}
+
+        codes = [s["ts_code"] for s in stocks]
+        name_map = {s["ts_code"]: s["name"] for s in stocks}
+        log.info(
+            "get_industry_constituents(%s, L=%s): %d stocks",
+            industry_name, level, len(codes),
+        )
+
+        # 2. Daily performance (close, pre_close, change_pct) from tushare_cache
+        batch = self._dp.get_daily_batch(codes, td)
+
+        # 3. Market cap from daily_basic_cache
+        all_basic = self._dp.cache.get_daily_basic(td)
+        mv_map: dict[str, dict] = {r["ts_code"]: r for r in all_basic}
+
+        # 4. Combine
+        total_mv_sum: float = 0.0
+        combined: list[dict] = []
+        for code in codes:
+            perf = batch.get(code, {})
+            mv = mv_map.get(code, {})
+            total_mv = float(mv.get("total_mv") or 0)
+            combined.append({
+                "ts_code": code,
+                "name": name_map.get(code, code),
+                "total_mv": total_mv,
+                "circ_mv": float(mv.get("circ_mv") or 0),
+                "pct_change": float(perf.get("change_pct") or 0),
+            })
+            total_mv_sum += total_mv
+
+        # Compute market cap share for each stock
+        for s in combined:
+            s["mv_pct"] = round(
+                s["total_mv"] / total_mv_sum * 100, 2
+            ) if total_mv_sum > 0 else 0.0
+
+        # 5. Two views: top by market cap, top by absolute move
+        top_cap = sorted(
+            [c for c in combined if c["total_mv"] > 0],
+            key=lambda x: x["total_mv"], reverse=True,
+        )[:10]
+        top_movers = sorted(
+            combined,
+            key=lambda x: abs(x["pct_change"]), reverse=True,
+        )[:10]
+
+        return {"top_cap": top_cap, "top_movers": top_movers}
 
     # ---- wave33 ----
 
@@ -996,7 +1063,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.7.4"
+    _AI_VERSION = "1.7.10"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """

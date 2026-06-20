@@ -53,6 +53,7 @@ def render_ohlcv_section(
     name: str,
     service,                       # DashboardService
     section_type: str,             # "index" | "industry"
+    industry_level: str = None,    # L1/L2/L3 — required when section_type="industry"
 ):
     """Render a full OHLCV analysis section for one index or industry.
 
@@ -61,7 +62,8 @@ def render_ohlcv_section(
         code: Index or industry code (e.g. "000001.SH", "801081.SI").
         name: Display name.
         service: DashboardService instance.
-        section_type: "index" → show 权重贡献; "industry" → skip it.
+        section_type: "index" → show 权重贡献; "industry" → show 成分股分析.
+        industry_level: "L1"/"L2"/"L3" for industry constituent lookup.
     """
     if section_type not in ("index", "industry"):
         raise ValueError(f"section_type must be 'index' or 'industry', got {section_type!r}")
@@ -566,9 +568,95 @@ def render_ohlcv_section(
     """)
     st.caption("10日乖离 > 10 短线超买 | < -10 短线超卖 | 月线乖离(20日) > 7 超买 | < -7 超卖")
 
-    # ── 权重贡献 (index only) ──
+    # ── 成分股分析 (industry) ──
     if section_type == "industry":
-        return  # 行业不需要权重贡献
+        _trade_date = st.session_state.get("trade_date")
+        if not _trade_date or not industry_level:
+            return
+
+        _log.info("Loading constituents for industry=%s level=%s date=%s",
+                  name, industry_level, _trade_date)
+        const = service.get_industry_constituents(name, industry_level, _trade_date)
+
+        if not const["top_cap"] and not const["top_movers"]:
+            st.caption("暂无成分股数据")
+            return
+
+        st.divider()
+
+        cap_col, mov_col = st.columns(2)
+
+        with cap_col:
+            st.markdown("**🏦 大市值权重股**")
+            if const["top_cap"]:
+                rows = ""
+                for i, s in enumerate(const["top_cap"]):
+                    pct = s["pct_change"]
+                    pct_color = "#e53935" if pct >= 0 else "#43a047"
+                    sign = "+" if pct >= 0 else ""
+                    mv_yi = s["total_mv"] / 1e4  # 万元 → 亿
+                    mv_pct = s.get("mv_pct", 0)
+                    rows += f"""<tr>
+                        <td style="text-align:center;color:#888;">{i + 1}</td>
+                        <td style="color:#888;font-size:14px;">{s['ts_code']}</td>
+                        <td style="font-weight:600;">{s['name']}</td>
+                        <td style="text-align:right;">{mv_yi:.0f}亿</td>
+                        <td style="text-align:right;color:#888;">{mv_pct:.1f}%</td>
+                        <td style="text-align:right;color:{pct_color};font-weight:bold;">{sign}{pct:.2f}%</td>
+                    </tr>"""
+                st.html(f"""
+                <table style="width:100%;font-size:15px;border-collapse:collapse;">
+                    <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+                        <th style="text-align:center;">#</th>
+                        <th style="text-align:left;">代码</th>
+                        <th style="text-align:left;">名称</th>
+                        <th style="text-align:right;">总市值</th>
+                        <th style="text-align:right;">市值占比</th>
+                        <th style="text-align:right;">涨跌幅</th>
+                    </tr></thead>
+                    <tbody>{rows}</tbody>
+                </table>
+                """)
+            else:
+                st.caption("无市值数据")
+
+        with mov_col:
+            st.markdown("**📈 今日异动股**")
+            if const["top_movers"]:
+                rows = ""
+                for i, s in enumerate(const["top_movers"]):
+                    pct = s["pct_change"]
+                    pct_color = "#e53935" if pct >= 0 else "#43a047"
+                    sign = "+" if pct >= 0 else ""
+                    mv_yi = s["total_mv"] / 1e4  # 万元 → 亿
+                    mv_pct = s.get("mv_pct", 0)
+                    rows += f"""<tr>
+                        <td style="text-align:center;color:#888;">{i + 1}</td>
+                        <td style="color:#888;font-size:14px;">{s['ts_code']}</td>
+                        <td style="font-weight:600;">{s['name']}</td>
+                        <td style="text-align:right;color:{pct_color};font-weight:bold;">{sign}{pct:.2f}%</td>
+                        <td style="text-align:right;">{mv_yi:.0f}亿</td>
+                        <td style="text-align:right;color:#888;">{mv_pct:.1f}%</td>
+                    </tr>"""
+                st.html(f"""
+                <table style="width:100%;font-size:15px;border-collapse:collapse;">
+                    <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+                        <th style="text-align:center;">#</th>
+                        <th style="text-align:left;">代码</th>
+                        <th style="text-align:left;">名称</th>
+                        <th style="text-align:right;">涨跌幅</th>
+                        <th style="text-align:right;">总市值</th>
+                        <th style="text-align:right;">市值占比</th>
+                    </tr></thead>
+                    <tbody>{rows}</tbody>
+                </table>
+                """)
+            else:
+                st.caption("无涨跌幅数据")
+
+        return
+
+    # ── 权重贡献 (index only) ──
 
     st.divider()
     st.markdown("**权重贡献**")

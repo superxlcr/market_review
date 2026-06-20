@@ -154,4 +154,5 @@ else:
                 st.warning(f"暂无 {_name}（{_code}）的日线数据")
                 continue
 
-            render_ohlcv_section(_df, _code, _name, _service, "industry")
+            render_ohlcv_section(_df, _code, _name, _service, "industry",
+                                 industry_level=_level)

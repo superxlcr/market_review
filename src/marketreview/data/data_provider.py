@@ -55,6 +55,7 @@ _PROXY_CODE = "000001.SZ"
 _INDUSTRY_FETCH_DAYS = 1000     # calendar days to fetch from sw_daily
 _INDUSTRY_CHECK_DAYS = 40       # USE window: calendar days to check (≈27td)
 _INDUSTRY_MAX_WORKERS = 4       # concurrent industry fetchers
+_STOCK_IND_MAX_WORKERS = 1    # single worker to stay under 500/min rate limit (with 0.15s sleep)
 
 
 class DataProvider:
@@ -135,6 +136,8 @@ class DataProvider:
             ind_classify_count, ind_daily_count = self._ensure_industry_daily(
                 end_date, progress_cb
             )
+            # Stock-to-industry classification (lazy → eager on first run)
+            stock_ind_count = self._ensure_stock_industries(progress_cb)
             return {
                 "status": "ok", "elapsed": 0.0,
                 "chunks": 0, "note": "cache up to date",
@@ -142,6 +145,7 @@ class DataProvider:
                 "db_pages": db_pages,
                 "ind_classify": ind_classify_count,
                 "ind_daily": ind_daily_count,
+                "stock_ind": stock_ind_count,
             }
 
         # ── Fetch each missing range (concurrent across chunks) ──
@@ -206,6 +210,9 @@ class DataProvider:
             end_date, progress_cb
         )
 
+        # ── Stock-to-industry classification (eager populate on first run) ──
+        stock_ind_count = self._ensure_stock_industries(progress_cb)
+
         if progress_cb:
             progress_cb("done", 0, 0)
 
@@ -220,69 +227,8 @@ class DataProvider:
             "db_pages": db_pages,
             "ind_classify": ind_classify_count,
             "ind_daily": ind_daily_count,
+            "stock_ind": stock_ind_count,
         }
-
-    def check_cache_coverage(self, end_date: str) -> bool:
-        """
-        Return True if cache already covers `end_date` with at least
-        _CHECK_DAYS of history — no API calls needed.
-        Useful for deciding whether to show a loading spinner.
-        """
-        end_date = end_date.replace("-", "")
-        end_dt = datetime.strptime(end_date, "%Y%m%d")
-        check_start = (end_dt - timedelta(days=_CHECK_DAYS)).strftime("%Y%m%d")
-
-        proxy_latest = self.cache.get_latest_date(_PROXY_CODE)
-        if not proxy_latest or proxy_latest.replace("-", "") < end_date:
-            return False
-
-        proxy_earliest = self.cache.get_earliest_date(_PROXY_CODE)
-        if not proxy_earliest or proxy_earliest.replace("-", "") > check_start:
-            return False
-
-        # Spot-check indices too
-        for idx_code in _TRACKED_INDICES:
-            il = self.cache.get_latest_date(idx_code)
-            if not il or il.replace("-", "") < end_date:
-                return False
-            ie = self.cache.get_earliest_date(idx_code)
-            if not ie or ie.replace("-", "") > check_start:
-                return False
-
-        # Verify daily_basic_cache has data for the target date range.
-        # Without this, wave33 scan silently produces 0 results (all stocks
-        # filtered out by missing market-cap data).
-        if not self.cache.daily_basic_has_range(check_start, end_date):
-            return False
-
-        # Also verify the target date specifically — daily_basic_has_range()
-        # only checks dates that HAVE data; a missing end_date (0 rows)
-        # won't appear in the GROUP BY and slips through.
-        if self.cache.count_daily_basic_date(end_date) < self._BREADTH_CACHE_MIN_STOCKS:
-            log.info("check_cache_coverage: daily_basic for %s has only %d stocks "
-                     "(need >= %d), fast path denied",
-                     end_date, self.cache.count_daily_basic_date(end_date),
-                     self._BREADTH_CACHE_MIN_STOCKS)
-            return False
-
-        # Verify industry daily data covers the target date.
-        # Without this, 板块分析 renders empty while the spinner is skipped.
-        if not self.cache.has_industry_classify():
-            log.info("check_cache_coverage: industry_classify not yet loaded")
-            return False
-        display_codes = self._get_display_industry_codes()
-        if not display_codes:
-            log.info("check_cache_coverage: no display industry codes")
-            return False
-        # Spot-check first + last display industry — both must cover end_date
-        for code in (display_codes[0], display_codes[-1]):
-            latest = self.cache.get_latest_industry_date(code)
-            if not latest or latest < end_date:
-                log.info("check_cache_coverage: industry %s latest=%s (< %s)",
-                         code, latest, end_date)
-                return False
-
-        return True
 
     _COVERAGE_WARN_THRESHOLD = 0.90    # warn if < 90% stocks covered on a date
     _COVERAGE_MAX_RETRY = 2            # max re-fetch attempts per gapped date
@@ -1237,6 +1183,109 @@ class DataProvider:
                  completed, total, failed, t_chunks, elapsed)
 
         return classify_count, completed
+
+    def _ensure_stock_industries(self, progress_cb=None) -> int:
+        """
+        Ensure stock_industry_cache has SW industry classification
+        (L1/L2/L3) for every stock in stock_basic_cache.
+
+        First run populates ~5000 stocks (one index_member_all call each);
+        subsequent runs only fill in newly listed stocks.
+
+        Returns number of new stock classifications cached.
+        """
+        t0 = _time.time()
+
+        # ── 1. All stock codes from stock_basic_cache ──
+        all_stocks = self.cache.get_stock_basic()
+        all_codes = [s["ts_code"] for s in all_stocks]
+        if not all_codes:
+            log.info("_ensure_stock_industries: no stocks in stock_basic_cache, skip")
+            return 0
+
+        # ── 2. Find which are not yet classified ──
+        cached = self.cache.get_stock_industries(all_codes)
+        missing = [c for c in all_codes if c not in cached]
+
+        total = len(all_codes)
+        already = total - len(missing)
+
+        if not missing:
+            elapsed = _time.time() - t0
+            log.info("_ensure_stock_industries: all %d stocks already "
+                     "classified (%.1fs)", total, elapsed)
+            return 0
+
+        log.info("_ensure_stock_industries: %d/%d stocks need "
+                 "classification (%d already cached)",
+                 len(missing), total, already)
+
+        # ── 3. Concurrent fetch ──
+        completed = 0
+        failed = 0
+        new_rows: list[dict] = []
+
+        if progress_cb:
+            progress_cb("stock_industry", already, total)
+
+        def _fetch_one(code: str) -> dict | None:
+            _time.sleep(0.15)  # throttle: max ~400 calls/min, safely under 500/min limit
+            try:
+                df = self._api.index_member_all(ts_code=code, is_new="Y")
+                if df is not None and not df.empty:
+                    r = df.iloc[0]
+                    return {
+                        "ts_code": str(r["ts_code"]),
+                        "name": str(r.get("name", "")),
+                        "l1_code": str(r.get("l1_code", "")),
+                        "l1_name": str(r.get("l1_name", "")),
+                        "l2_code": str(r.get("l2_code", "")),
+                        "l2_name": str(r.get("l2_name", "")),
+                        "l3_code": str(r.get("l3_code", "")),
+                        "l3_name": str(r.get("l3_name", "")),
+                    }
+            except Exception as e:
+                log.warning("index_member_all(%s) failed: %s", code, e)
+            return None
+
+        with ThreadPoolExecutor(max_workers=_STOCK_IND_MAX_WORKERS) as executor:
+            future_map = {
+                executor.submit(_fetch_one, code): code
+                for code in missing
+            }
+            log.info("_ensure_stock_industries: dispatching %d stocks "
+                     "across %d workers", len(missing),
+                     _STOCK_IND_MAX_WORKERS)
+
+            for future in as_completed(future_map):
+                code = future_map[future]
+                try:
+                    row = future.result()
+                except Exception as e:
+                    log.warning("_ensure_stock_industries future(%s) "
+                                "error: %s", code, e)
+                    failed += 1
+                    row = None
+
+                if row:
+                    new_rows.append(row)
+                    completed += 1
+                else:
+                    failed += 1
+
+                if progress_cb:
+                    progress_cb("stock_industry", already + completed + failed,
+                                total)
+
+        # ── 4. Batch upsert ──
+        if new_rows:
+            self.cache.upsert_stock_industries(new_rows)
+
+        elapsed = _time.time() - t0
+        log.info("_ensure_stock_industries: cached %d new stocks "
+                 "(failed=%d, total=%d) in %.1fs",
+                 len(new_rows), failed, total, elapsed)
+        return len(new_rows)
 
     def get_industry_daily(self, industry_code: str,
                            end_date: str = None,

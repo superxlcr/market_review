@@ -122,45 +122,6 @@ if apply_btn:
 _pending = st.session_state.pop("pending_load_date", None)
 if _pending:
     _expected_guides = {"guide/sh_index", "guide/cz_index", "summary"}
-    # Quick check — if K-line + daily_basic cache covers this date,
-    # skip the heavy K-line loading, but still ensure wave33 is computed
-    # with detailed progress.
-    if _service.check_cache_coverage(_pending):
-        with st.status("正在扫描 3浪3...", expanded=True) as status:
-            def _w33_progress(phase: str, current: int, total: int | None, extra: str = None):
-                if phase == "wave33_init":
-                    date_str = extra or "?"
-                    status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} | 共 {current} 只（共 {total} 天待扫）")
-                elif phase == "wave33_load":
-                    status.update(label=f"加载K线: {current}/{total} 只（共 {extra} 天待扫）")
-                elif phase == "wave33_scan":
-                    status.update(label=f"K线加载完成 ({current}/{total} 只)，开始逐日扫描（共 {extra} 天）...")
-                elif phase == "wave33_cumprofit":
-                    if current >= total:
-                        status.update(label=f"预计算累计盈利完成（{current} 只，共 {extra} 天）")
-                    else:
-                        status.update(label=f"预计算累计盈利: {current}/{total} 只（共 {extra} 天）")
-                elif phase == "wave33_date":
-                    date_str = extra or "?"
-                    status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} ({current}/{total} 天)")
-
-            w33_result = _service.ensure_wave33_computed(_pending, progress_cb=_w33_progress)
-            status.update(
-                label=f"✅ 3浪3 扫描完成（扫描 {w33_result['scanned']} 天，"
-                      f"已缓存 {w33_result['cached']} 天，{w33_result['elapsed']}秒）",
-                state="complete",
-            )
-        # ── AI summary ──
-        with st.status("正在生成 AI 总结...", expanded=True) as _ai_status:
-            _cached = _service.get_ai_summary(_pending)
-            if not _expected_guides.issubset(_cached.keys()):
-                def _ai_progress(phase: str, label: str):
-                    _ai_status.update(label=f"🤖 {label}")
-                _service.generate_ai_summary(_pending, progress_cb=_ai_progress)
-            _ai_status.update(label="✅ AI 总结已就绪", state="complete")
-        st.session_state.trade_date = _pending
-        st.cache_data.clear()
-        st.rerun()
 
     with st.status(f"正在加载 {_pending[:4]}-{_pending[4:6]}-{_pending[6:8]} 市场数据...", expanded=True) as status:
         _total_chunks = [None]  # mutable box for closure
@@ -177,6 +138,13 @@ if _pending:
             elif phase == "basic":
                 date_range = extra or ""
                 status.update(label=f"拉取市值数据: {date_range} ({current}/{total} 段)")
+            elif phase == "ind_classify":
+                status.update(label=f"加载行业分类层级... ({current} 条)")
+            elif phase == "ind_daily":
+                note = extra or ""
+                status.update(label=f"补齐行业日线数据: {note} ({current}/{total})")
+            elif phase == "stock_industry":
+                status.update(label=f"补齐个股行业分类: {current}/{total} 只")
             elif phase == "wave33_init":
                 date_str = extra or "?"
                 status.update(label=f"3浪3 扫描: {date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} | 共 {current} 只（共 {total} 天待扫）")

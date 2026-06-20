@@ -297,6 +297,22 @@ class CacheManager:
             ).fetchall()
         return {r["ts_code"]: dict(r) for r in rows}
 
+    def get_stocks_by_industry_level(self, industry_name: str,
+                                      level: str) -> list[dict]:
+        """
+        Return stocks belonging to a given industry at a given level.
+
+        Returns [{ts_code, name}, ...] sorted by ts_code.
+        """
+        level_col = {"L1": "l1_name", "L2": "l2_name", "L3": "l3_name"}[level]
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                f"""SELECT ts_code, name FROM stock_industry_cache
+                   WHERE {level_col} = ? ORDER BY ts_code""",
+                [industry_name],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def upsert_stock_industries(self, rows: list[dict]):
         """
         Batch upsert industry rows.
@@ -417,11 +433,17 @@ class CacheManager:
         # All existing dates must be ≥ 90% of max
         if not all(c >= max_cnt * 0.9 for c in counts):
             return False
-        # Boundary check: end_date must have rows (dates without rows are
-        # invisible in GROUP BY).  This may cause a redundant fetch when
-        # end_date falls on a weekend, but that is far cheaper than silently
-        # skipping missing data on an actual trading day.
-        if self.count_daily_basic_date(end_date) == 0:
+        # Boundary check: at least one date within 3 days of end_date must
+        # have data.  A 3-day lookback handles weekends without triggering
+        # false re-fetches when chunk_end falls on Saturday or Sunday.
+        end_dt = datetime.strptime(end_date, "%Y%m%d")
+        found = False
+        for offset in range(4):  # 0, 1, 2, 3 days back
+            check_date = (end_dt - timedelta(days=offset)).strftime("%Y%m%d")
+            if self.count_daily_basic_date(check_date) > 0:
+                found = True
+                break
+        if not found:
             return False
         return True
 
