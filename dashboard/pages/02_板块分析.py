@@ -153,7 +153,7 @@ else:
             _guide_key = f"sector/{_code}"
             _guide = _sector_ai.get(_guide_key, {}).get("content", "")
             if _guide and _guide != "AI 摘要暂时不可用":
-                st.caption(f"🤖 {_guide}")
+                st.info(f"🤖 {_guide}")
 
             # Load full K-line data for this industry
             _df = _service.get_industry_daily(_code, end_date=_trade_date, lookback=360)
