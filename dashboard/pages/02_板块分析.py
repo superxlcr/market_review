@@ -84,7 +84,7 @@ def _render_rank_card(col, items: list[dict], title: str, is_gainer: bool):
         _amount_yi = r["amount"] / 1e5  # 千元 → 亿
         _medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i]
         _level_badge = {
-            "L1": "🔵", "L2": "🟡", "L3": "⚪",
+            "L1": "[一级]", "L2": "[二级]", "L3": "[三级]",
         }.get(r["level"], "")
 
         _rows += f"""
@@ -128,23 +128,25 @@ st.caption("候选来源：涨幅 TOP 5 · 跌幅 TOP 5 · 权重贡献上榜 ·
 if not _analysis_set:
     st.info("暂无需要分析的行业")
 else:
-    for _idx, _entry in enumerate(_analysis_set):
+    for _entry in _analysis_set:
         _code = _entry["code"]
         _name = _entry["name"]
         _level = _entry["level"]
         _pct = _entry["pct_change"]
         _reasons = "  ".join(_entry.get("reasons", []))
 
-        # Expander header: 行业名 + 涨跌幅 + 入选理由
         _pct_color = up_down_color(_pct)
         _level_tag = {"L1": "一级", "L2": "二级", "L3": "三级"}.get(_level, _level)
-        _header = (
-            f"{_name} · "
+
+        # Info line above expander
+        _info_line = (
+            f"{_name}  ·  "
             f"<span style='color:{_pct_color};font-weight:bold;'>{_pct:+.2f}%</span>"
             f"  <span style='font-size:13px;color:#888;'>[{_level_tag}] {_reasons}</span>"
         )
+        st.html(f"<div style='margin-bottom:2px;font-size:15px;'>{_info_line}</div>")
 
-        with st.expander(_header, expanded=(_idx < 3)):
+        with st.expander(_name, expanded=False):
             # Load full K-line data for this industry
             _df = _service.get_industry_daily(_code, end_date=_trade_date, lookback=240)
 
