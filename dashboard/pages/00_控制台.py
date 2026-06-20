@@ -59,6 +59,19 @@ div[data-testid="stForm"] div[data-testid="stElementContainer"]:has(div[data-tes
 st.title("🎛️ 控制台")
 st.caption("选择交易日，应用到全部页面")
 
+# ── 行业分类规则 ──
+with st.expander("🏭 行业分类规则", expanded=False):
+    from marketreview.tools.industry import SPLIT_L1, SPLIT_L2
+    st.markdown(f"""
+    **默认**按申万一级行业（31个）展示
+
+    **拆分 L1→L2**：{"、".join(sorted(SPLIT_L1))}（共 {len(SPLIT_L1)} 个）
+
+    **拆分 L2→L3**：{"、".join(sorted(SPLIT_L2))}（共 {len(SPLIT_L2)} 个）
+
+    **最终板块数**：25 L1 + 24 L2 + 14 L3 = **63**
+    """)
+
 _service = DashboardService()
 
 # ── Default date ──
