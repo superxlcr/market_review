@@ -65,14 +65,20 @@ def get_logger(name: str) -> logging.Logger:
     log_file = os.path.join(log_dir, f"{safe_name}.log")
 
     logger = logging.getLogger(name)
-    if not logger.handlers:
-        logger.setLevel(logging.DEBUG)
-        handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s | %(levelname)-5s | %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        ))
-        logger.addHandler(handler)
+    # Force fresh log file on every process start: close old handlers,
+    # delete the old file, then create a new writable handler.
+    for h in list(logger.handlers):
+        h.close()
+        logger.removeHandler(h)
+    if os.path.exists(log_file):
+        os.remove(log_file)
+    logger.setLevel(logging.DEBUG)
+    handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)-5s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    logger.addHandler(handler)
 
     # ── ensure shared error log ──
     _ensure_error_log(log_dir)

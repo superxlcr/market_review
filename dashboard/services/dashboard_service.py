@@ -162,8 +162,13 @@ class DashboardService:
         """
         Run the full 4-phase DB initialization.
 
-        Thin wrapper around DataProvider.ensure_full_init().
-        On success, writes init_status marker via CacheManager.
+        Phases 1-3 (K-line, market cap, industry) delegate to
+        DataProvider.ensure_full_init() which reuses ensure_data_loaded()
+        with min_date=20210104.
+
+        Phase 4 (Wave33) calls ensure_wave33_computed() with full-history
+        lookback — the same method the "应用" button uses, just with a
+        wider date range.
 
         progress_cb(phase: str, label: str):
           phase = "phase_start" | "phase_progress" | "phase_done"
@@ -172,12 +177,67 @@ class DashboardService:
 
         Returns {"status": "ok"|"error", "elapsed": float, "phases": dict}
         """
+        import time as _time
         from datetime import datetime
 
+        t0 = _time.time()
+
+        # ── Phases 1-3: K-line + Market cap + Industry ──
         result = self._dp.ensure_full_init(
             progress_cb=progress_cb, log_cb=log_cb,
         )
+        if log_cb:
+            log_cb(f"[INIT] DashboardService v{self._AI_VERSION}")
 
+        if result["status"] != "ok":
+            return result
+
+        # ── Phase 4: Wave33 (full history) ──
+        today = datetime.now().strftime("%Y%m%d")
+        if log_cb:
+            log_cb("[INIT] Phase 4/4 3浪3: 检测中...")
+        if progress_cb:
+            progress_cb("phase_start", "3浪3 — 扫描缺失日期...")
+
+        _t4 = _time.time()
+
+        # Adapt wave33 progress → init progress format
+        def _w33_progress(phase: str, current: int, total: int,
+                          extra: str = None):
+            if not progress_cb:
+                return
+            if phase == "wave33_init":
+                progress_cb("phase_progress",
+                            f"3浪3 — 加载K线指标 ({current} 只, {total} 天)")
+            elif phase == "wave33_load":
+                progress_cb("phase_progress",
+                            f"3浪3 — 加载K线: {current}/{total} 只")
+            elif phase == "wave33_scan":
+                progress_cb("phase_progress",
+                            f"3浪3 — 开始逐日扫描 ({current} 只, {total} 天)")
+            elif phase == "wave33_date":
+                ds = extra or "?"
+                progress_cb("phase_progress",
+                            f"3浪3 — {ds[:4]}-{ds[4:6]}-{ds[6:8]} ({current}/{total})")
+
+        w33_result = self.ensure_wave33_computed(
+            today, progress_cb=_w33_progress, lookback_days=2000,
+        )
+
+        w33_elapsed = round(_time.time() - _t4, 1)
+        result["phases"]["wave33"] = {
+            "total_dates": w33_result.get("scanned", 0) + w33_result.get("cached", 0),
+            "scanned": w33_result.get("scanned", 0),
+            "elapsed": w33_elapsed,
+        }
+
+        if log_cb:
+            log_cb(f"[INIT] 3浪3: 全部完成, scanned={w33_result.get('scanned',0)} "
+                   f"cached={w33_result.get('cached',0)}, 耗时 {w33_elapsed:.1f}s")
+        if progress_cb:
+            progress_cb("phase_done", f"✅ 3浪3 完成 ({w33_elapsed:.0f}s)")
+
+        # ── Write init_status markers ──
         if result["status"] == "ok":
             self._dp.cache.set_init_status("initialized", "1")
             self._dp.cache.set_init_status(
@@ -186,6 +246,8 @@ class DashboardService:
             if log_cb:
                 log_cb("[INIT] init_status 标记已写入")
 
+        total_elapsed = round(_time.time() - t0, 1)
+        result["elapsed"] = total_elapsed
         return result
 
     # ---- trading day validation ----
@@ -478,17 +540,22 @@ class DashboardService:
 
     # ---- wave33 ----
 
-    def ensure_wave33_computed(self, trade_date: str, progress_cb=None) -> dict:
+    def ensure_wave33_computed(self, trade_date: str, progress_cb=None,
+                              lookback_days: int | None = None) -> dict:
         """
         Ensure wave33_cache covers the chart+window need for `trade_date`.
 
-        Two-window design:
+        Two-window design (normal mode, lookback_days=None):
           - USE window:  40 trading days (15 chart + 21 rolling + 4 buffer)
           - CACHE window: 80 trading days (~4 months, 2x the USE window)
 
         Only the USE window is checked for cache completeness. When any date in
         the USE window is missing, the full CACHE window is scanned (over-fetch),
         so switching to nearby dates hits cache and feels instant.
+
+        Full-history mode (lookback_days set):
+          - Fetches all trading dates from SH index within lookback_days.
+          - Scans every missing date.  Used by DB init.
 
         Returns {"scanned": int, "cached": int, "elapsed": float}.
         """
@@ -500,14 +567,39 @@ class DashboardService:
 
         t0 = _time.time()
 
-        # Trading date list (most-recent-first), covering CACHE_DAYS
+        # Trading date list (most-recent-first)
+        _lookback = lookback_days if lookback_days else 180
         index_rows = self._dp.get_daily(
-            "000001.SH", end_date=trade_date, lookback_days=180
+            "000001.SH", end_date=trade_date, lookback_days=_lookback
         )
         all_dates = sorted(set(
             r["date"].replace("-", "") for r in index_rows
         ), reverse=True)
         td_clean = trade_date.replace("-", "")
+
+        # ── Full-history mode: scan all missing dates ──
+        if lookback_days:
+            missing = [d for d in all_dates if d <= td_clean
+                      and not self._dp.cache.has_wave33_date(d)]
+            if not missing:
+                log.info("ensure_wave33: FULL HISTORY — all %d dates cached "
+                         "(end=%s)", len(all_dates), td_clean)
+                return {
+                    "scanned": 0, "cached": len(all_dates),
+                    "elapsed": round(_time.time() - t0, 1),
+                }
+            log.info("ensure_wave33: FULL HISTORY — %d/%d missing, scanning "
+                     "(end=%s, lookback=%d)", len(missing), len(all_dates),
+                     td_clean, lookback_days)
+            scan_wave33(missing, self._dp, progress_cb=progress_cb)
+            elapsed = _time.time() - t0
+            return {
+                "scanned": len(missing),
+                "cached": len(all_dates) - len(missing),
+                "elapsed": round(elapsed, 1),
+            }
+
+        # ── Normal mode: USE/CACHE windows ──
         use_dates = [d for d in all_dates if d <= td_clean][:USE_DAYS]
 
         # ── Fast path: all USE dates already cached ──
@@ -1280,7 +1372,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：generate_ai_summary() 启动时 → stderr: [AI vX.Y.Z]
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "2.0.0"
+    _AI_VERSION = "2.0.1"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """

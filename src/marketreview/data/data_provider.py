@@ -64,7 +64,7 @@ class DataProvider:
     # ═══════════════════════════════════════════════════════════════
 
     def ensure_data_loaded(
-        self, end_date: str, progress_cb=None,
+        self, end_date: str, progress_cb=None, min_date: str | None = None,
     ) -> dict:
         """
         Ensure tushare_cache has raw K-line + adj_factor for all stocks.
@@ -74,16 +74,28 @@ class DataProvider:
         This gives generous MA240 data while avoiding re-fetches when
         switching dates.
 
+        When `min_date` is provided (YYYYMMDD), the fetch/check/db windows
+        are extended to cover from min_date to end_date.  Used by DB init.
+
         Returns {"status": "ok"|"error", "elapsed": float, "chunks": int}
         """
         end_date = end_date.replace("-", "")
         end_dt = datetime.strptime(end_date, "%Y%m%d")
-        fetch_start_dt = end_dt - timedelta(days=_FETCH_DAYS)
-        fetch_start = fetch_start_dt.strftime("%Y%m%d")
-        check_start_dt = end_dt - timedelta(days=_CHECK_DAYS)
-        check_start = check_start_dt.strftime("%Y%m%d")
-        db_start_dt = end_dt - timedelta(days=_DB_FETCH_DAYS)
-        db_start = db_start_dt.strftime("%Y%m%d")
+
+        log.info("[ensure_data_loaded] ENTER end=%s min_date=%s progress_cb=%s",
+                 end_date, min_date, bool(progress_cb))
+
+        if min_date:
+            fetch_start = min_date
+            check_start = min_date
+            db_start = min_date
+        else:
+            fetch_start_dt = end_dt - timedelta(days=_FETCH_DAYS)
+            fetch_start = fetch_start_dt.strftime("%Y%m%d")
+            check_start_dt = end_dt - timedelta(days=_CHECK_DAYS)
+            check_start = check_start_dt.strftime("%Y%m%d")
+            db_start_dt = end_dt - timedelta(days=_DB_FETCH_DAYS)
+            db_start = db_start_dt.strftime("%Y%m%d")
 
         # ── Determine what date ranges are missing ──
         missing_ranges: list[tuple[str, str]] = []
@@ -115,7 +127,8 @@ class DataProvider:
 
         # ── If nothing missing, just verify indices + stock_basic + daily_basic ──
         if not missing_ranges:
-            log.info("ensure_data_loaded: cache up to date, verifying indices+coverage")
+            log.info("[ensure_data_loaded] FAST PATH: no missing K-line ranges, "
+                     "min_date=%s progress_cb=%s", min_date, bool(progress_cb))
             idx_missing = self._ensure_indices_loaded(
                 fetch_start, end_date, progress_cb
             )
@@ -132,7 +145,9 @@ class DataProvider:
             )
             # Validate coverage even when cache appears up-to-date
             ind_members = self.ensure_industry_members(progress_cb)
-            ind_days = self.ensure_industry_daily(end_date, progress_cb)
+            ind_days = self.ensure_industry_daily(
+                end_date, progress_cb, min_date=min_date,
+            )
             self._validate_coverage(fetch_start, end_date)
             return {
                 "status": "ok", "elapsed": 0.0,
@@ -144,6 +159,8 @@ class DataProvider:
 
         # ── Fetch each missing range ──
         t0 = _time.time()
+        log.info("[ensure_data_loaded] SLOW PATH: missing_ranges=%s progress_cb=%s",
+                 missing_ranges, bool(progress_cb))
 
         # Compute total chunks upfront for progress bar
         all_chunks = []
@@ -181,7 +198,9 @@ class DataProvider:
 
         # ── Load industry data ──
         self.ensure_industry_members(progress_cb)
-        industry_days = self.ensure_industry_daily(end_date, progress_cb)
+        industry_days = self.ensure_industry_daily(
+            end_date, progress_cb, min_date=min_date,
+        )
 
         # ── Validate coverage (catches silent data gaps like missing 0506-0507) ──
         self._validate_coverage(fetch_start, end_date, progress_cb)
@@ -256,10 +275,15 @@ class DataProvider:
 
     def ensure_full_init(self, progress_cb=None, log_cb=None) -> dict:
         """
-        4-phase DB initialization from 2021-01-01 to today.
+        DB initialization phases 1-3: K-line, market cap, industry.
 
-        Smart gap-filling: only fetches missing date ranges, except
-        industry_daily which is wiped and recomputed due to chain compounding.
+        Delegates to ensure_data_loaded() with min_date=_INIT_START, reusing
+        the same proven gap-detection and chunk-fetch logic that the daily
+        "应用" flow uses — just with a wider date range.
+
+        Phase 4 (Wave33) is handled by the caller via
+        DashboardService.run_initialization() so it can reuse
+        ensure_wave33_computed() with full-history lookback.
 
         progress_cb(phase: str, label: str):
           phase = "phase_start" | "phase_progress" | "phase_done"
@@ -272,255 +296,112 @@ class DataProvider:
 
         t0 = _time.time()
         today = datetime.now().strftime("%Y%m%d")
-        today_dt = datetime.strptime(today, "%Y%m%d")
-        freshness_cutoff = (today_dt - timedelta(days=_INIT_FRESHNESS_DAYS)).strftime("%Y%m%d")
-
-        phases_result = {}
 
         def _log(msg: str):
             log.info(msg)
             if log_cb:
                 log_cb(msg)
 
-        # ═══════════════════════════════════════════════════════════
-        # Phase 1: K-line (tushare_cache stock + indices)
-        # ═══════════════════════════════════════════════════════════
-        _log("[INIT] Phase 1/4 K线: 检测中...")
-        if progress_cb:
-            progress_cb("phase_start", "K线 — 检测缓存覆盖...")
+        _log("[INIT] DataProvider.ensure_full_init v20260620 (refactored: reuse "
+             "ensure_data_loaded + ensure_wave33_computed)")
 
-        _t1 = _time.time()
-        with self.cache._get_conn() as conn:
-            kl_min_max = conn.execute(
-                "SELECT MIN(date), MAX(date) FROM tushare_cache "
-                "WHERE asset_type='stock'"
-            ).fetchone()
+        _log(f"[DEBUG] ensure_full_init called, progress_cb={bool(progress_cb)}, "
+             f"log_cb={bool(log_cb)}")
 
-        kl_min = kl_min_max[0] or ""
-        kl_max = kl_min_max[1] or ""
-        kline_ok = (
-            kl_min and kl_min <= _INIT_START
-            and kl_max and kl_max >= freshness_cutoff
+        # ── Adapt ensure_data_loaded progress → init progress format ──
+        # ensure_data_loaded callback: (phase, cur, tot, extra)
+        # init callback:                (phase, label)
+        _pt = {}  # phase tracker: tracks which sub-phases have started/finished
+
+        def _dl_progress(phase: str, cur: int = 0, tot: int = 0,
+                         extra: str = None):
+            _log(f"[_dl_progress] ENTER phase={phase} cur={cur} tot={tot} "
+                 f"extra={extra} progress_cb={bool(progress_cb)}")
+            if not progress_cb:
+                _log("[_dl_progress] EXIT — progress_cb is falsy!")
+                return
+            if phase == "init":
+                _pt.clear()
+                _pt["kline_started"] = True
+                progress_cb("phase_start", "K线 — 检测并补拉...")
+            elif phase in ("chunk", "index"):
+                # K-line chunks + index fetches both belong to K-line phase
+                if not _pt.get("kline_started"):
+                    _pt["kline_started"] = True
+                    progress_cb("phase_start", "K线 — 检测并补拉...")
+                progress_cb("phase_progress",
+                            f"K线 — {extra or f'{cur}/{tot}'}")
+            elif phase == "basic":
+                # _ensure_daily_basic_loaded uses "basic" (not "daily_basic")
+                if not _pt.get("db_started"):
+                    _pt["db_started"] = True
+                    progress_cb("phase_done", "✅ K线 完成")
+                    progress_cb("phase_start", "市值 — 补拉中...")
+                progress_cb("phase_progress",
+                            f"市值 — {extra or f'{cur}/{tot}'}")
+            elif phase in ("industry_members", "industry_daily"):
+                if not _pt.get("ind_started"):
+                    _pt["ind_started"] = True
+                    if _pt.get("db_started"):
+                        progress_cb("phase_done", "✅ 市值 完成")
+                    progress_cb("phase_start", "行业指数 — 补算中...")
+                progress_cb("phase_progress",
+                            f"行业指数 — {extra or f'{cur}/{tot}'}")
+            elif phase == "validate":
+                progress_cb("phase_progress",
+                            f"验证 — {extra or '检查数据覆盖率...'}")
+            elif phase == "done":
+                # Flush remaining phase_done events
+                if _pt.get("ind_started"):
+                    progress_cb("phase_done", "✅ 行业指数 完成")
+                elif _pt.get("db_started"):
+                    progress_cb("phase_done", "✅ 市值 完成")
+                    progress_cb("phase_done", "✅ 行业指数 完成")
+                else:
+                    progress_cb("phase_done", "✅ K线 完成")
+                    progress_cb("phase_done", "✅ 市值 完成")
+                    progress_cb("phase_done", "✅ 行业指数 完成")
+
+        _log("[INIT] Phase 1-3/4 K线+市值+行业: 委托 ensure_data_loaded()...")
+
+        result = self.ensure_data_loaded(
+            today, progress_cb=_dl_progress, min_date=_INIT_START,
         )
 
-        kline_chunks = 0
-        if kline_ok:
-            _log(f"[INIT] K线: 已完整 ({kl_min}~{kl_max}), 跳过")
-        else:
-            _log(f"[INIT] K线: MIN={kl_min or '无'} MAX={kl_max or '无'}, 需要补拉")
+        r_elapsed = result.get("elapsed", 0)
+        _log(f"[INIT] Phase 1-3 完成: chunks={result.get('chunks', 0)} "
+             f"db_pages={result.get('db_pages', 0)} "
+             f"industry_days={result.get('industry_days', 0)} "
+             f"elapsed={r_elapsed}s")
 
-            # Determine missing ranges
-            missing_ranges: list[tuple[str, str]] = []
-            if not kl_max or kl_max < today:
-                gap_start = _next_day(kl_max) if kl_max else _INIT_START
-                missing_ranges.append((gap_start, today))
-            if kl_min and kl_min > _INIT_START:
-                missing_ranges.append((_INIT_START, _yesterday(kl_min)))
-
-            # Flatten chunks for progress tracking
-            all_chunks = []
-            for ms, me in missing_ranges:
-                all_chunks.extend(_date_chunks(ms, me, _CHUNK_DAYS))
-            total_chunks = len(all_chunks)
-
-            for ci, (cs, ce) in enumerate(all_chunks, 1):
-                _log(f"[INIT] K线: 开始补拉 {cs}~{ce} (chunk {ci}/{total_chunks})...")
-                if progress_cb:
-                    progress_cb(
-                        "phase_progress",
-                        f"K线 — {cs[:4]}-{cs[4:6]}-{cs[6:8]}~{ce[:4]}-{ce[4:6]}-{ce[6:8]} ({ci}/{total_chunks})",
-                    )
-                _tc = _time.time()
-                self._fetch_chunk(cs, ce)
-                kline_chunks += 1
-                _log(f"[INIT] K线: chunk {ci}/{total_chunks} 完成, 耗时 {_time.time() - _tc:.1f}s")
-
-            # Ensure indices are also loaded for the full range
-            idx_pages = self._ensure_indices_loaded(_INIT_START, today, None)
-            _log(f"[INIT] K线: 指数数据 {idx_pages} 页")
-            _log(f"[INIT] K线: 全部完成, {total_chunks} 段, 总耗时 {_time.time() - _t1:.1f}s")
-
-        kline_elapsed = round(_time.time() - _t1, 1)
-        phases_result["kline"] = {"ok": kline_ok, "chunks": kline_chunks, "elapsed": kline_elapsed}
-        if progress_cb:
-            progress_cb("phase_done", f"✅ K线 完成 ({kline_elapsed:.0f}s)")
-
-        # ═══════════════════════════════════════════════════════════
-        # Phase 2: Market cap (daily_basic_cache)
-        # ═══════════════════════════════════════════════════════════
-        _log("[INIT] Phase 2/4 市值: 检测中...")
-        if progress_cb:
-            progress_cb("phase_start", "市值 — 检测缓存覆盖...")
-
-        _t2 = _time.time()
-        with self.cache._get_conn() as conn:
-            db_min_max = conn.execute(
-                "SELECT MIN(trade_date), MAX(trade_date) FROM daily_basic_cache"
-            ).fetchone()
-
-        db_min = db_min_max[0] or ""
-        db_max = db_min_max[1] or ""
-        db_ok = (
-            db_min and db_min <= _INIT_START
-            and db_max and db_max >= freshness_cutoff
-        )
-
-        db_pages = 0
-        if db_ok:
-            _log(f"[INIT] 市值: 已完整 ({db_min}~{db_max}), 跳过")
-        else:
-            _log(f"[INIT] 市值: MIN={db_min or '无'} MAX={db_max or '无'}, 需要补拉")
-            db_pages = self._ensure_daily_basic_loaded(_INIT_START, today, None)
-            _log(f"[INIT] 市值: 全部完成, {db_pages} 页, 耗时 {_time.time() - _t2:.1f}s")
-
-        db_elapsed = round(_time.time() - _t2, 1)
-        phases_result["market_cap"] = {"ok": db_ok, "pages": db_pages, "elapsed": db_elapsed}
-        if progress_cb:
-            progress_cb("phase_done", f"✅ 市值 完成 ({db_elapsed:.0f}s)")
-
-        # ═══════════════════════════════════════════════════════════
-        # Phase 3: Industry index (industry_daily)
-        # ═══════════════════════════════════════════════════════════
-        _log("[INIT] Phase 3/4 行业指数: 检测中...")
-        if progress_cb:
-            progress_cb("phase_start", "行业指数 — 检测缓存覆盖...")
-
-        _t3 = _time.time()
-        from marketreview.tools.industry import build_industry_list
-
-        industries = build_industry_list(self._api)
-        total_ind = len(industries)
-
-        with self.cache._get_conn() as conn:
-            ind_min_max = conn.execute(
-                "SELECT MIN(trade_date), MAX(trade_date), COUNT(*) FROM industry_daily"
-            ).fetchone()
-
-        ind_min = ind_min_max[0] or ""
-        ind_max = ind_min_max[1] or ""
-        ind_rows_before = ind_min_max[2] or 0
-        ind_ok = (
-            ind_rows_before > 0
-            and ind_min and ind_min <= _INIT_START
-            and ind_max and ind_max >= freshness_cutoff
-        )
-
-        ind_computed = 0
-        if ind_ok:
-            _log(f"[INIT] 行业指数: 已完整 ({ind_min}~{ind_max}, {total_ind} 行业), 跳过")
-        else:
-            if ind_min and ind_min > _INIT_START:
-                _log(f"[INIT] 行业指数: MIN={ind_min} > {_INIT_START}, 清空重算")
-                with self.cache._get_conn() as conn:
-                    conn.execute("DELETE FROM industry_daily")
-                    conn.commit()
-                _log(f"[INIT] 行业指数: 已清空 industry_daily (原 {ind_rows_before} 行)")
-            else:
-                _log(f"[INIT] 行业指数: MIN={ind_min or '无'} MAX={ind_max or '无'}, 需补算")
-
-            _log(f"[INIT] 行业指数: {total_ind} 行业, 开始回填...")
-
-            # Ensure industry members are loaded first (required by backfill)
-            _log(f"[INIT] 行业指数: 正在加载成分股...")
-            self.ensure_industry_members(progress_cb=(
-                lambda phase, cur, tot, label: progress_cb and progress_cb(
-                    "phase_progress", f"行业指数 — 成分股: {label or f'{cur}/{tot}'}"
-                )
-            ) if progress_cb else None)
-
-            ind_computed = self._backfill_industry_range(
-                _INIT_START, today, industries, total_ind,
-                progress_cb=(
-                    lambda phase, cur, tot, extra: progress_cb and progress_cb(
-                        "phase_progress",
-                        f"行业指数 — {extra or f'{cur}/{tot}'}",
-                    )
-                ) if progress_cb else None,
-            )
-            _log(f"[INIT] 行业指数: 全部完成, {ind_computed} 行, 耗时 {_time.time() - _t3:.1f}s")
-
-        ind_elapsed = round(_time.time() - _t3, 1)
-        phases_result["industry"] = {
-            "ok": ind_ok, "rows_before": ind_rows_before,
-            "rows_computed": ind_computed, "elapsed": ind_elapsed,
-        }
-        if progress_cb:
-            progress_cb("phase_done", f"✅ 行业指数 完成 ({ind_elapsed:.0f}s)")
-
-        # ═══════════════════════════════════════════════════════════
-        # Phase 4: Wave33
-        # ═══════════════════════════════════════════════════════════
-        _log("[INIT] Phase 4/4 3浪3: 检测中...")
-        if progress_cb:
-            progress_cb("phase_start", "3浪3 — 扫描缺失日期...")
-
-        _t4 = _time.time()
-        from marketreview.tools.wave33 import scan_wave33
-
-        # Get all trading dates from K-line cache (already loaded in Phase 1).
-        # ~2000 calendar days since 2021-01-01 (~1350 trading days).
-        sh_rows = self.get_daily("000001.SH", end_date=today, lookback_days=2000)
-        all_trading_dates = sorted(set(
-            r["date"].replace("-", "") for r in sh_rows
-            if r["date"].replace("-", "") >= _INIT_START
-        ))
-
-        # Find which dates are missing from wave33_cache
-        missing_dates = []
-        for d in all_trading_dates:
-            if not self.cache.has_wave33_date(d):
-                missing_dates.append(d)
-
-        w33_scanned = 0
-        if not missing_dates:
-            _log(f"[INIT] 3浪3: 已完整 ({len(all_trading_dates)} 天), 跳过")
-        else:
-            _log(f"[INIT] 3浪3: 缺失 {len(missing_dates)} 天, 开始扫描...")
-            if progress_cb:
-                progress_cb("phase_progress", f"3浪3 — {len(missing_dates)} 天待扫描")
-
-            # Adapt scan_wave33's 4-arg callback → 2-arg progress_cb
-            def _w33_progress(phase: str, current: int, total: int,
-                              extra: str = None):
-                if not progress_cb:
-                    return
-                if phase == "wave33_init":
-                    progress_cb("phase_progress",
-                                f"3浪3 — 加载K线指标 ({current} 只, {total} 天)")
-                elif phase == "wave33_load":
-                    progress_cb("phase_progress",
-                                f"3浪3 — 加载K线: {current}/{total} 只")
-                elif phase == "wave33_scan":
-                    progress_cb("phase_progress",
-                                f"3浪3 — 开始逐日扫描 ({current} 只, {total} 天)")
-                elif phase == "wave33_date":
-                    ds = extra or "?"
-                    progress_cb("phase_progress",
-                                f"3浪3 — {ds[:4]}-{ds[4:6]}-{ds[6:8]} ({current}/{total})")
-
-            scan_wave33(missing_dates, self, progress_cb=_w33_progress)
-            w33_scanned = len(missing_dates)
-            _log(f"[INIT] 3浪3: 全部完成, {w33_scanned} 天, 耗时 {_time.time() - _t4:.1f}s")
-
-        w33_elapsed = round(_time.time() - _t4, 1)
-        phases_result["wave33"] = {
-            "total_dates": len(all_trading_dates),
-            "scanned": w33_scanned, "elapsed": w33_elapsed,
-        }
-        if progress_cb:
-            progress_cb("phase_done", f"✅ 3浪3 完成 ({w33_elapsed:.0f}s)")
-
-        # ── Done ──
         total_elapsed = round(_time.time() - t0, 1)
+        _log(f"[INIT] Phase 4/4 3浪3: 由调用方处理")
         _log(f"[INIT] ✅ 全部完成! 总耗时 {total_elapsed:.1f}s ({total_elapsed / 60:.1f}min)")
-
-        # Ensure stock_basic is cached (needed by downstream checks)
-        self._fetch_stock_basic_once()
 
         return {
             "status": "ok",
             "elapsed": total_elapsed,
-            "phases": phases_result,
+            "phases": {
+                "kline": {
+                    "ok": result.get("chunks", -1) == 0,
+                    "chunks": result.get("chunks", 0),
+                    "elapsed": r_elapsed,
+                },
+                "market_cap": {
+                    "ok": True,
+                    "pages": result.get("db_pages", 0),
+                    "elapsed": 0,
+                },
+                "industry": {
+                    "ok": True,
+                    "rows_computed": result.get("industry_days", 0),
+                    "elapsed": 0,
+                },
+                "wave33": {
+                    "total_dates": 0, "scanned": 0, "elapsed": 0,
+                    "note": "handled by caller",
+                },
+            },
         }
 
     _COVERAGE_WARN_THRESHOLD = 0.90    # warn if < 90% stocks covered on a date
@@ -1285,7 +1166,7 @@ class DataProvider:
     _IND_FAST_PATH_MIN = 200       # min rows in USE window to take fast path
 
     def ensure_industry_daily(
-        self, trade_date: str, progress_cb=None,
+        self, trade_date: str, progress_cb=None, min_date: str | None = None,
     ) -> int:
         """
         Ensure industry_daily has enough history for technical analysis.
@@ -1293,6 +1174,9 @@ class DataProvider:
         Two-window pattern (aligned with two-window-cache-design):
         - USE:  420 calendar days (~280 trading) — MA240 + indicators + buffer
         - CACHE: 750 calendar days (~500 trading) — ~2x USE, amortizes date switches
+
+        When `min_date` is provided (YYYYMMDD), skips the fast-path check and
+        backfills from min_date to trade_date.  Used by DB init.
 
         Fast path: if first industry has ≥200 trading days in USE window,
         only compute today's date.
@@ -1306,6 +1190,17 @@ class DataProvider:
         total = len(industries)
 
         end_dt = datetime.strptime(trade_date, "%Y%m%d")
+
+        # ── Explicit min_date → full backfill (DB init path) ──
+        if min_date:
+            log.info(
+                "ensure_industry_daily: full backfill %s ~ %s (min_date)",
+                min_date, trade_date,
+            )
+            return self._backfill_industry_range(
+                min_date, trade_date, industries, total, progress_cb,
+            )
+
         use_start = (end_dt - timedelta(days=self._IND_USE_WINDOW_CD)).strftime("%Y%m%d")
 
         # ── Fast path check: spot-check first industry ──

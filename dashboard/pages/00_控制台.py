@@ -111,24 +111,31 @@ if st.session_state["_init_start"]:
         }
 
         def _init_progress(phase: str, label: str):
+            is_main = threading.current_thread() is threading.main_thread()
+            _init_log(f"[_init_progress] phase={phase} label={label[:60]} "
+                      f"main={is_main} thr={threading.current_thread().name}")
             if phase == "phase_start":
                 for pk, name in _phase_name.items():
                     if label.startswith(name):
                         _ps[pk] = "⏳"
+                        _init_log(f"[_init_progress] START match: {pk} -> ⏳")
                         break
             elif phase == "phase_done":
                 for pk, name in _phase_name.items():
                     if label.startswith(f"✅ {name}"):
                         _ps[pk] = "✅"
+                        _init_log(f"[_init_progress] DONE match: {pk} -> ✅")
                         break
-            # Streamlit elements are NOT thread-safe — skip updates from worker threads
-            if threading.current_thread() is not threading.main_thread():
-                return
-            # Same pattern as working 应用 flow: direct status.update()
-            status.update(
-                label=f"📈{_ps['kline']}  💰{_ps['market_cap']}  "
-                      f"🏭{_ps['industry']}  🌊{_ps['wave33']}  |  {label}"
-            )
+                else:
+                    _init_log(f"[_init_progress] phase_done but NO match: label={label}")
+            elif phase == "phase_progress":
+                pass  # just update status label
+            else:
+                _init_log(f"[_init_progress] UNKNOWN phase={phase}")
+            # TEMP: remove thread check to diagnose
+            line = f"📈{_ps['kline']} 💰{_ps['market_cap']} 🏭{_ps['industry']} 🌊{_ps['wave33']} | {label}"
+            _init_log(f"[_init_progress] status.update: {line[:120]}")
+            status.update(label=line)
 
         def _init_log(msg: str):
             st.session_state["_init_logs"].append(msg)
