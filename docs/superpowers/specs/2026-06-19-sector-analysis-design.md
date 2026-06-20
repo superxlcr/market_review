@@ -1,7 +1,7 @@
 # 板块分析（Agent 2）— 设计文档
 
-> 日期：2026-06-19（修订：2026-06-20）
-> 状态：待实现
+> 日期：2026-06-19（修订：2026-06-20 数据层完成）
+> 状态：Phase 1 完成 / Phase 2-5 待实现
 
 ## 1. 概述
 
@@ -318,15 +318,23 @@ AI 结果按 `(trade_date, 'sector_analysis', guide_key)` 存入 `ai_summary` �
 
 ## 7. 实现步骤
 
-### Phase 1: 数据层
+### Phase 1: 数据层 ✅（2026-06-20 完成）
 
-1. 新增 `industry_daily` + `industry_classify` 两张表到 `schema.sql`
-2. `CacheManager` 添加对应读写方法
-3. `DataProvider` 添加 `ensure_industry_classify()` + `ensure_industry_daily()`
-4. 行业日线数据直接通过 `sw_daily` API 获取并落表（无需聚合计算）
-5. `ensure_data_loaded()` 末尾调用行业数据加载
-6. 补充控制台进度条回调（`"industry_classify"` / `"industry_daily"` 阶段）
-7. 补充日志：`logs/marketreview_data_industry.log`
+1. ✅ 新增 `industry_daily` + `industry_classify` 两张表到 `schema.sql`
+2. ✅ `CacheManager` 添加对应读写方法（8 个方法 + schema validator）
+3. ✅ `DataProvider` 添加 `_ensure_industry_classify()` + `_ensure_industry_daily()` + `_get_display_industry_codes()` + `get_industry_daily()`
+4. ✅ 行业日线通过 `sw_daily` API 获取并落表，按行业并发（4 线程），每行业 ~659 行一页即可
+5. ✅ `ensure_data_loaded()` 末尾 + 快速通道均调用行业数据加载
+6. ✅ `check_cache_coverage()` 补充行业覆盖率检查
+7. ✅ 进度回调 phase：`"ind_classify"` / `"ind_daily"`
+8. ✅ 日志完善：sw_daily 单行业日志含 code + rows + 耗时（INFO 级别）
+
+**实现细节与设计差异**：
+- 拉取范围为 63 个展示行业（SPLIT_L1/L2 规则计算），非全量 439 个
+- 按行业并发拉取，非按日期段 chunk（单行业 1000d ≈ 659 行，无需分页）
+- 行业数据存在独立 `industry_daily` 表，不复用 `tushare_cache`（字段不同：有 pct_change，无 adj_factor）
+- SQLite WAL 模式 + `busy_timeout=30000`：`_upsert_adj_factors` 修复为走 `cache._get_conn()`（2026-06-20 踩坑：裸 `sqlite3.connect()` 无 timeout，8 并发写抛 `database is locked`）
+- 独立日志文件待实现（当前与 data_provider 共用 `marketreview_data_data_provider.log`）
 
 ### Phase 2: 服务层
 
@@ -365,3 +373,5 @@ AI 结果按 `(trade_date, 'sector_analysis', guide_key)` 存入 `ai_summary` �
 | 行业分析集合去重 | TOP5 和权重贡献上榜行业可能重叠，expander 只出现一次 |
 | AI 三步流水线 | 与市场全景模式一致：先并行出各行业导语 → 汇总总结 |
 | 行业日线缓存到 SQLite | 遵循现有双窗口缓存模式，避免每次页面刷新都调 API |
+| 按行业并发拉取（非按日期段） | sw_daily 不支持无 ts_code 全量拉取（内部 4000 行上限），单行业 1000d=659 行，一页即可 |
+| 只拉 63 个展示行业（非全量 439） | 当前分析只需这 63 个，未展示行业用到时再拉 |
