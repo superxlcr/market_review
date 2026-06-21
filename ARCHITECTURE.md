@@ -1,6 +1,6 @@
 # A股复盘系统 — 架构文档
 
-> 最后更新：2026-06-18
+> 最后更新：2026-06-21
 
 ## 1. 系统概述
 
@@ -90,7 +90,10 @@ marketreview/
 | `daily_basic_cache` | 市值数据（日频） | ts_code, trade_date, total_mv, circ_mv |
 | `wave33_cache` | 33公式每日选股结果 | trade_date, count, profit_count, profit_pct, stock_codes(JSON) |
 | `index_contribution_cache` | 指数权重贡献缓存 | index_code, trade_date, top_n, weight_type, data(JSON) |
-| `ai_summary` | AI 总结缓存 | trade_date, summary_type, guide_key, content, model |
+| `ai_summary` | AI 总结缓存 | trade_date, summary_type, guide_key, content, model, created_at |
+| `industry_classify` | 申万行业分类（L1/L2/L3 层级） | index_code, industry_name, level, industry_code, parent_code, src |
+| `industry_daily` | 行业日线行情（sw_daily 付费 API） | industry_code, trade_date, open, high, low, close, vol, amount, pct_change |
+| `stk_limit_cache` | 个股涨跌停价格 | ts_code, trade_date, up_limit, down_limit |
 
 ### 4.2 复权策略
 
@@ -104,27 +107,282 @@ marketreview/
 - **日期边界检查**：`daily_basic_has_range()` 检查 end_date 是否有数据行（避免 SQL GROUP BY 对零行日期不可见导致的隐性数据缺失）
 - **数据覆盖率验证**：`DataProvider._validate_coverage()` 在数据加载后自动检测每日期望股票数是否 >= 90%，不足则自动重新拉取
 
-## 5. 数据加载流程
+## 5. 数据加载流程（控制台 "应用" 按钮触发）
+
+### 5.1 总览：两阶段流水线
 
 ```
-用户选择日期 -> 控制台 00_控制台.py
-  ├── 快速路径：check_cache_coverage() -> K线 + daily_basic 均覆盖
-  │   ├── ensure_wave33_computed() -> 扫描或跳过
-  │   └── generate_ai_summary() -> 生成/读取 AI 总结
-  └── 慢速路径：ensure_data_loaded()
-        ├── 判断缺失范围 -> 20天/chunk 分页拉取 api.daily + api.adj_factor
-        ├── _ensure_indices_loaded() -> api.index_daily（6个跟踪指数）
-        ├── _fetch_stock_basic_once() -> 全 A 股列表
-        ├── _ensure_daily_basic_loaded() -> 市值数据（10天/chunk）
-        ├── _validate_coverage() -> 覆盖率检查 + 自动补拉
-        ├── ensure_wave33_computed() -> 33公式扫描
-        └── generate_ai_summary() -> AI 总结
+用户点击 "应用" → 控制台 00_控制台.py
+  │
+  ├─ Phase 1: 日期验证
+  │     is_trading_day(date) → Tushare trade_cal API（无缓存）
+  │     有效 → 设置 pending_load_date → st.rerun()
+  │
+  └─ Phase 2: 数据加载（rerun 后 consume pending flag）
+        │
+        ├─ Step A: ensure_data_loaded(date)
+        │     ├─ A1. 判断 K 线缺失范围（代理股票法）
+        │     ├─ A2. [有缺失] 分 chunk 拉取 api.daily + api.adj_factor
+        │     ├─ A3. _ensure_indices_loaded（6个跟踪指数）
+        │     ├─ A4. _fetch_stock_basic_once（全 A 股列表）
+        │     ├─ A5. _ensure_daily_basic_loaded（市值数据）
+        │     ├─ A6. _validate_coverage（≥90% 覆盖率检查）
+        │     ├─ A7. _ensure_industry_daily（行业日线）
+        │     └─ A8. _ensure_stock_industries（个股→行业分类）
+        │
+        ├─ Step B: ensure_wave33_computed(date)
+        │     两窗口缓存：USE(40td) 检查 / CACHE(80td) 超取
+        │
+        └─ Step C: AI 总结生成（cache-first）
+              ├─ get_ai_summary() → 未命中则 generate_ai_summary()
+              └─ get_ai_summary(sector) → 未命中则 generate_ai_sector_analysis()
 ```
 
-**关键参数：**
-- `_FETCH_DAYS = 1000`：拉取 1000 天 K 线历史
-- `_CHECK_DAYS = 500`：检查 500 天覆盖率即视为完整
-- `_CHUNK_DAYS = 20`：每 chunk 20 个日历日（避免 tushare 分页 offset 超限）
+### 5.2 Step A1 — K 线缓存判断：代理股票法
+
+**核心思路：** 不做全表扫描，用一只代理股票（`000001.SZ` 平安银行）判断整体缓存状态。
+
+```
+cache.get_latest_date("000001.SZ")  → proxy_latest（缓存最新日期）
+cache.get_earliest_date("000001.SZ") → proxy_earliest（缓存最早日期）
+
+关键常量：
+  _FETCH_DAYS = 1000 日历日（~670 个交易日，拉取窗口）
+  _CHECK_DAYS = 500 日历日（~330 个交易日，检查窗口）
+
+缺失判定：
+  1. proxy_latest < end_date     → 尾部缺口：(proxy_latest+1, end_date]
+  2. proxy_earliest > check_start → 头部缺口：[fetch_start, proxy_earliest-1)
+  3. 代理股票无数据                 → 全量回填：[fetch_start, end_date]
+
+结果：
+  missing_ranges = []  → 快路径（跳过 K 线拉取，只做验证）
+  missing_ranges ≠ []  → 慢路径（分 chunk 拉取）
+```
+
+**为什么代理股票可行：** 所有 A 股 K 线数据按日期统一拉取，每 chunk 包含当日全市场数据。代理股票的范围即代表全部股票的范围。
+
+### 5.3 Step A2 — 慢路径：分 chunk 并发拉取
+
+**触发条件：** `missing_ranges` 非空。
+
+**分 chunk 规则：**
+```
+每个 missing_range 按 _CHUNK_DAYS=20 日历日切分
+  → 每 chunk 独立调用 api.daily() + api.adj_factor()
+  → 并发数：_MAX_FETCH_WORKERS=4（4 线程并行处理 chunk）
+```
+
+**每个 chunk 的拉取流程：**
+```
+1. api.daily(trade_date 在 chunk 范围内)
+     → 逐页拉取，每页最多 5000 行，最多 30 页
+     → 写入 tushare_cache（此时 adj_factor=1.0 占位）
+
+2. api.adj_factor(ts_code 在 chunk 涉及的股票中)
+     → 拉取复权因子
+     → UPDATE tushare_cache 对应行的 adj_factor 为真实值
+```
+
+**为什么分 20 天小 chunk：** Tushare `api.daily` 分页 offset 上限 15000 行。不分小 chunk 会导致大日期范围的末页 offset 超限、数据被截断。
+
+### 5.4 Step A3~A6 — 指数 / 股票基础 / 市值 / 覆盖率
+
+| Step | 方法 | 缓存判断 | 拉取逻辑 |
+|------|------|----------|----------|
+| A3 | `_ensure_indices_loaded` | 每个指数单独检查：`latest >= end_date AND earliest <= start_date` | 不满足 → `api.index_daily()`；6 个指数：`000001.SH, 399006.SZ, 000016.SH, 000300.SH, 399001.SZ, 399005.SZ` |
+| A4 | `_fetch_stock_basic_once` | `cache.get_stock_basic()` 非空即跳过 | 空 → `api.stock_basic()` 拉取全 A 股列表，过滤 SH/SZ 交易所，标记 ST |
+| A5 | `_ensure_daily_basic_loaded` | 每 10 天 chunk 调 `daily_basic_has_range(cs, ce)`：检查范围内每天 ≥90% 股票数，且 end_date 14 天内至少一天有数据 | 不满足 → `api.daily_basic()` 拉取市值 |
+| A6 | `_validate_coverage` | 遍历范围内每个日期，`count_daily_date(d) / stock_basic_count >= 90%` | 不足 → 重拉该日期的 chunk，最多重试 2 次；持续不足记录 error 日志 |
+
+### 5.5 Step A7 — 行业日线加载（关键差异点）
+
+**与 K 线加载的核心差异：**
+
+| 维度 | K 线（tushare_cache） | 行业日线（industry_daily） |
+|------|----------------------|---------------------------|
+| API | `api.daily`（免费） | `api.sw_daily`（付费） |
+| 缓存判断 | 1 只代理股票 | 63 个行业逐个检查 |
+| 拉取粒度 | 20 天 chunk | 按行业整段拉取 |
+| 并发 | 4 worker 处理 chunk | 4 worker 处理行业 |
+| 检查窗口 | 500 日历日 | 40 日历日（`_INDUSTRY_CHECK_DAYS`） |
+| 拉取窗口 | 1000 日历日 | 1000 日历日（`_INDUSTRY_FETCH_DAYS`） |
+| 覆盖率校验 | ✅ 有 | ❌ 无 |
+
+**行业分类加载（前置依赖）：**
+```
+_ensure_industry_classify():
+  cache.has_industry_classify() → True → 跳过
+  False → api.index_classify(L1) + api.index_classify(L2) + api.index_classify(L3)
+       → upsert_industry_classify() → 永久缓存（行业分类不变）
+```
+
+**展示行业代码解析：**
+```
+_get_display_industry_codes():
+  1. 从 industry_classify 读取全部 L1/L2/L3
+  2. 应用递归拆分规则（见 §5.6）
+  3. 输出 63 个展示行业代码
+```
+
+**行业日线缓存判断（每个行业独立检查）：**
+```
+for each of 63 display industry codes:
+  latest = cache.get_latest_industry_date(code)
+  earliest = cache.get_earliest_industry_date(code)
+  
+  if latest >= end_date AND earliest <= fetch_start:
+    → 跳过（缓存完整）
+  else:
+    → 加入 to_fetch 列表
+```
+
+**并发拉取：**
+```
+to_fetch 列表 → ThreadPoolExecutor(max_workers=4)
+  每个行业 1 次 api.sw_daily() 调用
+  → upsert_industry_daily_bulk() 写入 industry_daily 表
+```
+
+**为什么行业按整段拉取而非 chunk：** `api.sw_daily` 单行业 1000 天数据约 659 行，远小于 5000 行分页限制，一次调用即可全部返回。
+
+### 5.6 行业拆分规则
+
+**配置文件：** `src/marketreview/tools/industry.py`
+
+```python
+SPLIT_L1 = {'建筑材料', '有色金属', '汽车', '电力设备', '电子', '通信'}
+SPLIT_L2 = {'半导体', '元件', '光伏设备'}
+```
+
+**递归替换逻辑：**
+```
+输入: 31 个申万 L1 行业
+for each L1:
+    if L1 in SPLIT_L1 → 替换为该 L1 下的全部 L2
+        for each L2:
+            if L2 in SPLIT_L2 → 替换为该 L2 下的全部 L3
+            else → 保留 L2
+    else → 保留 L1
+
+结果：25 L1 + 24 L2 + 14 L3 = 63 个展示行业
+```
+
+### 5.7 Step A8 — 个股行业分类
+
+```
+_ensure_stock_industries():
+  1. cache.get_stock_industries(all_codes) → 批量检查已有分类
+  2. 只拉取缺失的个股（首次 ~5000 只，后续仅新增）
+  3. 对每只缺失个股调用 api.index_member_all()
+  4. 限速：1 worker，每次调用间隔 0.15s（~400 次/分钟，低于 500/min 限制）
+  5. 写入 stock_industry_cache（永久缓存）
+```
+
+### 5.8 Step B — Wave33 两窗口缓存
+
+**两窗口设计：**
+```
+USE 窗口  = 40 个交易日（15 K线柱 + 21 滚动窗口 + 4 缓冲）
+CACHE 窗口 = 80 个交易日（2× USE 窗口，超取）
+```
+
+**缓存判断逻辑：**
+```
+1. 获取 end_date 前 180 天的交易日列表
+2. 取最近 40 个交易日作为 USE 窗口
+3. 检查 USE 窗口中每个日期：cache.has_wave33_date(d)
+
+快路径（USE 窗口全部命中）：
+  → _precompute_cumulative_profit(use_dates)
+  → 返回（不触发扫描）
+
+慢路径（USE 窗口有缺失）：
+  → 取 80 个交易日作为 CACHE 窗口
+  → 扫描 CACHE 窗口中所有未缓存的日期
+  → scan_wave33() 逐日扫描选股结果
+  → _precompute_cumulative_profit(use_dates)
+```
+
+**设计意图：** 用户在相邻日期之间切换时（如 6/20 → 6/19），新日期的 40 天 USE 窗口大部分已在上次 80 天 CACHE 扫描中覆盖，快路径直接命中。
+
+### 5.9 Step C — AI 总结（cache-first）
+
+```
+市场全景 AI（summary_type=None）：
+  期望 keys: {"guide/sh_index", "guide/cz_index", "summary"}
+  cache 命中全部 3 个 → 跳过
+  缺失任意一个 → generate_ai_summary()
+    ├─ get_market_overview() [读缓存，个股 <4000 时 fallback 到 live API]
+    ├─ build_technical_summary() × 2 [纯读缓存]
+    ├─ batch_chat() → 2 个指数导语并发 LLM 调用
+    ├─ llm.chat() → 1 个全景总结 LLM 调用
+    └─ save_ai_summary() × 3
+
+板块分析 AI（summary_type="sector_analysis"）：
+  期望 keys: {"sector_summary"} + 每个分析集行业的 "sector/{code}"
+  cache 命中全部 → 跳过
+  缺失任意一个 → generate_ai_sector_analysis()
+    ├─ get_industry_analysis_set() [TOP5 + BOTTOM5 + 频繁行业，去重]
+    ├─ batch_chat() → 每个行业 1 次并发 LLM 调用（max 4 workers）
+    ├─ llm.chat() → 1 个行业总结 LLM 调用
+    └─ save_ai_summary() × N
+```
+
+### 5.10 缓存判断决策树（总览）
+
+```
+ensure_data_loaded(end_date)
+│
+├─ 代理股票范围检查
+│     ├─ 完整 → 快路径（跳过 K 线拉取）
+│     └─ 不完整 → 慢路径（分 chunk 拉取）
+│
+├─ 指数数据（6 个指数，各自独立检查）
+│     ├─ latest >= end AND earliest <= start → 跳过
+│     └─ 否则 → api.index_daily()
+│
+├─ 股票基础信息
+│     ├─ stock_basic_cache 非空 → 跳过
+│     └─ 空 → api.stock_basic()
+│
+├─ 市值数据（10 天 chunk，逐段检查）
+│     ├─ daily_basic_has_range(cs, ce) → 跳过
+│     └─ 否则 → api.daily_basic()
+│
+├─ K 线覆盖率（逐日检查）
+│     ├─ 每天 ≥90% → 通过
+│     └─ <90% → 重拉，最多 2 次
+│
+├─ 行业分类
+│     ├─ industry_classify 非空 → 跳过
+│     └─ 空 → api.index_classify() × 3
+│
+├─ 行业日线（63 个行业，逐个检查）
+│     ├─ latest >= end AND earliest <= fetch_start → 跳过
+│     └─ 否则 → api.sw_daily()
+│
+└─ 个股行业分类（批量检查）
+      ├─ 已缓存 → 跳过
+      └─ 缺失 → api.index_member_all()（1 worker, 0.15s 限速）
+```
+
+### 5.11 关键常量速查
+
+| 常量 | 值 | 作用 |
+|------|-----|------|
+| `_FETCH_DAYS` | 1000 日历日 | K 线拉取窗口 |
+| `_CHECK_DAYS` | 500 日历日 | K 线覆盖检查窗口 |
+| `_CHUNK_DAYS` | 20 日历日 | 单 chunk 大小（防 offset 超限） |
+| `_MAX_FETCH_WORKERS` | 4 | K 线并发 worker 数 |
+| `_DB_FETCH_DAYS` | 180 日历日 | 市值数据拉取窗口 |
+| `_BASIC_CHUNK_DAYS` | 10 日历日 | 市值数据 chunk 大小 |
+| `_INDUSTRY_FETCH_DAYS` | 1000 日历日 | 行业日线拉取窗口 |
+| `_INDUSTRY_CHECK_DAYS` | 40 日历日 | 行业日线检查窗口（~27td） |
+| `_INDUSTRY_MAX_WORKERS` | 4 | 行业并发 worker 数 |
+| `_STOCK_IND_MAX_WORKERS` | 1 | 个股行业分类 worker（限速） |
+| `MAX_PAGES_PER_CHUNK` | 30 | 单 chunk 最大页数 |
+| `_BREADTH_CACHE_MIN_STOCKS` | 4000 | 涨跌比走缓存的阈值 |
 
 ## 6. Dashboard 页面
 
