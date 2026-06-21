@@ -164,6 +164,11 @@ _pending = st.session_state.pop("pending_load_date", None)
 if _pending:
     _expected_guides = {"guide/sh_index", "guide/cz_index", "summary"}
     _expected_sector = {"sector_summary"}
+    # Also require watchlist industry guides (否则旧缓存的 sector_summary
+    # 会阻止重新生成，导致新增的自选行业没有 AI 导语)
+    _wl = _service.get_watchlist_industries()["matched"]
+    for _w in _wl:
+        _expected_sector.add(f"sector/{_w['code']}")
 
     with st.status(f"正在加载 {_pending[:4]}-{_pending[4:6]}-{_pending[6:8]} 市场数据...", expanded=True) as status:
         _total_chunks = [None]  # mutable box for closure
@@ -277,12 +282,16 @@ if _current_td:
                 if "sector_summary" in _sector_ai:
                     st.caption("**行业总览**")
                     st.text(_sector_ai["sector_summary"]["content"])
+                # Build watchlist lookup (for ⭐ marker + name resolution)
+                _wl_data = _service.get_watchlist_industries()
+                _wl_codes = {w["code"] for w in _wl_data.get("matched", [])}
                 _industry_names = {
                     r["code"]: r["name"] for r in _service.get_industry_list()
                 }
-                # Build watchlist code set for ⭐ marker
-                _wl_data = _service.get_watchlist_industries()
-                _wl_codes = {w["code"] for w in _wl_data.get("matched", [])}
+                # 补上自选行业名称（展示行业列表不一定包含所有自选行业）
+                for _w in _wl_data.get("matched", []):
+                    if _w["code"] not in _industry_names:
+                        _industry_names[_w["code"]] = _w["name"]
                 for _gk in sorted(_sector_ai.keys()):
                     if _gk == "sector_summary":
                         continue
