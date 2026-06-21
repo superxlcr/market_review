@@ -1,0 +1,10 @@
+# 自选行业列表示例
+# 使用方法：
+#   1. 复制本文件为 watchlist_industries.txt
+#   2. 删除不需要的行，添加你想关注的行业名称
+#   3. 名称需与申万 SW2021 行业分类完全一致
+#   4. 支持 L1/L2/L3 任意层级（如：半导体、光伏设备、白酒）
+#
+# 提示：可在控制台的「行业分类规则」展开栏查看完整行业列表
+# 或查询数据库：
+#   SELECT industry_name, level FROM industry_classify ORDER BY level, industry_name;
