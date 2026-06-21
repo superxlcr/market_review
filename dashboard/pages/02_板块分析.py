@@ -55,6 +55,28 @@ st.divider()
 _ranking = _service.get_industry_ranking(_trade_date)
 _analysis_set = _service.get_industry_analysis_set(_trade_date)
 
+# ── 自选行业 ──
+_watchlist = _service.get_watchlist_industries()
+if _watchlist:
+    _watchlist_codes = {w["code"] for w in _watchlist}
+    _watchlist_enriched = []
+    for _w in _watchlist:
+        _df = _service.get_industry_daily(_w["code"], end_date=_trade_date, lookback=1)
+        if not _df.empty:
+            _row = _df.iloc[-1]
+            _row_td = str(_row.get("trade_date", ""))
+            if _row_td == _trade_date:
+                _watchlist_enriched.append({
+                    **_w,
+                    "pct_change": float(_row.get("pct_change", 0) or 0),
+                    "close": float(_row.get("close", 0) or 0),
+                    "amount": float(_row.get("amount", 0) or 0),
+                })
+    _watchlist_enriched.sort(key=lambda x: x["pct_change"], reverse=True)
+else:
+    _watchlist_enriched = []
+    _watchlist_codes = set()
+
 if not _ranking:
     st.warning("⚠️ 暂无行业数据，请先在「控制台」加载今日数据")
     st.stop()
@@ -121,16 +143,63 @@ with _col_right:
 st.divider()
 
 # ═══════════════════════════════════════════════════════════
-#  3. 行业详细分析 Expander 列表
+#  3. ⭐ 自选行业
 # ═══════════════════════════════════════════════════════════
 
-st.subheader(f"🔍 行业详细分析（共 {len(_analysis_set)} 个）")
-st.caption("候选来源：涨幅 TOP 5 · 跌幅 TOP 5 · 权重贡献上榜 · 近5日频繁领涨/领跌（去重后）")
+st.subheader(f"⭐ 自选行业（共 {len(_watchlist_enriched)} 个）")
+st.caption("配置文件：config/watchlist_industries.txt")
+
+if not _watchlist_enriched:
+    st.info("暂无自选行业，请在 `config/watchlist_industries.txt` 中配置行业名称")
+else:
+    for _entry in _watchlist_enriched:
+        _code = _entry["code"]
+        _name = _entry["name"]
+        _level = _entry["level"]
+        _pct = _entry["pct_change"]
+
+        _pct_color = up_down_color(_pct)
+        _level_tag = {"L1": "一级", "L2": "二级", "L3": "三级"}.get(_level, _level)
+
+        _info_line = (
+            f"{_name}  ·  "
+            f"<span style='color:{_pct_color};font-weight:bold;'>{_pct:+.2f}%</span>"
+            f"  <span style='font-size:13px;color:#888;'>[{_level_tag}] ⭐ 自选</span>"
+        )
+        st.html(f"<div style='margin-bottom:2px;font-size:15px;'>{_info_line}</div>")
+
+        with st.expander(f"{_name} ({_code})", expanded=False):
+            # ── AI industry guide ──
+            _guide_key = f"sector/{_code}"
+            _guide = _sector_ai.get(_guide_key, {}).get("content", "")
+            if _guide and _guide != "AI 摘要暂时不可用":
+                st.info(f"🤖 {_guide}")
+
+            _df = _service.get_industry_daily(_code, end_date=_trade_date, lookback=360)
+            if _df.empty:
+                st.warning(f"暂无 {_name}（{_code}）的日线数据")
+                continue
+
+            render_ohlcv_section(_df, _code, _name, _service, "industry",
+                                 industry_level=_level)
+
+st.divider()
+
+# ═══════════════════════════════════════════════════════════
+#  4. 行业详细分析 Expander 列表
+# ═══════════════════════════════════════════════════════════
+
+_analysis_count = sum(1 for e in _analysis_set if e["code"] not in _watchlist_codes)
+st.subheader(f"🔍 行业详细分析（共 {_analysis_count} 个）")
+st.caption("候选来源：涨幅 TOP 5 · 跌幅 TOP 5 · 权重贡献上榜 · 近5日频繁领涨/领跌（去重后，已在自选区的不重复展示）")
 
 if not _analysis_set:
     st.info("暂无需要分析的行业")
 else:
     for _entry in _analysis_set:
+        # Skip industries already shown in watchlist
+        if _entry["code"] in _watchlist_codes:
+            continue
         _code = _entry["code"]
         _name = _entry["name"]
         _level = _entry["level"]
