@@ -64,7 +64,7 @@ if _watchlist:
         _df = _service.get_industry_daily(_w["code"], end_date=_trade_date, lookback=1)
         if not _df.empty:
             _row = _df.iloc[-1]
-            _row_td = str(_row.get("trade_date", ""))
+            _row_td = str(_row.get("date", ""))
             if _row_td == _trade_date:
                 _watchlist_enriched.append({
                     **_w,
