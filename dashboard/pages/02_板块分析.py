@@ -152,6 +152,11 @@ st.caption("配置文件：config/watchlist_industries.txt")
 if not _watchlist_enriched:
     st.info("暂无自选行业，请在 `config/watchlist_industries.txt` 中配置行业名称")
 else:
+    # Build lookup of analysis set reasons by code
+    _analysis_reasons: dict[str, list[str]] = {}
+    for _ae in _analysis_set:
+        _analysis_reasons[_ae["code"]] = _ae.get("reasons", [])
+
     for _entry in _watchlist_enriched:
         _code = _entry["code"]
         _name = _entry["name"]
@@ -161,10 +166,14 @@ else:
         _pct_color = up_down_color(_pct)
         _level_tag = {"L1": "一级", "L2": "二级", "L3": "三级"}.get(_level, _level)
 
+        # Merge reasons: ⭐ 自选 + any analysis set reasons
+        _reasons = ["⭐ 自选"] + _analysis_reasons.get(_code, [])
+        _reasons_str = "  ".join(_reasons)
+
         _info_line = (
             f"{_name}  ·  "
             f"<span style='color:{_pct_color};font-weight:bold;'>{_pct:+.2f}%</span>"
-            f"  <span style='font-size:13px;color:#888;'>[{_level_tag}] ⭐ 自选</span>"
+            f"  <span style='font-size:13px;color:#888;'>[{_level_tag}] {_reasons_str}</span>"
         )
         st.html(f"<div style='margin-bottom:2px;font-size:15px;'>{_info_line}</div>")
 

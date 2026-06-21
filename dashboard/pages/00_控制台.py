@@ -280,6 +280,9 @@ if _current_td:
                 _industry_names = {
                     r["code"]: r["name"] for r in _service.get_industry_list()
                 }
+                # Build watchlist code set for ⭐ marker
+                _wl_data = _service.get_watchlist_industries()
+                _wl_codes = {w["code"] for w in _wl_data.get("matched", [])}
                 for _gk in sorted(_sector_ai.keys()):
                     if _gk == "sector_summary":
                         continue
@@ -287,7 +290,8 @@ if _current_td:
                     if _sc and _sc != "AI 摘要暂时不可用":
                         _ind_code = _gk.replace("sector/", "")
                         _ind_name = _industry_names.get(_ind_code, _ind_code)
-                        st.caption(f"**{_ind_name}（{_ind_code}）**")
+                        _star = " ⭐" if _ind_code in _wl_codes else ""
+                        st.caption(f"**{_ind_name}（{_ind_code}）{_star}**")
                         st.text(_sc)
     elif _ai and "error" not in _ai:
         st.markdown("---")
