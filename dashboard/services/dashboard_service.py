@@ -1440,10 +1440,36 @@ class DashboardService:
 
         # ── 2. Prepare industry tasks ──
         candidates = self.get_industry_analysis_set(trade_date)
+
+        # Merge watchlist industries (dedup by code)
+        watchlist = self.get_watchlist_industries()
+        seen_codes: set[str] = {c["code"] for c in candidates}
+        if watchlist:
+            for w in watchlist:
+                if w["code"] not in seen_codes:
+                    # Fetch pct_change for the watchlist industry
+                    df_1d = self._dp.get_industry_daily(
+                        w["code"], end_date=trade_date, lookback=1
+                    )
+                    pct = 0.0
+                    if not df_1d.empty:
+                        row = df_1d.iloc[-1]
+                        if str(row.get("trade_date", "")) == trade_date:
+                            pct = float(row.get("pct_change", 0) or 0)
+
+                    candidates.append({
+                        "code": w["code"],
+                        "name": w["name"],
+                        "level": w["level"],
+                        "pct_change": pct,
+                        "reasons": ["⭐ 自选"],
+                    })
+                    seen_codes.add(w["code"])
+
         if not candidates:
             return {"error": "无行业分析候选"}
 
-        log.info("stage=sector_data_prep candidates=%d", len(candidates))
+        log.info("stage=sector_data_prep candidates=%d (with watchlist)", len(candidates))
 
         sector_tasks: list[dict] = []
         for c in candidates:
