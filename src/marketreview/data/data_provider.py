@@ -72,6 +72,7 @@ class DataProvider:
 
     def ensure_data_loaded(
         self, end_date: str, progress_cb=None,
+        extra_industry_codes: list[str] | None = None,
     ) -> dict:
         """
         Ensure tushare_cache has raw K-line + adj_factor for all stocks.
@@ -134,7 +135,8 @@ class DataProvider:
             self._validate_coverage(fetch_start, end_date)
             # Industry daily may not be loaded yet on this date
             ind_classify_count, ind_daily_count = self._ensure_industry_daily(
-                end_date, progress_cb
+                end_date, progress_cb,
+                extra_codes=extra_industry_codes,
             )
             # Stock-to-industry classification (lazy → eager on first run)
             stock_ind_count = self._ensure_stock_industries(progress_cb)
@@ -207,7 +209,8 @@ class DataProvider:
 
         # ── Load industry (sector) daily data ──
         ind_classify_count, ind_daily_count = self._ensure_industry_daily(
-            end_date, progress_cb
+            end_date, progress_cb,
+            extra_codes=extra_industry_codes,
         )
 
         # ── Stock-to-industry classification (eager populate on first run) ──
@@ -1046,14 +1049,16 @@ class DataProvider:
                  "(from %d L1)", len(codes), len(l1_list))
         return codes
 
-    def _ensure_industry_daily(self, end_date: str, progress_cb=None
+    def _ensure_industry_daily(self, end_date: str, progress_cb=None,
+                               extra_codes: list[str] | None = None
                                ) -> tuple[int, int]:
         """
-        Ensure industry_daily table has data for all display industries.
+        Ensure industry_daily table has data for all display industries
+        AND any extra_codes (e.g., watchlist industries not in display set).
 
         Steps:
           1. Lazy-init industry_classify (once)
-          2. Compute 63 display industry codes
+          2. Compute display industry codes + merge extra_codes
           3. Concurrently fetch sw_daily for each industry that has gaps
 
         Returns (classify_rows, daily_industries_fetched).
@@ -1067,8 +1072,16 @@ class DataProvider:
         if progress_cb:
             progress_cb("ind_classify", classify_count, classify_count)
 
-        # ── Step 2: compute display codes ──
-        codes = self._get_display_industry_codes()
+        # ── Step 2: compute display codes + merge extra ──
+        codes = list(self._get_display_industry_codes())
+        if extra_codes:
+            existing = set(codes)
+            for ec in extra_codes:
+                if ec not in existing:
+                    codes.append(ec)
+                    existing.add(ec)
+            log.info("_ensure_industry_daily: merged %d extra codes, total %d",
+                     len(extra_codes), len(codes))
         if not codes:
             log.warning("_ensure_industry_daily: no display codes — skip")
             return classify_count, 0

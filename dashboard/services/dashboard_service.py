@@ -36,7 +36,7 @@ class DashboardService:
     def ensure_data_loaded(self, trade_date: str, progress_cb=None) -> dict:
         """
         Ensure cache has raw K-line + adj_factor for all stocks.
-        Called once when the user selects a date in the console.
+        Also ensures watchlist industry daily data.
 
         Args:
             trade_date: target date (YYYYMMDD)
@@ -44,7 +44,16 @@ class DashboardService:
         Returns:
             {"status": "ok"|"error", "fetched_dates": int, "elapsed": float}
         """
-        return self._dp.ensure_data_loaded(trade_date, progress_cb=progress_cb)
+        # Resolve watchlist industry codes for extra fetch
+        extra_codes: list[str] = []
+        try:
+            wl = self.get_watchlist_industries()
+            extra_codes = [w["code"] for w in wl if w.get("code")]
+        except Exception as e:
+            log.warning("ensure_data_loaded: failed to read watchlist: %s", e)
+
+        return self._dp.ensure_data_loaded(trade_date, progress_cb=progress_cb,
+                                           extra_industry_codes=extra_codes)
 
     @staticmethod
     def raw_to_qfq(df):
