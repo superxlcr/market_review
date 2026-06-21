@@ -79,7 +79,7 @@ marketreview/
 
 ## 4. 数据层
 
-### 4.1 数据库（SQLite，8 表）
+### 4.1 数据库（SQLite，11 表）
 
 | 表 | 用途 | 关键字段 |
 |----|------|----------|
@@ -202,7 +202,7 @@ cache.get_earliest_date("000001.SZ") → proxy_earliest（缓存最早日期）
 | 维度 | K 线（tushare_cache） | 行业日线（industry_daily） |
 |------|----------------------|---------------------------|
 | API | `api.daily`（免费） | `api.sw_daily`（付费） |
-| 缓存判断 | 1 只代理股票 | 63 个行业逐个检查 |
+| 缓存判断 | 1 只代理股票 | 展示行业 + 自选行业逐个检查（数量由拆分规则 + 配置文件决定） |
 | 拉取粒度 | 20 天 chunk | 按行业整段拉取 |
 | 并发 | 4 worker 处理 chunk | 4 worker 处理行业 |
 | 检查窗口 | 500 日历日 | 40 日历日（`_INDUSTRY_CHECK_DAYS`） |
@@ -222,12 +222,23 @@ _ensure_industry_classify():
 _get_display_industry_codes():
   1. 从 industry_classify 读取全部 L1/L2/L3
   2. 应用递归拆分规则（见 §5.6）
-  3. 输出 63 个展示行业代码
+  3. 输出展示行业代码（当前：25 L1 + 24 L2 + 14 L3 = 63 个，数量随拆分配置变化）
 ```
 
-**行业日线缓存判断（每个行业独立检查）：**
+**自选行业代码解析（新增）：**
 ```
-for each of 63 display industry codes:
+_get_watchlist_industry_codes():
+  1. 读取 config/watchlist_industries.txt
+  2. 在 industry_classify 表中精确匹配名称 → (code, name, level)
+  3. 匹配失败的名称 → logger.warning，跳过
+```
+
+**行业日线缓存判断（展示行业 ∪ 自选行业）：**
+```
+codes_to_check = _get_display_industry_codes() ∪ _get_watchlist_industry_codes()
+// 并集去重 — 自选行业可能已包含在展示行业中
+
+for each code in codes_to_check:
   latest = cache.get_latest_industry_date(code)
   earliest = cache.get_earliest_industry_date(code)
   
@@ -321,10 +332,12 @@ CACHE 窗口 = 80 个交易日（2× USE 窗口，超取）
 
 板块分析 AI（summary_type="sector_analysis"）：
   期望 keys: {"sector_summary"} + 每个分析集行业的 "sector/{code}"
+             + 每个自选行业的 "sector/{code}"（与展示行业同模板）
   cache 命中全部 → 跳过
   缺失任意一个 → generate_ai_sector_analysis()
     ├─ get_industry_analysis_set() [TOP5 + BOTTOM5 + 频繁行业，去重]
-    ├─ batch_chat() → 每个行业 1 次并发 LLM 调用（max 4 workers）
+    ├─ get_watchlist_industries() [自选行业列表]
+    ├─ 合并去重后 batch_chat() → 每个行业 1 次并发 LLM 调用（max 4 workers）
     ├─ llm.chat() → 1 个行业总结 LLM 调用
     └─ save_ai_summary() × N
 ```
@@ -358,7 +371,7 @@ ensure_data_loaded(end_date)
 │     ├─ industry_classify 非空 → 跳过
 │     └─ 空 → api.index_classify() × 3
 │
-├─ 行业日线（63 个行业，逐个检查）
+├─ 行业日线（展示行业 ∪ 自选行业，逐个检查）
 │     ├─ latest >= end AND earliest <= fetch_start → 跳过
 │     └─ 否则 → api.sw_daily()
 │
