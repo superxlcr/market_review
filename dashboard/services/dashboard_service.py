@@ -47,7 +47,7 @@ class DashboardService:
         # Resolve watchlist industry codes for extra fetch
         extra_codes: list[str] = []
         try:
-            wl = self.get_watchlist_industries()
+            wl = self.get_watchlist_industries()["matched"]
             extra_codes = [w["code"] for w in wl if w.get("code")]
         except Exception as e:
             log.warning("ensure_data_loaded: failed to read watchlist: %s", e)
@@ -254,19 +254,20 @@ class DashboardService:
             })
         return result
 
-    def get_watchlist_industries(self) -> list[dict]:
+    def get_watchlist_industries(self) -> dict:
         """
         Read config/watchlist_industries.txt, match names against
-        industry_classify table, return matched industries.
+        industry_classify table.
 
-        Returns list of dicts: {code, name, level}.
-        Unmatched names are logged as warnings and excluded.
+        Returns dict:
+          - matched: list of {code, name, level}
+          - unmatched: list of names that couldn't be resolved
         """
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "config", "watchlist_industries.txt",
         )
-        result: list[dict] = []
+        result: dict = {"matched": [], "unmatched": []}
         if not os.path.exists(config_path):
             log.info("get_watchlist_industries: config file not found at %s", config_path)
             return result
@@ -293,20 +294,20 @@ class DashboardService:
         for code, info in classify_map.items():
             name_to_info[info.get("industry_name", "")] = {**info, "code": code}
 
-        matched = 0
         for name in names:
             if name in name_to_info:
                 info = name_to_info[name]
-                result.append({
+                result["matched"].append({
                     "code": info["code"],
                     "name": name,
                     "level": info.get("level", ""),
                 })
-                matched += 1
             else:
+                result["unmatched"].append(name)
                 log.warning("get_watchlist_industries: name '%s' not found in classification", name)
 
-        log.info("get_watchlist_industries: %d/%d names matched", matched, len(names))
+        log.info("get_watchlist_industries: %d matched, %d unmatched",
+                 len(result["matched"]), len(result["unmatched"]))
         return result
 
     def get_industry_daily(self, industry_code: str,
@@ -1442,7 +1443,7 @@ class DashboardService:
         candidates = self.get_industry_analysis_set(trade_date)
 
         # Merge watchlist industries (dedup by code)
-        watchlist = self.get_watchlist_industries()
+        watchlist = self.get_watchlist_industries()["matched"]
         seen_codes: set[str] = {c["code"] for c in candidates}
         if watchlist:
             for w in watchlist:
@@ -1620,7 +1621,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.9.0"
+    _AI_VERSION = "1.9.1"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """

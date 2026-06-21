@@ -78,34 +78,41 @@ _service = DashboardService()
 with st.expander("⭐ 自选行业", expanded=False):
     st.markdown("**配置文件：** `config/watchlist_industries.txt`")
 
-    _watchlist = _service.get_watchlist_industries()
-    if not _watchlist:
+    _wl_data = _service.get_watchlist_industries()
+    _watchlist = _wl_data["matched"]
+    _unmatched = _wl_data["unmatched"]
+
+    if not _watchlist and not _unmatched:
         st.caption("暂无自选行业，请在 `config/watchlist_industries.txt` 中配置")
         st.caption("（参考 `config/watchlist_industries.example.txt`）")
     else:
-        _wl_rows = ""
-        for _i, _w in enumerate(_watchlist):
-            _wl_rows += (
-                f"<tr>"
-                f"<td style='text-align:center;'>{_i + 1}</td>"
-                f"<td>{_w['name']}</td>"
-                f"<td style='text-align:center;'>{_w['level']}</td>"
-                f"<td style='text-align:center;color:#888;font-size:13px;'>{_w['code']}</td>"
-                f"<td style='text-align:center;'>✅</td>"
-                f"</tr>"
-            )
-        st.html(f"""
-        <table style="width:100%;font-size:15px;border-collapse:collapse;">
-            <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;">
-                <th style="text-align:center;width:30px;">#</th>
-                <th style="text-align:left;">行业名称</th>
-                <th style="text-align:center;">Level</th>
-                <th style="text-align:center;">Code</th>
-                <th style="text-align:center;">状态</th>
-            </tr></thead>
-            <tbody>{_wl_rows}</tbody>
-        </table>
-        """)
+        if _watchlist:
+            _wl_rows = ""
+            for _i, _w in enumerate(_watchlist):
+                _wl_rows += (
+                    f"<tr>"
+                    f"<td style='text-align:center;'>{_i + 1}</td>"
+                    f"<td>{_w['name']}</td>"
+                    f"<td style='text-align:center;'>{_w['level']}</td>"
+                    f"<td style='text-align:center;color:#888;font-size:13px;'>{_w['code']}</td>"
+                    f"<td style='text-align:center;'>✅</td>"
+                    f"</tr>"
+                )
+            st.html(f"""
+            <table style="width:100%;font-size:15px;border-collapse:collapse;">
+                <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;">
+                    <th style="text-align:center;width:30px;">#</th>
+                    <th style="text-align:left;">行业名称</th>
+                    <th style="text-align:center;">Level</th>
+                    <th style="text-align:center;">Code</th>
+                    <th style="text-align:center;">状态</th>
+                </tr></thead>
+                <tbody>{_wl_rows}</tbody>
+            </table>
+            """)
+        if _unmatched:
+            _names = "、".join(_unmatched)
+            st.warning(f"⚠️ 以下 {len(_unmatched)} 个名称未匹配到 SW2021 行业：**{_names}**，请检查拼写")
         st.caption("（后续将支持自选个股）")
 
 # ── Default date ──

@@ -56,7 +56,7 @@ _ranking = _service.get_industry_ranking(_trade_date)
 _analysis_set = _service.get_industry_analysis_set(_trade_date)
 
 # ── 自选行业 ──
-_watchlist = _service.get_watchlist_industries()
+_watchlist = _service.get_watchlist_industries()["matched"]
 if _watchlist:
     _watchlist_codes = {w["code"] for w in _watchlist}
     _watchlist_enriched = []
