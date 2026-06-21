@@ -245,6 +245,61 @@ class DashboardService:
             })
         return result
 
+    def get_watchlist_industries(self) -> list[dict]:
+        """
+        Read config/watchlist_industries.txt, match names against
+        industry_classify table, return matched industries.
+
+        Returns list of dicts: {code, name, level}.
+        Unmatched names are logged as warnings and excluded.
+        """
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "config", "watchlist_industries.txt",
+        )
+        result: list[dict] = []
+        if not os.path.exists(config_path):
+            log.info("get_watchlist_industries: config file not found at %s", config_path)
+            return result
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        names = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            names.append(stripped)
+
+        if not names:
+            return result
+
+        # Match against industry_classify
+        self._dp._ensure_industry_classify()  # lazy-init if needed
+        classify_map = self._dp.cache.get_industry_classify_map()
+
+        # Build name → info lookup
+        name_to_info: dict[str, dict] = {}
+        for code, info in classify_map.items():
+            name_to_info[info.get("industry_name", "")] = {**info, "code": code}
+
+        matched = 0
+        for name in names:
+            if name in name_to_info:
+                info = name_to_info[name]
+                result.append({
+                    "code": info["code"],
+                    "name": name,
+                    "level": info.get("level", ""),
+                })
+                matched += 1
+            else:
+                log.warning("get_watchlist_industries: name '%s' not found in classification", name)
+
+        log.info("get_watchlist_industries: %d/%d names matched", matched, len(names))
+        return result
+
     def get_industry_daily(self, industry_code: str,
                            end_date: str = None,
                            lookback: int = 240):
