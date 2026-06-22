@@ -378,11 +378,11 @@ def _high_low_position(df: pd.DataFrame) -> str:
 
     高档 — satisfies EITHER:
       - MA5 > MA10 > MA20 (均线多头排列)
-      - 今日最高价 = 近20日最高价 (短期暴涨创阶段新高)
+      - 今日最高价 = 近60日最高价 (阶段新高)
 
     低档 — satisfies EITHER:
       - MA5 < MA10 < MA20 (均线空头排列)
-      - 今日最低价 = 近20日最低价 (短期暴跌创阶段新低)
+      - 今日最低价 = 近60日最低价 (阶段新低)
     """
     from .technical import calc_ma
 
@@ -400,19 +400,19 @@ def _high_low_position(df: pd.DataFrame) -> str:
     ma_bullish = m5 is not None and m10 is not None and m20 is not None and m5 > m10 > m20
     ma_bearish = m5 is not None and m10 is not None and m20 is not None and m5 < m10 < m20
 
-    # ── 20-day extreme check ──
-    lookback = min(20, len(df))
+    # ── 60-day extreme check ──
+    lookback = min(60, len(df))
     recent = df.iloc[-lookback:]
     today_high = float(df["high"].iloc[-1])
     today_low = float(df["low"].iloc[-1])
     extreme_high = float(recent["high"].max())
     extreme_low = float(recent["low"].min())
-    is_20d_high = today_high >= extreme_high
-    is_20d_low = today_low <= extreme_low
+    is_60d_high = today_high >= extreme_high
+    is_60d_low = today_low <= extreme_low
 
-    if ma_bullish or is_20d_high:
+    if ma_bullish or is_60d_high:
         return "高档"
-    if ma_bearish or is_20d_low:
+    if ma_bearish or is_60d_low:
         return "低档"
     return "盘整"
 
