@@ -258,14 +258,19 @@ def compute_trend(counts: List[int]) -> dict:
     """
     Compute trend state from wave33 count series (most-recent-first).
 
+    Incorporates hysteresis (same as ``compute_trend_series``): the effective
+    direction only flips after 3 *consecutive* opposite-direction moves.
+    Until then, the trend is still in the old direction and shown as "盘整中".
+
     Returns:
         {direction: "up"|"down"|"flat", streak: int, label: str}
     """
     if len(counts) < 2:
         return {"direction": "flat", "streak": 0, "label": "维持，盘整中"}
 
-    direction = "flat"
-    streak = 0
+    # ── 1. Raw direction + streak (most-recent comparison first) ──
+    raw_direction = "flat"
+    raw_streak = 0
 
     for i in range(len(counts) - 1):
         curr = counts[i]
@@ -278,30 +283,69 @@ def compute_trend(counts: List[int]) -> dict:
             new_dir = "flat"
 
         if i == 0:
-            direction = new_dir
-            streak = 1 if new_dir != "flat" else 0
+            raw_direction = new_dir
+            raw_streak = 1 if new_dir != "flat" else 0
         else:
-            if new_dir == direction:
-                streak += 1
+            if new_dir == raw_direction:
+                raw_streak += 1
             else:
                 break
 
-    if direction == "flat":
+    if raw_direction == "flat":
         return {"direction": "flat", "streak": 0, "label": "维持，盘整中"}
 
-    if direction == "up":
-        if streak >= 5:
-            label = f"确认上升，连续上升 {streak} 天"
-        elif streak >= 3:
-            label = f"暂时上升，连续上升 {streak} 天"
+    # ── 2. Hysteresis direction (process chronologically) ──
+    # counts is most-recent-first; reverse for chronological order.
+    chronological = list(reversed(counts))
+    hysteresis_dir = "up"
+    opposite_streak = 0
+    for i in range(1, len(chronological)):
+        if chronological[i] > chronological[i - 1]:
+            if hysteresis_dir == "up":
+                opposite_streak = 0
+            else:
+                opposite_streak += 1
+                if opposite_streak >= 3:
+                    hysteresis_dir = "up"
+                    opposite_streak = 0
+        elif chronological[i] < chronological[i - 1]:
+            if hysteresis_dir == "down":
+                opposite_streak = 0
+            else:
+                opposite_streak += 1
+                if opposite_streak >= 3:
+                    hysteresis_dir = "down"
+                    opposite_streak = 0
         else:
-            label = "维持上升，盘整中"
-    else:
-        if streak >= 5:
-            label = f"确认下降，连续下降 {streak} 天"
-        elif streak >= 3:
-            label = f"暂时下降，连续下降 {streak} 天"
-        else:
-            label = "维持下降，盘整中"
+            opposite_streak = 0
 
-    return {"direction": direction, "streak": streak, "label": label}
+    # ── 3. Determine label ──
+    if raw_direction != hysteresis_dir:
+        # Trend hasn't flipped yet — opposite streak < 3
+        if hysteresis_dir == "up":
+            label = "上升趋势，盘整中"
+        else:
+            label = "下降趋势，盘整中"
+        return {"direction": hysteresis_dir, "streak": raw_streak, "label": label}
+
+    # Direction matches hysteresis — trend is established or confirmed
+    if raw_direction == "up":
+        if raw_streak >= 5:
+            label = f"确认上升，连续上升 {raw_streak} 天"
+        elif raw_streak >= 3:
+            label = f"暂时上升，连续上升 {raw_streak} 天"
+        elif raw_streak == 2:
+            label = "连续上涨2天"
+        else:
+            label = "上涨第1天"
+    else:
+        if raw_streak >= 5:
+            label = f"确认下降，连续下降 {raw_streak} 天"
+        elif raw_streak >= 3:
+            label = f"暂时下降，连续下降 {raw_streak} 天"
+        elif raw_streak == 2:
+            label = "连续下跌2天"
+        else:
+            label = "下跌第1天"
+
+    return {"direction": raw_direction, "streak": raw_streak, "label": label}

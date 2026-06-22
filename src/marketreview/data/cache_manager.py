@@ -433,19 +433,23 @@ class CacheManager:
         # All existing dates must be ≥ 90% of max
         if not all(c >= max_cnt * 0.9 for c in counts):
             return False
-        # Boundary check: at least one date within 14 calendar days of
-        # end_date must have data.  14 days covers the longest A-share
-        # holiday (CNY can span 10-12 calendar days), preventing false
-        # re-fetches when a chunk_end falls inside a long holiday.
+        # Boundary check: find the most recent TRADING DAY (has K-line)
+        # within 14 calendar days of end_date, and verify daily_basic
+        # is present for that day.  This keeps the daily_basic cache
+        # check independent: K-line cached ≠ daily_basic cached.
+        # 14 days covers the longest A-share holiday (CNY 10-12 days).
         end_dt = datetime.strptime(end_date, "%Y%m%d")
-        found = False
+        found_trading_day = False
         for offset in range(15):  # 0..14 days back
             check_date = (end_dt - timedelta(days=offset)).strftime("%Y%m%d")
-            if self.count_daily_basic_date(check_date) > 0:
-                found = True
+            if self.count_daily_date(check_date) > 0:
+                # Found a trading day — daily_basic must also have data
+                found_trading_day = True
+                if self.count_daily_basic_date(check_date) == 0:
+                    return False  # trading day lacks daily_basic → fetch
                 break
-        if not found:
-            return False
+        if not found_trading_day:
+            return False  # no trading day in window → fetch (safe default)
         return True
 
     def count_daily_basic_date(self, date_str: str) -> int:
