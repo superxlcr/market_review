@@ -1568,15 +1568,30 @@ class DashboardService:
         if progress_cb:
             progress_cb("sector_summary_start", "正在生成行业总览...")
 
-        # Build ranking text
+        # Build ranking text — top 5 gainers + top 5 losers
         ranking = self.get_industry_ranking(trade_date)
+        top5 = ranking[:5] if ranking else []
+        bot5 = ranking[-5:] if ranking and len(ranking) > 5 else []
+        # dedup in case total < 10
+        top_codes = {r["code"] for r in top5}
+        bot5 = [r for r in bot5 if r["code"] not in top_codes]
+
         ranking_lines = []
-        for i, r in enumerate(ranking[:10] if ranking else []):
+        ranking_lines.append("【涨幅前5】")
+        for i, r in enumerate(top5):
             ranking_lines.append(
                 f"  {i + 1}. {r['name']} ({r['level']})  "
                 f"涨跌幅 {r['pct_change']:+.2f}%  "
                 f"成交额 {r['amount'] / 1e5:,.0f}亿"
             )
+        if bot5:
+            ranking_lines.append("【跌幅前5】")
+            for i, r in enumerate(bot5):
+                ranking_lines.append(
+                    f"  {i + 1}. {r['name']} ({r['level']})  "
+                    f"涨跌幅 {r['pct_change']:+.2f}%  "
+                    f"成交额 {r['amount'] / 1e5:,.0f}亿"
+                )
         ranking_text = "\n".join(ranking_lines) if ranking_lines else "无排名数据"
 
         # Build sector guides text
@@ -1621,7 +1636,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.10.2"
+    _AI_VERSION = "1.10.4"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
