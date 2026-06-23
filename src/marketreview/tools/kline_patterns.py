@@ -271,8 +271,14 @@ def _neck_common(
 
     共通条件:
       1. 今：收阳线、开低（今开 < 昨实体下沿）
+      2. 非高档：高档（上涨趋势）中低开阳线 → 上升反托线，非颈线
     """
     if len(df) < 2:
+        return None
+
+    # 高档（上涨趋势中）不触发颈上线/颈内线
+    # 此时低开阳线更可能是上升反托线的整理信号，而非反弹无力
+    if _high_low_position(df) == "高档":
         return None
 
     prev = df.iloc[-2]
@@ -523,6 +529,68 @@ def detect_high_level_long_yang(
     }
 
 
+def detect_rising_anti_drag(
+    df: pd.DataFrame, obj_type: str = "index",
+) -> dict[str, Any] | None:
+    """检测上升反托线。
+
+    条件:
+      1. 高档（_high_low_position 判定，均线多头排列）
+      2. 昨：创新高（昨日最高价 = 近60日最高价）
+      3. 今：低开（今开 < 昨收）
+      4. 今：收盘 < 昨实体下沿（收在昨日实体下方，盘中可刺入）
+      阳线阴线均可。
+
+    → 偏多解读：出现在明确的上涨趋势中，代表短暂的冷却和整理，
+      之后大概率会继续上攻。后续持续放量则短线直接再创新高的概率增大，
+      否则可能经过中段整理后再起涨。
+    """
+    if len(df) < 2:
+        return None
+
+    # ① 必须高档
+    position = _high_low_position(df)
+    if position != "高档":
+        return None
+
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
+
+    prev_o = float(prev["open"])
+    prev_c = float(prev["close"])
+    prev_h = float(prev["high"])
+
+    curr_o = float(curr["open"])
+    curr_c = float(curr["close"])
+
+    # ② 昨创新高（昨日最高价 ≥ 不含今日的60日窗口最高价）
+    lookback = min(60, len(df) - 1)
+    recent_before_today = df.iloc[-(lookback + 1):-1]  # 不含今日
+    yesterday_window_high = float(recent_before_today["high"].max())
+    if prev_h < yesterday_window_high:
+        return None
+
+    # ③ 今低开（今开 < 昨收）
+    if curr_o >= prev_c:
+        return None
+
+    # ④ 今收盘 < 昨实体下沿（收在昨日实体下方）
+    entity_low = min(prev_o, prev_c)
+    if curr_c >= entity_low:
+        return None
+
+    return {
+        "name": "上升反托线",
+        "direction": "偏多",
+        "note": (
+            "出现在明确的上涨趋势中，代表短暂的冷却和整理，"
+            "之后大概率会继续上攻；"
+            "后续持续放量则短线直接再创新高的概率增大，"
+            "否则可能经过中段整理后再起涨"
+        ),
+    }
+
+
 def detect_patterns(
     df: pd.DataFrame, obj_type: str = "index",
 ) -> list[dict[str, Any]]:
@@ -563,6 +631,7 @@ def detect_patterns(
 _PATTERN_DETECTORS = [
     detect_bullish_engulfing_shadow,
     detect_bearish_engulfing_shadow,
+    detect_rising_anti_drag,
     detect_neck_above,
     detect_neck_inside,
     detect_spinning_top,
