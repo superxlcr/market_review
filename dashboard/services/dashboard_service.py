@@ -326,20 +326,29 @@ class DashboardService:
             df = df.rename(columns={"trade_date": "date"})
         return df
 
-    def get_industry_ranking(self, trade_date: str) -> list[dict]:
+    def get_industry_ranking(self, trade_date: str, lookback: int = 1) -> list[dict]:
         """
         Return all display industries ranked by pct_change on trade_date.
 
-        Each entry: {code, name, level, pct_change, close, amount}.
+        Each entry: {code, name, level, pct_change, close, amount,
+                      pct_5d (if lookback>=6), pct_20d (if lookback>=21)}.
         Sorted descending (top gainers first).
+
+        Args:
+            trade_date: target date (YYYYMMDD or YYYY-MM-DD)
+            lookback: rows to fetch per industry. Default 1 (today only).
+                      Set >=6 to compute pct_5d, >=21 to compute pct_20d.
         """
         td = trade_date.replace("-", "")
         codes = self._dp._get_display_industry_codes()
         classify_map = self._dp.cache.get_industry_classify_map()
 
+        _compute_multiday = lookback >= 6
+        _fetch_lookback = max(lookback, 21) if _compute_multiday else lookback
+
         rankings = []
         for code in codes:
-            df = self._dp.get_industry_daily(code, end_date=td, lookback=1)
+            df = self._dp.get_industry_daily(code, end_date=td, lookback=_fetch_lookback)
             if df.empty:
                 continue
             row = df.iloc[-1]
@@ -347,18 +356,59 @@ class DashboardService:
             if row_td != td:
                 continue
             info = classify_map.get(code, {})
-            rankings.append({
+            entry = {
                 "code": code,
                 "name": info.get("industry_name", code),
                 "level": info.get("level", ""),
                 "pct_change": float(row.get("pct_change", 0) or 0),
                 "close": float(row.get("close", 0) or 0),
                 "amount": float(row.get("amount", 0) or 0),
-            })
+            }
+
+            # Multi-day returns from close prices
+            if _compute_multiday and len(df) >= 6:
+                _close_today = float(df.iloc[-1].get("close", 0) or 0)
+                _close_5d = float(df.iloc[-6].get("close", 0) or 0)
+                if _close_5d and _close_5d != 0:
+                    entry["pct_5d"] = round((_close_today - _close_5d) / _close_5d * 100, 2)
+                else:
+                    entry["pct_5d"] = None
+            else:
+                entry["pct_5d"] = None
+
+            if _compute_multiday and len(df) >= 21:
+                _close_today = float(df.iloc[-1].get("close", 0) or 0)
+                _close_20d = float(df.iloc[-21].get("close", 0) or 0)
+                if _close_20d and _close_20d != 0:
+                    entry["pct_20d"] = round((_close_today - _close_20d) / _close_20d * 100, 2)
+                else:
+                    entry["pct_20d"] = None
+            else:
+                entry["pct_20d"] = None
+
+            rankings.append(entry)
 
         rankings.sort(key=lambda x: x["pct_change"], reverse=True)
         log.info("get_industry_ranking(%s): %d industries", trade_date, len(rankings))
         return rankings
+
+    def get_prev_trading_date(self, trade_date: str, max_walkback: int = 10) -> str | None:
+        """
+        Walk back calendar days from trade_date to find the previous trading day.
+
+        Uses index daily data (000001.SH) as the trading calendar reference.
+        Returns the previous trading date as YYYYMMDD, or None if not found.
+        """
+        td = trade_date.replace("-", "")
+        dt = datetime.strptime(td, "%Y%m%d")
+        for i in range(1, max_walkback + 1):
+            prev_date = (dt - timedelta(days=i)).strftime("%Y%m%d")
+            rows = self._dp.get_daily("000001.SH", end_date=prev_date, lookback_days=1)
+            if rows:
+                row_td = str(rows[-1].get("date", "")).replace("-", "")
+                if row_td == prev_date:
+                    return prev_date
+        return None
 
     def get_industry_analysis_set(self, trade_date: str) -> list[dict]:
         """
@@ -1568,30 +1618,66 @@ class DashboardService:
         if progress_cb:
             progress_cb("sector_summary_start", "正在生成行业总览...")
 
-        # Build ranking text — top 5 gainers + top 5 losers
-        ranking = self.get_industry_ranking(trade_date)
+        # Build ranking text — today's top 5 gainers + losers with 5d/20d
+        ranking = self.get_industry_ranking(trade_date, lookback=21)
         top5 = ranking[:5] if ranking else []
         bot5 = ranking[-5:] if ranking and len(ranking) > 5 else []
         # dedup in case total < 10
         top_codes = {r["code"] for r in top5}
         bot5 = [r for r in bot5 if r["code"] not in top_codes]
 
+        def _fmt_pct(val) -> str:
+            if val is None:
+                return "N/A"
+            return f"{val:+.2f}%"
+
         ranking_lines = []
-        ranking_lines.append("【涨幅前5】")
+        ranking_lines.append("【今日涨幅前5】")
         for i, r in enumerate(top5):
             ranking_lines.append(
                 f"  {i + 1}. {r['name']} ({r['level']})  "
-                f"涨跌幅 {r['pct_change']:+.2f}%  "
+                f"今日 {_fmt_pct(r['pct_change'])}  "
+                f"5日 {_fmt_pct(r.get('pct_5d'))}  "
+                f"20日 {_fmt_pct(r.get('pct_20d'))}  "
                 f"成交额 {r['amount'] / 1e5:,.0f}亿"
             )
         if bot5:
-            ranking_lines.append("【跌幅前5】")
+            ranking_lines.append("【今日跌幅前5】")
             for i, r in enumerate(bot5):
                 ranking_lines.append(
                     f"  {i + 1}. {r['name']} ({r['level']})  "
-                    f"涨跌幅 {r['pct_change']:+.2f}%  "
+                    f"今日 {_fmt_pct(r['pct_change'])}  "
+                    f"5日 {_fmt_pct(r.get('pct_5d'))}  "
+                    f"20日 {_fmt_pct(r.get('pct_20d'))}  "
                     f"成交额 {r['amount'] / 1e5:,.0f}亿"
                 )
+
+        # Yesterday's ranking
+        prev_td = self.get_prev_trading_date(trade_date)
+        if prev_td:
+            yest_ranking = self.get_industry_ranking(prev_td)
+            if yest_ranking:
+                yest_top5 = yest_ranking[:5]
+                yest_bot5 = yest_ranking[-5:][::-1] if len(yest_ranking) >= 5 else []
+                yest_top_codes = {r["code"] for r in yest_top5}
+                yest_bot5 = [r for r in yest_bot5 if r["code"] not in yest_top_codes]
+                yest_date_display = f"{prev_td[:4]}-{prev_td[4:6]}-{prev_td[6:8]}"
+                ranking_lines.append(f"【昨日({yest_date_display})涨幅前5】")
+                for i, r in enumerate(yest_top5):
+                    ranking_lines.append(
+                        f"  {i + 1}. {r['name']} ({r['level']})  "
+                        f"涨跌幅 {_fmt_pct(r['pct_change'])}  "
+                        f"成交额 {r['amount'] / 1e5:,.0f}亿"
+                    )
+                if yest_bot5:
+                    ranking_lines.append(f"【昨日({yest_date_display})跌幅前5】")
+                    for i, r in enumerate(yest_bot5):
+                        ranking_lines.append(
+                            f"  {i + 1}. {r['name']} ({r['level']})  "
+                            f"涨跌幅 {_fmt_pct(r['pct_change'])}  "
+                            f"成交额 {r['amount'] / 1e5:,.0f}亿"
+                        )
+
         ranking_text = "\n".join(ranking_lines) if ranking_lines else "无排名数据"
 
         # Build sector guides text
@@ -1636,7 +1722,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.10.4"
+    _AI_VERSION = "1.10.6"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """

@@ -52,7 +52,7 @@ st.divider()
 #  2. Data loading
 # ═══════════════════════════════════════════════════════════
 
-_ranking = _service.get_industry_ranking(_trade_date)
+_ranking = _service.get_industry_ranking(_trade_date, lookback=21)
 _analysis_set = _service.get_industry_analysis_set(_trade_date)
 
 # ── 自选行业 ──
@@ -93,7 +93,8 @@ _bottom5 = _ranking[-5:][::-1] if len(_ranking) >= 5 else []
 _col_left, _col_right = st.columns(2)
 
 
-def _render_rank_card(col, items: list[dict], title: str, is_gainer: bool):
+def _render_rank_card(col, items: list[dict], title: str, is_gainer: bool,
+                      show_multiday: bool = True):
     """Render a ranked list of industry cards."""
     col.markdown(f"**{title}**")
     if not items:
@@ -111,15 +112,38 @@ def _render_rank_card(col, items: list[dict], title: str, is_gainer: bool):
             "L1": "[一级]", "L2": "[二级]", "L3": "[三级]",
         }.get(r["level"], "")
 
+        # 5-day / 20-day columns
+        if show_multiday:
+            _pct_5d = r.get("pct_5d")
+            _pct_5d_str = f"{_pct_5d:+.2f}%" if _pct_5d is not None else "—"
+            _pct_5d_color = up_down_color(_pct_5d) if _pct_5d is not None else "#888"
+            _pct_20d = r.get("pct_20d")
+            _pct_20d_str = f"{_pct_20d:+.2f}%" if _pct_20d is not None else "—"
+            _pct_20d_color = up_down_color(_pct_20d) if _pct_20d is not None else "#888"
+            _multiday_cols = (
+                f"<td style=\"text-align:right;font-weight:bold;color:{_pct_5d_color};\">"
+                f"{_pct_5d_str}</td>"
+                f"<td style=\"text-align:right;font-weight:bold;color:{_pct_20d_color};\">"
+                f"{_pct_20d_str}</td>"
+            )
+        else:
+            _multiday_cols = ""
+
         _rows += f"""
         <tr>
             <td style="text-align:center;font-size:20px;">{_medal}</td>
             <td style="font-weight:600;">{_level_badge} {r['name']}</td>
             <td style="text-align:right;font-weight:bold;color:{_pct_color};">
                 {_pct_str}</td>
+            {_multiday_cols}
             <td style="text-align:right;color:#888;font-size:14px;">
                 {_amount_yi:,.0f}亿</td>
         </tr>"""
+
+    _header_multiday = (
+        "<th style=\"text-align:right;\">5日涨跌</th>"
+        "<th style=\"text-align:right;\">20日涨跌</th>"
+    ) if show_multiday else ""
 
     col.html(f"""
     <table style="width:100%;font-size:16px;border-collapse:collapse;">
@@ -127,6 +151,7 @@ def _render_rank_card(col, items: list[dict], title: str, is_gainer: bool):
             <th style="text-align:center;width:40px;">#</th>
             <th style="text-align:left;">行业</th>
             <th style="text-align:right;">涨跌幅</th>
+            {_header_multiday}
             <th style="text-align:right;">成交额</th>
         </tr></thead>
         <tbody>{_rows}</tbody>
@@ -141,6 +166,36 @@ with _col_right:
     _render_rank_card(_col_right, _bottom5, "❄️ 今日领跌 TOP 5", is_gainer=False)
 
 st.divider()
+
+# ═══════════════════════════════════════════════════════════
+#  2b. 昨日领涨领跌 TOP 5
+# ═══════════════════════════════════════════════════════════
+
+_prev_td = _service.get_prev_trading_date(_trade_date)
+if _prev_td:
+    _prev_display = f"{_prev_td[:4]}-{_prev_td[4:6]}-{_prev_td[6:8]}"
+    _yest_ranking = _service.get_industry_ranking(_prev_td)
+    if _yest_ranking:
+        _yest_top5 = _yest_ranking[:5]
+        _yest_bottom5 = _yest_ranking[-5:][::-1] if len(_yest_ranking) >= 5 else []
+
+        st.subheader(f"📊 昨日行业涨跌排名（{_prev_display}）")
+
+        _col_yl, _col_yr = st.columns(2)
+
+        with _col_yl:
+            _render_rank_card(_col_yl, _yest_top5, f"🔥 昨日领涨 TOP 5", is_gainer=True,
+                              show_multiday=False)
+
+        with _col_yr:
+            _render_rank_card(_col_yr, _yest_bottom5, f"❄️ 昨日领跌 TOP 5", is_gainer=False,
+                              show_multiday=False)
+
+        st.divider()
+    else:
+        st.caption(f"昨日（{_prev_display}）暂无行业数据")
+else:
+    st.caption("暂无前一交易日数据")
 
 # ═══════════════════════════════════════════════════════════
 #  3. ⭐ 自选行业
