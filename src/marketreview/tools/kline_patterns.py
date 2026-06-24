@@ -271,14 +271,9 @@ def _neck_common(
 
     共通条件:
       1. 今：收阳线、开低（今开 < 昨实体下沿）
-      2. 非高档：高档（上涨趋势）中低开阳线 → 上升反托线，非颈线
+      2. 与上升反托线互斥：若上升反托线已命中，颈线跳过不检测
     """
     if len(df) < 2:
-        return None
-
-    # 高档（上涨趋势中）不触发颈上线/颈内线
-    # 此时低开阳线更可能是上升反托线的整理信号，而非反弹无力
-    if _high_low_position(df) == "高档":
         return None
 
     prev = df.iloc[-2]
@@ -608,11 +603,17 @@ def detect_patterns(
         return []
 
     results = []
+    _has_rising_anti_drag = False
     for detector in _PATTERN_DETECTORS:
+        # 上升反托线与颈上线/颈内线互斥：前者命中则跳过颈线检测
+        if _has_rising_anti_drag and detector in (detect_neck_above, detect_neck_inside):
+            continue
         try:
             match = detector(df, obj_type)
             if match is not None:
                 results.append(match)
+                if match["name"] == "上升反托线":
+                    _has_rising_anti_drag = True
         except Exception:
             # Skip detectors that fail on insufficient data / bad inputs
             continue
