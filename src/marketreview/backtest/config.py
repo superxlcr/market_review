@@ -24,11 +24,12 @@ class PoolConfig:
 @dataclass
 class StrategyConfig:
     """A named strategy configuration."""
-    name: str             # display name, e.g. "MA60_突破拉回_3止损"
-    class_name: str       # strategy class key, e.g. "ma60_breakthrough"
-    position_pct: float   # 0~100, e.g. 20 means 20% per trade
-    max_positions: int    # max concurrent positions
-    space_stop_pct: float # 0~100, e.g. 3 means -3% stop loss
+    name: str                    # display name, e.g. "MA60_突破拉回_3止损"
+    class_name: str              # strategy class key, e.g. "ma60_breakthrough"
+    position_pct: float          # 0~100, e.g. 20 means 20% per trade
+    max_positions: int           # max concurrent positions
+    space_stop_pct: float        # 0~100, e.g. 3 means -3% stop loss
+    new_position_threshold_pct: float = 0.0  # 现有持仓浮盈达此值才可开新仓
 
 
 def load_pools(dp) -> list[PoolConfig]:
@@ -78,7 +79,7 @@ def _resolve_stock_name(dp, name: str) -> str:
 
 def load_strategies() -> list[StrategyConfig]:
     """Parse backtest_strategies.txt.
-    Format: 策略名 战法类名 仓位% 开仓上限 空间止损%
+    Format: 策略名 战法类名 仓位% 开仓上限 空间止损% [开仓浮盈阈值%]
     """
     path = CONFIG_DIR / "backtest_strategies.txt"
     if not path.exists():
@@ -98,5 +99,6 @@ def load_strategies() -> list[StrategyConfig]:
                     position_pct=float(parts[2]),
                     max_positions=int(parts[3]),
                     space_stop_pct=float(parts[4]),
+                    new_position_threshold_pct=float(parts[5]) if len(parts) >= 6 else 0.0,
                 ))
     return strategies

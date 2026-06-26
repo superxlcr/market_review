@@ -8,6 +8,9 @@ from .broker import Broker
 from .reporter import Report, build_report
 from .config import PoolConfig, StrategyConfig
 from marketreview.tools.technical import rows_to_df, calc_ma
+from marketreview.log_util import get_logger
+
+log = get_logger(__name__)
 
 
 class BacktestEngine:
@@ -33,6 +36,7 @@ class BacktestEngine:
             position_pct=strategy_cfg.position_pct,
             max_positions=strategy_cfg.max_positions,
             space_stop_pct=strategy_cfg.space_stop_pct,
+            new_position_threshold_pct=strategy_cfg.new_position_threshold_pct,
         )
 
         # K-line cache: {code: list[dict]} sorted date ASC
@@ -43,34 +47,42 @@ class BacktestEngine:
         lookback = self.strategy.lookback_trading_days
 
         all_entry = []
-        all_exit = []
         for s in self.pool.stocks:
             if s.entry_date:
                 all_entry.append(s.entry_date)
-            if s.exit_date and s.exit_date != "now":
-                all_exit.append(s.exit_date)
 
         if not all_entry:
+            log.warning("回测终止: 股票池中没有有效 entry_date")
             return Report()
 
         min_entry = min(all_entry)
         latest_date = self._latest_trade_date()
-        max_exit = max(all_exit) if all_exit else latest_date
+        # 始终用最新交易日作为截止日期（"now"的票应到今日，有明确exit_date的票由_in_window过滤）
+        end_date = latest_date
 
         # Extend start by lookback calendar days
         start_dt = datetime.strptime(min_entry, "%Y%m%d")
-        buffer_dt = start_dt - timedelta(days=max(365, int(lookback * 2.5)))
+        buffer_days = max(365, int(lookback * 2.5))
+        buffer_dt = start_dt - timedelta(days=buffer_days)
         start_date = buffer_dt.strftime("%Y%m%d")
-        end_date = max_exit
+
+        log.info(
+            "回测开始: 池=%s 策略=%s 日期=%s~%s 缓冲=%d日历日 lookback=%d交易日",
+            self.pool.name, self.strategy_cfg.name,
+            start_date, end_date, buffer_days, lookback,
+        )
 
         # 2. Load data
         codes = [s.code for s in self.pool.stocks if s.code]
+        log.info("加载K线: %d只股票, 范围=%s~%s", len(codes), start_date, end_date)
         self.dp.ensure_data_loaded_for_codes(codes, start_date, end_date)
 
         # 3. Load K-lines into memory & precompute MA60
         calendar_days = (datetime.strptime(end_date, "%Y%m%d") - buffer_dt).days
         lookback_days = max(calendar_days, 500)
 
+        loaded_count = 0
+        empty_count = 0
         for s in self.pool.stocks:
             if not s.code:
                 continue
@@ -78,12 +90,16 @@ class BacktestEngine:
                                      lookback_days=lookback_days)
             if not rows:
                 self._klines[s.code] = []
+                empty_count += 1
+                log.warning("无K线数据: %s %s", s.code, s.name)
                 continue
 
             # rows come date DESC from DataProvider; convert to ASC DataFrame
             df = rows_to_df(rows)
             if df.empty:
                 self._klines[s.code] = []
+                empty_count += 1
+                log.warning("K线DataFrame为空: %s %s", s.code, s.name)
                 continue
 
             # Calculate MA60
@@ -97,11 +113,22 @@ class BacktestEngine:
                 d["ma60"] = ma60_vals[i] if i < len(ma60_vals) else None
                 klines_asc.append(d)
             self._klines[s.code] = klines_asc
+            loaded_count += 1
+            log.debug("K线加载: %s %s → %d条 (%.10s~%.10s)",
+                      s.code, s.name, len(klines_asc),
+                      str(klines_asc[0].get("date", "?")),
+                      str(klines_asc[-1].get("date", "?")))
+
+        log.info("K线加载完成: %d只有数据, %d只无数据", loaded_count, empty_count)
 
         # 4. Get all trading dates in range
         trade_dates = self._trading_day_range(start_date, end_date)
         if not trade_dates:
+            log.warning("无交易日期, 使用日历日期回退: %s~%s", start_date, end_date)
             trade_dates = self._generate_calendar_dates(start_date, end_date)
+        log.info("交易日范围: %d个交易日, %s~%s", len(trade_dates),
+                 trade_dates[0] if trade_dates else "?",
+                 trade_dates[-1] if trade_dates else "?")
 
         # 5. Daily loop
         equity_curve = []
@@ -135,6 +162,7 @@ class BacktestEngine:
                         )
                         if triggered:
                             delayed_stop_symbols.discard(s.code)
+                            self._enrich_positions(date)
                             continue
 
                     # c) Strategy sell
@@ -142,6 +170,7 @@ class BacktestEngine:
                     sell_sig = self.strategy.check_sell(ctx)
                     if sell_sig:
                         self.broker.sell(date, s.code, sell_sig.price, sell_sig.reason)
+                        self._enrich_positions(date)
                         delayed_stop_symbols.discard(s.code)
                         continue
 
@@ -150,6 +179,7 @@ class BacktestEngine:
                         date, s.code, _safe_f(today_row.get("low"))
                     )
                     if triggered:
+                        self._enrich_positions(date)
                         delayed_stop_symbols.discard(s.code)
                     else:
                         # Flag for next-open stop if stop price not reached intraday
@@ -168,10 +198,20 @@ class BacktestEngine:
                         ctx.position = None
                         buy_sig = self.strategy.check_buy(ctx)
                         if buy_sig:
+                            # Build current prices for rejection detail + enrich
+                            pos_prices = {}
+                            for pcode in self.broker.positions:
+                                prow = self._get_day(
+                                    self._klines.get(pcode, []), date
+                                )
+                                if prow:
+                                    pos_prices[pcode] = _safe_f(prow.get("close"))
                             self.broker.buy(
                                 date, s.code, s.name,
                                 buy_sig.price, buy_sig.reason,
+                                position_prices=pos_prices,
                             )
+                            self._enrich_positions(date)
 
             # Record daily equity
             equity_curve.append({
@@ -180,8 +220,43 @@ class BacktestEngine:
                 "return_pct": (self.broker.equity / self.broker.init_capital - 1) * 100.0,
             })
 
+        # 5.5 回测结束 — 强制清仓所有持仓
+        if self.broker.positions:
+            last_date = trade_dates[-1] if trade_dates else end_date
+            for pcode in list(self.broker.positions.keys()):
+                prow = self._get_day(self._klines.get(pcode, []), last_date)
+                close_price = _safe_f(prow.get("close")) if prow else 0.0
+                if close_price > 0:
+                    self.broker.sell(last_date, pcode, close_price, "回测结束(清仓)")
+                    self._enrich_positions(last_date)
+                    log.info("清仓: %s @ %.2f on %s", pcode, close_price, last_date)
+                else:
+                    log.warning("无法清仓 %s: 最后交易日无数据", pcode)
+            # Update last equity point with realized cash
+            if equity_curve:
+                equity_curve[-1] = {
+                    "date": equity_curve[-1]["date"],
+                    "equity": self.broker.equity,
+                    "return_pct": (self.broker.equity / self.broker.init_capital - 1) * 100.0,
+                }
+
         # 6. Build report
-        return build_report(self.broker.trades, equity_curve)
+        report = build_report(self.broker.trades, equity_curve)
+        log.info(
+            "回测完成: 总交易=%d笔 赢=%d 亏=%d 胜率=%.1f%% 总收益=%+.2f%% 最大回撤=%.2f%%",
+            report.total_trades, report.win_trades, report.lose_trades,
+            report.win_rate * 100, report.total_return_pct, report.max_drawdown_pct,
+        )
+        return report
+
+    def _enrich_positions(self, date: str):
+        """Build current price snapshot and attach to last trade record."""
+        pos_prices = {}
+        for pcode in self.broker.positions:
+            prow = self._get_day(self._klines.get(pcode, []), date)
+            if prow:
+                pos_prices[pcode] = _safe_f(prow.get("close"))
+        self.broker.enrich_last_trade(pos_prices)
 
     def _build_ctx(self, date, stock_entry, today_row, klines, in_window) -> DayContext:
         """Build DayContext for a given stock on a given date."""

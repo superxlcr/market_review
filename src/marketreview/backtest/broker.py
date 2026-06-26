@@ -9,11 +9,12 @@ class TradeRecord:
     date: str
     symbol: str
     symbol_name: str
-    trade_type: str       # "买入" | "卖出" | "信号未成交"
+    trade_type: str         # "买入" | "卖出" | "信号未成交"
     price: float
     shares: int = 0
-    pnl_pct: float = 0.0  # profit/loss % for sells
-    reason: str = ""      # exit reason or skip reason
+    pnl_pct: float = 0.0    # profit/loss % for sells
+    reason: str = ""        # exit reason or skip reason
+    positions_after: str = ""  # snapshot of holdings after this trade
 
 
 class Broker:
@@ -22,12 +23,14 @@ class Broker:
     def __init__(self, init_capital: float = 1_000_000,
                  position_pct: float = 20.0,
                  max_positions: int = 2,
-                 space_stop_pct: float = 3.0):
+                 space_stop_pct: float = 3.0,
+                 new_position_threshold_pct: float = 0.0):
         self.init_capital = init_capital
         self.cash = init_capital
         self.position_pct = position_pct    # % per trade
         self.max_positions = max_positions
         self.space_stop_pct = space_stop_pct
+        self.new_position_threshold_pct = new_position_threshold_pct
         self.positions: dict[str, Position] = {}   # symbol → Position
         self.trades: list[TradeRecord] = []
 
@@ -47,18 +50,50 @@ class Broker:
         """Check if a new buy is allowed. Returns (allowed, reason)."""
         if symbol in self.positions:
             return False, "已持仓"
-        if self.position_count >= self.max_positions:
-            return False, "已达开仓上限"
+        # 开仓上限 = 基础仓位 + 达标解锁仓位
+        qualified = sum(
+            1 for p in self.positions.values()
+            if p.max_float_profit_pct >= self.new_position_threshold_pct
+        )
+        allowed = self.max_positions + qualified
+        if self.position_count >= allowed:
+            if qualified > 0:
+                return False, (
+                    f"已达开仓上限(基础{self.max_positions}只"
+                    f"+达标解锁{qualified}只={allowed}只)"
+                )
+            return False, f"已达开仓上限({self.max_positions}只)"
         trade_amount = self.init_capital * self.position_pct / 100.0
         if self.cash < trade_amount:
             return False, "资金不足"
         return True, ""
 
+    def _positions_detail(self, prices: dict[str, float]) -> str:
+        """Build a string describing current positions with floating P&L."""
+        if not self.positions:
+            return ""
+        parts = []
+        for sym, pos in self.positions.items():
+            cur_price = prices.get(sym, pos.buy_price)
+            float_pnl = (cur_price - pos.buy_price) / pos.buy_price * 100.0
+            parts.append(f"{pos.symbol_name}({float_pnl:+.1f}%)")
+        return " | ".join(parts)
+
+    def enrich_last_trade(self, prices: dict[str, float]):
+        """Attach current positions snapshot to the most recent trade."""
+        if self.trades:
+            self.trades[-1].positions_after = self._positions_detail(prices)
+
     def buy(self, date: str, symbol: str, symbol_name: str,
-            price: float, reason: str = "") -> Position | None:
+            price: float, reason: str = "",
+            position_prices: dict[str, float] | None = None) -> Position | None:
         """Execute a buy. Returns Position or None if rejected."""
         ok, reject_reason = self.can_buy(symbol)
         if not ok:
+            # Enrich rejection reason with position details
+            if reject_reason == "已达开仓上限" and position_prices:
+                detail = self._positions_detail(position_prices)
+                reject_reason = f"已达开仓上限({detail})"
             self.trades.append(TradeRecord(
                 date=date, symbol=symbol, symbol_name=symbol_name,
                 trade_type="信号未成交", price=price, reason=reject_reason,
@@ -84,7 +119,7 @@ class Broker:
         self.positions[symbol] = pos
         self.trades.append(TradeRecord(
             date=date, symbol=symbol, symbol_name=symbol_name,
-            trade_type="买入", price=price, shares=shares,
+            trade_type="买入", price=price, shares=shares, reason=reason,
         ))
         return pos
 

@@ -78,9 +78,11 @@ if st.button("📥 加载数据", key="bt_load", type="primary"):
                 st.session_state.bt_codes = codes
                 st.session_state.bt_start = start_date
                 st.session_state.bt_end = max_exit
+                actual_buffer = max(365, int(lookback * 2.5))
                 st.success(
                     f"✅ 已加载 {len(codes)} 只股票, "
-                    f"缓冲{lookback}交易日, {start_date}~{max_exit}"
+                    f"缓冲{actual_buffer}日历日, "
+                    f"{start_date}~{max_exit}"
                 )
             except Exception as e:
                 st.error(f"加载失败: {e}")
@@ -129,24 +131,67 @@ if st.session_state.get("bt_has_report"):
         with c6:
             st.metric("盈亏比", f"{report.profit_loss_ratio:.2f}:1")
 
-        # Equity curve
+        # Equity curve — net value, filtered from min entry date
         if report.equity_curve:
-            dates = [pt["date"] for pt in report.equity_curve]
-            returns = [pt["return_pct"] for pt in report.equity_curve]
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=dates, y=returns, mode="lines",
-                line=dict(color="#cf2c2c", width=2),
-                name="累计收益率",
-            ))
-            fig.update_layout(
-                title="盈亏曲线",
-                xaxis_title="日期",
-                yaxis_title="收益率 (%)",
-                height=400,
-                margin=dict(l=40, r=20, t=40, b=40),
+            import datetime as _dt
+            # Find min entry date to trim flat buffer period
+            min_entry = min(
+                (s.entry_date for s in selected_pool.stocks if s.entry_date),
+                default=None
             )
-            st.plotly_chart(fig, use_container_width=True)
+            if min_entry:
+                curve = [pt for pt in report.equity_curve if pt["date"] >= min_entry]
+            else:
+                curve = report.equity_curve
+
+            if curve:
+                dates = [_dt.datetime.strptime(pt["date"], "%Y%m%d") for pt in curve]
+                net_values = [pt["return_pct"] / 100.0 + 1.0 for pt in curve]
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=dates, y=net_values, mode="lines",
+                    line=dict(color="#cf2c2c", width=2),
+                    name="净值",
+                ))
+                # Add baseline at 1.0
+                fig.add_hline(y=1.0, line_dash="dash", line_color="gray", opacity=0.5)
+                fig.update_layout(
+                    title="净值曲线",
+                    xaxis_title="日期",
+                    yaxis_title="净值",
+                    height=400,
+                    margin=dict(l=40, r=20, t=40, b=40),
+                    xaxis=dict(tickformat="%Y-%m", dtick="M1"),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        # ── Trade detail table ──
+        st.subheader("交易明细")
+        if report.trades:
+            trade_rows = []
+            for t in sorted(report.trades, key=lambda x: x.date):
+                pnl_str = f"{t.pnl_pct:+.2f}%" if t.trade_type == "卖出" else ""
+                trade_rows.append({
+                    "日期": t.date,
+                    "股票": t.symbol_name,
+                    "类型": t.trade_type,
+                    "价格": f"{t.price:.2f}",
+                    "盈亏": pnl_str,
+                    "原因": t.reason,
+                    "当前持仓": t.positions_after,
+                })
+            st.dataframe(
+                trade_rows, use_container_width=True, hide_index=True,
+                column_config={
+                    "日期": st.column_config.TextColumn(width="small"),
+                    "股票": st.column_config.TextColumn(width="small"),
+                    "类型": st.column_config.TextColumn(width="small"),
+                    "价格": st.column_config.TextColumn(width="small"),
+                    "盈亏": st.column_config.TextColumn(width="small"),
+                    "原因": st.column_config.TextColumn(width="medium"),
+                    "当前持仓": st.column_config.TextColumn(width="large"),
+                },
+            )
 
         # Per-stock summary + trade detail
         st.subheader("股票明细")

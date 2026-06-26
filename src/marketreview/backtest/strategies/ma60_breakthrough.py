@@ -59,30 +59,29 @@ class MA60BreakthroughStrategy(BaseStrategy):
                 price=current_price, reason="战法卖出(跌破MA60)",
             )
 
-        # ── 三级浮盈止盈 ──
+        # ── 三级浮盈止盈（用日内最低价判断盘中触发）──
         mfp = pos.max_float_profit_pct
 
         if mfp >= 20.0:
-            # Tier 3: keep 80% of max, sell when drops below
-            threshold_pct = mfp * 0.80
-            current_float = (current_price - pos.buy_price) / pos.buy_price * 100.0
-            if current_float < threshold_pct:
+            # Tier 3: 保留最高浮盈的80%，日内最低价触及即卖出
+            threshold_price = pos.buy_price * (1 + mfp * 0.80 / 100.0)
+            if ctx.low <= threshold_price:
                 return SellSignal(
                     date=ctx.date, symbol=ctx.symbol,
                     symbol_name=ctx.symbol_name,
-                    price=current_price,
-                    reason=f"止盈(浮盈{mfp:.1f}%回落至{current_float:.1f}%)",
+                    price=threshold_price,
+                    reason=f"止盈(浮盈曾达{mfp:.1f}%→保80%即{threshold_price:.2f})",
                 )
 
         elif mfp >= 10.0:
-            # Tier 2: 回落 5% from max
-            current_float = (current_price - pos.buy_price) / pos.buy_price * 100.0
-            if current_float < mfp - 5.0:
+            # Tier 2: 保护5%浮盈，日内最低价触及买入价×1.05即卖出
+            protect_price = pos.buy_price * 1.05
+            if ctx.low <= protect_price:
                 return SellSignal(
                     date=ctx.date, symbol=ctx.symbol,
                     symbol_name=ctx.symbol_name,
-                    price=current_price,
-                    reason=f"止盈(浮盈{mfp:.1f}%回落至{current_float:.1f}%)",
+                    price=protect_price,
+                    reason=f"止盈(浮盈曾达{mfp:.1f}%→保5%即{protect_price:.2f})",
                 )
 
         # Tier 1 (mfp < 10%): no take-profit, rely on stop-loss only
