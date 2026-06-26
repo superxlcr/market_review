@@ -10,6 +10,7 @@ st.markdown(PAGE_CSS, unsafe_allow_html=True)
 svc = DashboardService()
 
 st.title("🔬 战法回测")
+st.caption(f"股票池 × 策略日线回测 ｜ AI v{DashboardService._AI_VERSION}")
 
 # ── Step 1: Load configs ──
 pools = svc.load_backtest_pools()
