@@ -51,6 +51,17 @@ class MA60BreakthroughStrategy(BaseStrategy):
         pos = ctx.position
         current_price = ctx.close
 
+        # ── MA60止损: 盘中最低价跌破昨日MA60的3% ──
+        if ctx.ma60_yesterday > 0:
+            ma60_stop = ctx.ma60_yesterday * 0.97
+            if ctx.low <= ma60_stop:
+                return SellSignal(
+                    date=ctx.date, symbol=ctx.symbol,
+                    symbol_name=ctx.symbol_name,
+                    price=ma60_stop,
+                    reason=f"MA60止损(跌破昨日MA60{ctx.ma60_yesterday:.2f}的3%)",
+                )
+
         # ── 战法卖出: 收盘价跌破当日MA60 ──
         if current_price < ctx.ma60:
             return SellSignal(

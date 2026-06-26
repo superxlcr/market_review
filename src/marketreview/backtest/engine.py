@@ -165,16 +165,7 @@ class BacktestEngine:
                             self._enrich_positions(date)
                             continue
 
-                    # c) Strategy sell
-                    ctx.position = self.broker.positions.get(s.code)
-                    sell_sig = self.strategy.check_sell(ctx)
-                    if sell_sig:
-                        self.broker.sell(date, s.code, sell_sig.price, sell_sig.reason)
-                        self._enrich_positions(date)
-                        delayed_stop_symbols.discard(s.code)
-                        continue
-
-                    # d) Space stop (intraday)
+                    # c) Space stop (intraday) — 盘中优先
                     triggered = self.broker.check_space_stop(
                         date, s.code, _safe_f(today_row.get("low"))
                     )
@@ -191,6 +182,15 @@ class BacktestEngine:
                             today_low = _safe_f(today_row.get("low"))
                             if stop_price > today_low and stop_price > 0:
                                 delayed_stop_symbols.add(s.code)
+
+                    # d) Strategy sell (MA60止损 / 跌破MA60 / 止盈)
+                    ctx.position = self.broker.positions.get(s.code)
+                    sell_sig = self.strategy.check_sell(ctx)
+                    if sell_sig:
+                        self.broker.sell(date, s.code, sell_sig.price, sell_sig.reason)
+                        self._enrich_positions(date)
+                        delayed_stop_symbols.discard(s.code)
+                        continue
 
                 # ── Buy check (if not holding + in window) ──
                 else:
