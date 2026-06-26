@@ -233,6 +233,96 @@ class DataProvider:
             "stock_ind": stock_ind_count,
         }
 
+    def ensure_data_loaded_for_codes(
+        self, codes: list[str], start_date: str, end_date: str,
+        progress_cb=None,
+    ) -> None:
+        """Ensure K-line data exists for specific codes in [start_date, end_date].
+
+        Much lighter than ensure_data_loaded — only fetches the given codes,
+        no indices, no stock_basic, no industry data.
+        """
+        start_date = start_date.replace("-", "")
+        end_date = end_date.replace("-", "")
+
+        # Check which codes have coverage gaps
+        missing: list[tuple[str, str, str]] = []  # (code, fetch_start, fetch_end)
+        for code in codes:
+            cache_start = self.cache.get_earliest_date(code)
+            cache_end = self.cache.get_latest_date(code)
+
+            if cache_start is None or cache_end is None:
+                missing.append((code, start_date, end_date))
+                continue
+
+            cstart = cache_start.replace("-", "")
+            cend = cache_end.replace("-", "")
+
+            if cstart > start_date or cend < end_date:
+                missing.append((code, start_date, end_date))
+
+        if not missing:
+            log.info("ensure_data_loaded_for_codes: all %d codes covered", len(codes))
+            return
+
+        log.info("ensure_data_loaded_for_codes: fetching %d/%d codes",
+                 len(missing), len(codes))
+        total = len(missing)
+        done = 0
+        if progress_cb:
+            progress_cb("init", 0, total)
+
+        for code, fs, fe in missing:
+            try:
+                self._fetch_code_range(code, fs, fe)
+            except Exception as e:
+                log.warning("ensure_data_loaded_for_codes: fetch failed for %s: %s",
+                            code, e)
+            done += 1
+            if progress_cb:
+                progress_cb("step", done, total)
+
+    def _fetch_code_range(self, code: str, start_date: str, end_date: str):
+        """Fetch K-line for one code over a date range."""
+        pages = []
+        offset = 0
+        while True:
+            try:
+                fields = "ts_code,trade_date,open,high,low,close,vol,amount"
+                if code.endswith(".SH") or code.endswith(".SZ"):
+                    df = self._api.daily(
+                        ts_code=code,
+                        start_date=start_date,
+                        end_date=end_date,
+                        fields=fields,
+                        offset=offset,
+                        limit=_PAGE_SIZE,
+                    )
+                else:
+                    df = self._api.index_daily(
+                        ts_code=code,
+                        start_date=start_date,
+                        end_date=end_date,
+                        fields=fields,
+                        offset=offset,
+                        limit=_PAGE_SIZE,
+                    )
+                if df is None or df.empty:
+                    break
+                rows = df.to_dict(orient="records")
+                pages.extend(rows)
+                if len(rows) < _PAGE_SIZE:
+                    break
+                offset += _PAGE_SIZE
+                _time.sleep(0.15)
+            except Exception:
+                break
+
+        if pages:
+            self.cache.insert_batch(code, pages, asset_type="stock")
+            log.info("_fetch_code_range: %s loaded %d rows (%s ~ %s)",
+                     code, len(pages), start_date, end_date)
+
     _COVERAGE_WARN_THRESHOLD = 0.90    # warn if < 90% stocks covered on a date
     _COVERAGE_MAX_RETRY = 2            # max re-fetch attempts per gapped date
 
