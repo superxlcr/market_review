@@ -99,3 +99,13 @@ def create_strategy(class_name: str) -> Optional[BaseStrategy]:
     if cls is None:
         return None
     return cls()
+
+
+def safe_float(v) -> float:
+    """Convert a value to float, returning 0.0 on failure."""
+    if v is None:
+        return 0.0
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
