@@ -188,7 +188,7 @@ if st.session_state.get("bt_has_report"):
                     "类型": st.column_config.TextColumn(width="small"),
                     "价格": st.column_config.TextColumn(width="small"),
                     "盈亏": st.column_config.TextColumn(width="small"),
-                    "原因": st.column_config.TextColumn(width="medium"),
+                    "原因": st.column_config.TextColumn(width="large"),
                     "当前持仓": st.column_config.TextColumn(width="large"),
                 },
             )

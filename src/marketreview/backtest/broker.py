@@ -142,8 +142,10 @@ class Broker:
         return pos
 
     def check_space_stop(self, date: str, symbol: str,
-                         today_low: float) -> str:
+                         today_low: float, today_open: float = 0.0) -> str:
         """Check if space stop-loss triggers intraday.
+        If open already below stop → sell at open (gap down);
+        otherwise sell at stop price (intraday trigger).
         Returns reason string if triggered, empty string otherwise.
         """
         pos = self.positions.get(symbol)
@@ -153,23 +155,13 @@ class Broker:
         stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
 
         if today_low <= stop_price:
-            self.sell(date, symbol, stop_price, "空间止损")
+            if today_open > 0 and today_open <= stop_price:
+                self.sell(date, symbol, today_open,
+                          f"开盘价，{self.space_stop_pct:.0f}%空间止损")
+            else:
+                self.sell(date, symbol, stop_price,
+                          f"盘中价，{self.space_stop_pct:.0f}%空间止损")
             return "空间止损"
-        return ""
-
-    def check_delayed_stop(self, date: str, symbol: str,
-                           today_open: float) -> str:
-        """Execute yesterday's unexecuted space stop at today's open.
-        Called at market open for positions flagged for delayed stop.
-        """
-        pos = self.positions.get(symbol)
-        if pos is None:
-            return ""
-
-        stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
-        if today_open <= stop_price:
-            self.sell(date, symbol, stop_price, "空间止损(次日开盘)")
-            return "空间止损(次日开盘)"
         return ""
 
     def update_max_float_profit(self, symbol: str, today_high: float):

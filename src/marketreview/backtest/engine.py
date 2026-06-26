@@ -132,7 +132,6 @@ class BacktestEngine:
 
         # 5. Daily loop
         equity_curve = []
-        delayed_stop_symbols: set[str] = set()
 
         for date in trade_dates:
             for s in self.pool.stocks:
@@ -155,41 +154,20 @@ class BacktestEngine:
                         s.code, _safe_f(today_row.get("high"))
                     )
 
-                    # b) Delayed stop from yesterday
-                    if s.code in delayed_stop_symbols:
-                        triggered = self.broker.check_delayed_stop(
-                            date, s.code, _safe_f(today_row.get("open"))
-                        )
-                        if triggered:
-                            delayed_stop_symbols.discard(s.code)
-                            self._enrich_positions(date)
-                            continue
-
-                    # c) Space stop (intraday) — 盘中优先
+                    # b) Space stop (intraday) — 盘中优先
                     triggered = self.broker.check_space_stop(
-                        date, s.code, _safe_f(today_row.get("low"))
+                        date, s.code, _safe_f(today_row.get("low")),
+                        _safe_f(today_row.get("open")),
                     )
                     if triggered:
                         self._enrich_positions(date)
-                        delayed_stop_symbols.discard(s.code)
-                    else:
-                        # Flag for next-open stop if stop price not reached intraday
-                        pos = self.broker.positions.get(s.code)
-                        if pos:
-                            stop_price = pos.buy_price * (
-                                1 - self.broker.space_stop_pct / 100.0
-                            )
-                            today_low = _safe_f(today_row.get("low"))
-                            if stop_price > today_low and stop_price > 0:
-                                delayed_stop_symbols.add(s.code)
 
-                    # d) Strategy sell (MA60止损 / 跌破MA60 / 止盈)
+                    # c) Strategy sell (MA60止损 / 跌破MA60 / 止盈)
                     ctx.position = self.broker.positions.get(s.code)
                     sell_sig = self.strategy.check_sell(ctx)
                     if sell_sig:
                         self.broker.sell(date, s.code, sell_sig.price, sell_sig.reason)
                         self._enrich_positions(date)
-                        delayed_stop_symbols.discard(s.code)
                         continue
 
                 # ── Buy check (if not holding + in window) ──
