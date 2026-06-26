@@ -1,0 +1,6 @@
+# 回测策略配置
+# 格式: 策略名 战法类名 仓位% 开仓上限 空间止损%
+
+MA60_突破拉回_3止损 ma60_breakthrough 20 2 3
+MA60_突破拉回_5止损 ma60_breakthrough 20 2 5
+MA60_仅拉回_5止损 ma60_pullback_only 20 2 5

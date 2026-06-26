@@ -1,0 +1,9 @@
+# 回测股票池配置
+# 格式: [池名]
+#       股票名 entry_date exit_date
+# entry_date: 此日起可买入
+# exit_date: 此日后不可买入（now = 最新交易日）
+
+[测试池]
+贵州茅台 20250102 now
+宁德时代 20250102 now
