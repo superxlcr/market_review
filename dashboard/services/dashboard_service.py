@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 
 from marketreview.data.data_provider import DataProvider
 from marketreview.tools.technical import rows_to_df, build_technical_summary
+from marketreview.backtest.config import load_pools, load_strategies, PoolConfig, StrategyConfig
+from marketreview.backtest.engine import BacktestEngine
+from marketreview.backtest.reporter import Report
 from marketreview.log_util import get_logger
 
 log = get_logger(__name__)
@@ -1930,3 +1933,21 @@ class DashboardService:
                  _time.perf_counter() - _t_total_start, model,
                  sorted(result.keys()))
         return result
+
+    # ──────────────────────────────────────────────────────────────
+    #  战法回测 (Backtest Engine)
+    # ──────────────────────────────────────────────────────────────
+
+    def load_backtest_pools(self) -> list[PoolConfig]:
+        """Parse config/backtest_pools.txt."""
+        return load_pools(self._dp)
+
+    def load_backtest_strategies(self) -> list[StrategyConfig]:
+        """Parse config/backtest_strategies.txt."""
+        return load_strategies()
+
+    def run_backtest(self, pool: PoolConfig,
+                     strategy_cfg: StrategyConfig) -> Report:
+        """Create engine, run backtest, return report."""
+        engine = BacktestEngine(self._dp, pool, strategy_cfg)
+        return engine.run()
