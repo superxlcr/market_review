@@ -71,16 +71,17 @@ dashboard/app.py                    # 导航栏新增一项
 ### 3.2 `config/backtest_strategies.txt` — 策略参数
 
 ```
-# 格式: 策略名 战法名 仓位% 空间止损%
+# 格式: 策略名 战法类名 仓位% 开仓上限 空间止损%
+# 开仓上限: 持仓数达到后不再开新仓，直到止损/止盈释放仓位
 # 空间止损%: 盘中触及即卖出，当日未止次日开盘卖
 
-MA60_突破拉回_3止损 ma60_breakthrough 20 3
-MA60_突破拉回_5止损 ma60_breakthrough 20 5
-MA60_仅拉回_5止损 ma60_pullback_only 20 5
+MA60_突破拉回_3止损 ma60_breakthrough 20 2 3
+MA60_突破拉回_5止损 ma60_breakthrough 20 2 5
+MA60_仅拉回_5止损 ma60_pullback_only 20 2 5
 ```
 
 解析规则:
-- 每行: `策略名 战法类名 仓位% 空间止损%`
+- 每行: `策略名 战法类名 仓位% 开仓上限 空间止损%`
 - `#` 开头为注释
 - 空行忽略
 
@@ -113,9 +114,15 @@ MA60_仅拉回_5止损 ma60_pullback_only 20 5
 - 已持仓的股票，即使超出 exit_date 仍可持有和卖出
 - 超出 exit_date 且无持仓 → 不再产生买入信号
 
-### 4.5 信号未成交
+### 4.5 开仓上限
 
-当买入信号触发但因已持仓或不在发现窗口内无法买入时，在交易明细中记录为"信号未成交"，混排在正常的买入/卖出记录之间。
+策略配置中的 `开仓上限` 控制同时持有的最大仓位数量。当持仓数达到上限时，即使有买入信号也不开新仓，记录为"信号未成交(已达开仓上限)"。只有止损或止盈释放仓位后才能开新仓。
+
+> 未来特定战法可能引入"分仓止盈"（部分仓位止盈），属于战法层自行实现，不走通用配置。
+
+### 4.6 信号未成交
+
+当买入信号触发但因已持仓、不在发现窗口内、或已达开仓上限无法买入时，在交易明细中记录为"信号未成交"，混排在正常的买入/卖出记录之间。原因：`已持仓` | `不在发现窗口` | `已达开仓上限` | `资金不足`。
 
 ---
 
@@ -231,7 +238,7 @@ class BaseStrategy(ABC):
 class BacktestEngine:
     def __init__(self, dp: DataProvider, pool_codes: list,
                  strategy: BaseStrategy, space_stop_pct: float,
-                 position_pct: float):
+                 position_pct: float, max_positions: int):
         ...
 
     def run(self) -> Report:
@@ -247,8 +254,9 @@ class BacktestEngine:
 3. 检查策略 check_sell() → 战法止损/止盈（可读取 position.max_float_profit_pct）
 3. 盘中检查空间止损（持仓成本 × (1 - 空间止损%)）
 4. 如果以上卖出触发 → 执行卖出，更新持仓/资金
-5. 如果无持仓 + 在发现窗口内 → 检查策略 check_buy()
+5. 如果无持仓 + 在发现窗口内 + 持仓数未达上限 → 检查策略 check_buy()
    - 有买入信号 + 资金充足 → 买入
+   - 有买入信号 + 已达开仓上限 → 记录"信号未成交(已达开仓上限)"
    - 有买入信号 + 已有持仓/资金不足 → 记录"信号未成交"
 ```
 
@@ -375,7 +383,9 @@ class DashboardService:
         """从 config/backtest_pools.txt 解析股票池"""
 
     def load_backtest_strategies(self) -> list[StrategyConfig]:
-        """从 config/backtest_strategies.txt 解析策略"""
+        """从 config/backtest_strategies.txt 解析策略
+        每行: 策略名 战法类名 仓位% 开仓上限 空间止损%
+        """
 
     def resolve_stock_name(self, name: str) -> str | None:
         """股票名 → ts_code，从 stock_basic_cache 查"""
