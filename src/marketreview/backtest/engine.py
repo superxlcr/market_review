@@ -59,7 +59,7 @@ class BacktestEngine:
 
         # Extend start by lookback calendar days
         start_dt = datetime.strptime(min_entry, "%Y%m%d")
-        buffer_dt = start_dt - timedelta(days=int(lookback * 1.6))
+        buffer_dt = start_dt - timedelta(days=max(365, int(lookback * 2.5)))
         start_date = buffer_dt.strftime("%Y%m%d")
         end_date = max_exit
 

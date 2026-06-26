@@ -69,7 +69,7 @@ if st.button("📥 加载数据", key="bt_load", type="primary"):
                 strat = create_strategy(selected_strategy_cfg.class_name)
                 lookback = strat.lookback_trading_days if strat else 60
                 buff_dt = _dt.datetime.strptime(min_entry, "%Y%m%d") - _dt.timedelta(
-                    days=int(lookback * 1.6)
+                    days=max(365, int(lookback * 2.5))
                 )
                 start_date = buff_dt.strftime("%Y%m%d")
 
