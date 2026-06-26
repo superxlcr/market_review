@@ -239,12 +239,7 @@ class BacktestEngine:
 
     def _trading_day_range(self, start: str, end: str) -> list[str]:
         """Return all available trading dates between start and end."""
-        rows = self.dp.cache.fetch_all(
-            "SELECT DISTINCT date FROM tushare_cache "
-            "WHERE date >= ? AND date <= ? ORDER BY date",
-            (start, end),
-        )
-        return [r[0] for r in rows]
+        return self.dp.cache.get_daily_dates_in_range(start, end)
 
     def _generate_calendar_dates(self, start: str, end: str) -> list[str]:
         """Fallback: generate all calendar dates in range."""

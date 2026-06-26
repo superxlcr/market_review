@@ -66,11 +66,10 @@ def load_pools(dp) -> list[PoolConfig]:
 
 def _resolve_stock_name(dp, name: str) -> str:
     """Resolve a Chinese stock name to ts_code via stock_basic_cache."""
-    rows = dp.cache.fetch_all(
-        "SELECT ts_code FROM stock_basic_cache WHERE name = ?", (name,)
-    )
-    if rows:
-        return rows[0][0]
+    rows = dp.cache.get_stock_basic()
+    for r in rows:
+        if r.get("name") == name:
+            return r.get("ts_code", "")
     # fallback: if name already looks like a code (e.g. "000001.SZ"), use as-is
     if "." in name and len(name) == 9:
         return name
