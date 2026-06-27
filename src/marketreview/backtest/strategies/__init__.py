@@ -3,7 +3,6 @@ from . import ma60_breakthrough  # noqa: F401
 from . import ma120_breakthrough  # noqa: F401
 from . import ma55_breakthrough  # noqa: F401
 from . import ma144_breakthrough  # noqa: F401
-from . import ma_pullback_breakthrough  # noqa: F401
-from . import ma_special_pullback_breakthrough  # noqa: F401
 from . import half_retrace  # noqa: F401
 from . import half_retrace_simple  # noqa: F401
+from . import composite  # noqa: F401

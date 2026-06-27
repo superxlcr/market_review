@@ -24,7 +24,7 @@ class BacktestEngine:
         self.strategy_cfg = strategy_cfg
 
         # Create strategy instance (import strategies to ensure registration)
-        from .strategies import ma60_breakthrough, ma120_breakthrough, ma55_breakthrough, ma144_breakthrough, ma_pullback_breakthrough, ma_special_pullback_breakthrough, half_retrace, half_retrace_simple  # noqa: F401
+        from .strategies import ma60_breakthrough, ma120_breakthrough, ma55_breakthrough, ma144_breakthrough, half_retrace, half_retrace_simple, composite  # noqa: F401
 
         self.strategy = create_strategy(strategy_cfg.class_name)
         if self.strategy is None:
@@ -206,6 +206,7 @@ class BacktestEngine:
                                 buy_sig.price, buy_sig.reason,
                                 position_prices=pos_prices,
                                 entry_ma_type=buy_sig.entry_ma_type,
+                                strategy_tag=buy_sig.strategy_tag,
                             )
                             self._enrich_positions(date)
 

@@ -15,6 +15,7 @@ class Position:
     cost: float               # total cost = buy_price * shares
     max_float_profit_pct: float = 0.0  # highest intraday gain since buy
     entry_ma_type: str = ""   # which MA triggered entry: "MA20"/"MA60"/"MA120"/"MA240"
+    strategy_tag: str = ""    # which sub-strategy generated this position (composite use)
 
 
 @dataclass
@@ -55,6 +56,7 @@ class BuySignal:
     price: float           # suggested entry price
     reason: str            # "突破MA60" | "拉回MA60"
     entry_ma_type: str = ""  # which MA: "MA20"/"MA60"/"MA120"/"MA240"
+    strategy_tag: str = ""   # which sub-strategy generated this signal (composite use)
 
 
 @dataclass
