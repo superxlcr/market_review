@@ -40,10 +40,22 @@ class Broker:
 
     @property
     def equity(self) -> float:
-        """Total equity = cash + book value of all positions."""
+        """Total equity = cash + book value (成本) of all positions.
+        Use get_market_equity() for mark-to-market valuation."""
         mv = sum(
             p.shares * p.buy_price for p in self.positions.values()
         )
+        return self.cash + mv
+
+    def get_market_equity(self, prices: dict[str, float] | None = None) -> float:
+        """Total equity = cash + mark-to-market value of all positions.
+        Prices dict: {symbol: current_price}. Missing symbols fall back to buy_price."""
+        if not prices:
+            return self.equity
+        mv = 0.0
+        for sym, pos in self.positions.items():
+            cur_price = prices.get(sym, pos.buy_price)
+            mv += pos.shares * cur_price
         return self.cash + mv
 
     def can_buy(self, symbol: str) -> tuple[bool, str]:

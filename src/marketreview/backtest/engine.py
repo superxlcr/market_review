@@ -191,11 +191,17 @@ class BacktestEngine:
                             )
                             self._enrich_positions(date)
 
-            # Record daily equity
+            # Record daily equity (mark-to-market)
+            pos_prices_daily = {}
+            for pcode in self.broker.positions:
+                prow = self._get_day(self._klines.get(pcode, []), date)
+                if prow:
+                    pos_prices_daily[pcode] = _safe_f(prow.get("close"))
+            market_eq = self.broker.get_market_equity(pos_prices_daily)
             equity_curve.append({
                 "date": date,
-                "equity": self.broker.equity,
-                "return_pct": (self.broker.equity / self.broker.init_capital - 1) * 100.0,
+                "equity": market_eq,
+                "return_pct": (market_eq / self.broker.init_capital - 1) * 100.0,
             })
 
         # 5.5 回测结束 — 强制清仓所有持仓
