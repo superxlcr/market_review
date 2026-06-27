@@ -227,14 +227,15 @@ if st.session_state.get("bt_has_reports"):
                         fill="toself",
                         fillcolor=band_color,
                         line=dict(width=0),
-                        name=f"{sname} 区间",
+                        legendgroup=sname,
                         showlegend=False,
                     ))
                     # Mean line
                     fig.add_trace(go.Scatter(
                         x=dt_list, y=means, mode="lines",
                         line=dict(color=color, width=2.5),
-                        name=f"{sname} (均值)",
+                        name=sname,
+                        legendgroup=sname,
                     ))
             else:
                 # Single round: just draw the line
