@@ -1,24 +1,38 @@
-"""MA60 仅拉回买入策略 — 同突破拉回，但去掉突破信号."""
+"""MA60 突破+拉回 + 时间止损策略 — 8交易日无10%浮盈则收盘卖出."""
 from ..strategy_base import (
     BaseStrategy, DayContext, BuySignal, SellSignal,
     register_strategy, safe_float,
 )
 
 
-@register_strategy("ma60_pullback_only")
-class MA60PullbackOnlyStrategy(BaseStrategy):
+@register_strategy("ma60_breakthrough_time_stop")
+class MA60BreakthroughTimeStopStrategy(BaseStrategy):
+
+    # ── 时间止损参数 ──
+    TIME_STOP_DAYS: int = 8            # 持仓交易日数（买入日不算）
+    TIME_STOP_MIN_MFP: float = 10.0    # 期间最大浮盈未达此%则触发
 
     @property
     def name(self) -> str:
-        return "MA60仅拉回"
+        return "MA60突破+拉回+时间止损"
 
+    # ── 买入：同突破拉回 ──
     def check_buy(self, ctx: DayContext) -> BuySignal | None:
         if ctx.ma60 is None or ctx.ma60_yesterday is None:
             return None
         if ctx.ma60 <= 0 or ctx.ma60_yesterday <= 0:
             return None
 
-        # Only 拉回, no 突破
+        if len(ctx.kline_history) >= 2:
+            yesterday = ctx.kline_history[-2]
+            prev_close = safe_float(yesterday.get("close"))
+            if prev_close > 0 and prev_close < ctx.ma60_yesterday and ctx.high >= ctx.ma60:
+                return BuySignal(
+                    date=ctx.date, symbol=ctx.symbol,
+                    symbol_name=ctx.symbol_name,
+                    price=ctx.ma60, reason="突破MA60",
+                )
+
         if len(ctx.kline_history) >= 2:
             yesterday = ctx.kline_history[-2]
             prev_close = safe_float(yesterday.get("close"))
@@ -31,8 +45,8 @@ class MA60PullbackOnlyStrategy(BaseStrategy):
 
         return None
 
+    # ── 卖出：MA60止损 → 战法卖出 → 时间止损 → 三级止盈 ──
     def check_sell(self, ctx: DayContext) -> SellSignal | None:
-        """Identical sell logic to MA60BreakthroughStrategy."""
         if ctx.position is None:
             return None
         if ctx.ma60 is None or ctx.ma60 <= 0:
@@ -41,7 +55,7 @@ class MA60PullbackOnlyStrategy(BaseStrategy):
         pos = ctx.position
         current_price = ctx.close
 
-        # ── MA60止损: 盘中最低价跌破昨日MA60的3% ──
+        # ── 1. MA60止损: 盘中最低价跌破昨日MA60的3% ──
         if ctx.ma60_yesterday > 0:
             ma60_stop = ctx.ma60_yesterday * 0.97
             if ctx.low <= ma60_stop:
@@ -60,6 +74,7 @@ class MA60PullbackOnlyStrategy(BaseStrategy):
                         reason=f"盘中价，MA60 3%空间止损(跌破昨日MA60 {ctx.ma60_yesterday:.2f})",
                     )
 
+        # ── 2. 战法卖出: 收盘价跌破当日MA60 ──
         if current_price < ctx.ma60:
             return SellSignal(
                 date=ctx.date, symbol=ctx.symbol,
@@ -67,30 +82,23 @@ class MA60PullbackOnlyStrategy(BaseStrategy):
                 price=current_price, reason="战法卖出(跌破MA60)",
             )
 
-        # ── 三级浮盈止盈（用日内最低价判断盘中触发）──
-        mfp = pos.max_float_profit_pct
+        # ── 3. 时间止损: N个交易日内浮盈从未达阈值 → 收盘卖出 ──
+        trading_days = self._trading_days_since_buy(ctx)
+        if trading_days >= self.TIME_STOP_DAYS and pos.max_float_profit_pct < self.TIME_STOP_MIN_MFP:
+            return SellSignal(
+                date=ctx.date, symbol=ctx.symbol,
+                symbol_name=ctx.symbol_name,
+                price=current_price,
+                reason=f"时间止损(持仓{trading_days}日浮盈未达{self.TIME_STOP_MIN_MFP:.0f}%，收盘卖出)",
+            )
 
-        if mfp >= 20.0:
-            # Tier 3: 保留最高浮盈的80%，日内最低价触及即卖出
-            threshold_price = pos.buy_price * (1 + mfp * 0.80 / 100.0)
-            if ctx.low <= threshold_price:
-                return SellSignal(
-                    date=ctx.date, symbol=ctx.symbol,
-                    symbol_name=ctx.symbol_name,
-                    price=threshold_price,
-                    reason=f"止盈(浮盈曾达{mfp:.1f}%→保80%即{threshold_price:.2f})",
-                )
+        # ── 4. 三级浮盈止盈（通用，基类实现）──
+        return self.check_take_profit(ctx)
 
-        elif mfp >= 10.0:
-            # Tier 2: 保护5%浮盈，日内最低价触及买入价×1.05即卖出
-            protect_price = pos.buy_price * 1.05
-            if ctx.low <= protect_price:
-                return SellSignal(
-                    date=ctx.date, symbol=ctx.symbol,
-                    symbol_name=ctx.symbol_name,
-                    price=protect_price,
-                    reason=f"止盈(浮盈曾达{mfp:.1f}%→保5%即{protect_price:.2f})",
-                )
-
-        # Tier 1 (mfp < 10%): no take-profit, rely on stop-loss only
-        return None
+    def _trading_days_since_buy(self, ctx: DayContext) -> int:
+        """持仓交易日数（买入日不计）."""
+        if ctx.position is None:
+            return 0
+        buy_date = ctx.position.buy_date
+        return sum(1 for bar in ctx.kline_history
+                   if str(bar.get("date", "")) > buy_date)

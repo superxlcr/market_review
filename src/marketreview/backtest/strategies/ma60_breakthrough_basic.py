@@ -1,16 +1,16 @@
-"""MA60 突破+拉回 买入策略 — 跌破MA60/空间止损/三级浮盈止盈卖出."""
+"""MA60 突破+拉回 买入策略（无MA60空间止损）— 战法卖出 + 三级浮盈止盈."""
 from ..strategy_base import (
     BaseStrategy, DayContext, BuySignal, SellSignal,
     register_strategy, safe_float,
 )
 
 
-@register_strategy("ma60_breakthrough")
-class MA60BreakthroughStrategy(BaseStrategy):
+@register_strategy("ma60_breakthrough_basic")
+class MA60BreakthroughBasicStrategy(BaseStrategy):
 
     @property
     def name(self) -> str:
-        return "MA60突破+拉回"
+        return "MA60突破+拉回(无MA60止损)"
 
     def check_buy(self, ctx: DayContext) -> BuySignal | None:
         if ctx.ma60 is None or ctx.ma60_yesterday is None:
@@ -50,25 +50,6 @@ class MA60BreakthroughStrategy(BaseStrategy):
 
         pos = ctx.position
         current_price = ctx.close
-
-        # ── MA60止损: 盘中最低价跌破昨日MA60的3% ──
-        if ctx.ma60_yesterday > 0:
-            ma60_stop = ctx.ma60_yesterday * 0.97
-            if ctx.low <= ma60_stop:
-                if ctx.open > 0 and ctx.open <= ma60_stop:
-                    return SellSignal(
-                        date=ctx.date, symbol=ctx.symbol,
-                        symbol_name=ctx.symbol_name,
-                        price=ctx.open,
-                        reason=f"开盘价，MA60 3%空间止损(昨日MA60 {ctx.ma60_yesterday:.2f})",
-                    )
-                else:
-                    return SellSignal(
-                        date=ctx.date, symbol=ctx.symbol,
-                        symbol_name=ctx.symbol_name,
-                        price=ma60_stop,
-                        reason=f"盘中价，MA60 3%空间止损(跌破昨日MA60 {ctx.ma60_yesterday:.2f})",
-                    )
 
         # ── 战法卖出: 收盘价跌破当日MA60 ──
         if current_price < ctx.ma60:
