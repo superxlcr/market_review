@@ -105,9 +105,10 @@ class Broker:
         if not ok:
             # Prepend signal reason, enrich rejection with position details
             prefix = f"{reason}，" if reason else ""
-            if reject_reason == "已达开仓上限" and position_prices:
-                detail = self._positions_detail(position_prices)
-                reject_reason = f"已达开仓上限({detail})"
+            if reject_reason.startswith("已达开仓上限") and position_prices:
+                pos_detail = self._positions_detail(position_prices)
+                if pos_detail:
+                    reject_reason = f"{reject_reason} | {pos_detail}"
             self.trades.append(TradeRecord(
                 date=date, symbol=symbol, symbol_name=symbol_name,
                 trade_type="信号未成交", price=price,

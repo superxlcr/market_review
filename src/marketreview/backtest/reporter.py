@@ -172,30 +172,11 @@ def merge_reports(reports: list[Report]) -> Report:
             "return_pct": sum(p["return_pct"] for p in pts) / len(pts),
         })
 
-    # ── Trades: combine all ──
-    for r in reports:
-        merged.trades.extend(r.trades)
-
-    # ── Stock summaries: average by symbol ──
-    sym_map: dict[str, list[StockSummary]] = defaultdict(list)
-    for r in reports:
-        for ss in r.stock_summaries:
-            sym_map[ss.symbol].append(ss)
-
-    for sym, summaries in sym_map.items():
-        n_sym = len(summaries)
-        merged.stock_summaries.append(StockSummary(
-            symbol_name=summaries[0].symbol_name,
-            symbol=sym,
-            total_trades=sum(s.total_trades for s in summaries) / n_sym,
-            win_trades=sum(s.win_trades for s in summaries) / n_sym,
-            lose_trades=sum(s.lose_trades for s in summaries) / n_sym,
-            win_rate=sum(s.win_rate for s in summaries) / n_sym,
-            cumulative_pnl_pct=sum(s.cumulative_pnl_pct for s in summaries) / n_sym,
-            avg_hold_days=sum(s.avg_hold_days for s in summaries) / n_sym,
-            profit_loss_ratio=sum(s.profit_loss_ratio for s in summaries) / n_sym,
-            rejected_signals=int(sum(s.rejected_signals for s in summaries) / n_sym),
-        ))
+    # ── Trades & stock summaries: use median round (closest to avg return) ──
+    avg_return = merged.total_return_pct
+    median_round = min(reports, key=lambda r: abs(r.total_return_pct - avg_return))
+    merged.trades = list(median_round.trades)
+    merged.stock_summaries = list(median_round.stock_summaries)
 
     return merged
 
