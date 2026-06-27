@@ -1725,7 +1725,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "1.28.2"
+    _AI_VERSION = "1.28.3"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -1947,7 +1947,8 @@ class DashboardService:
         return load_strategies()
 
     def run_backtest(self, pool: PoolConfig,
-                     strategy_cfg: StrategyConfig) -> Report:
+                     strategy_cfg: StrategyConfig,
+                     seed: int | None = None) -> Report:
         """Create engine, run backtest, return report."""
         engine = BacktestEngine(self._dp, pool, strategy_cfg)
-        return engine.run()
+        return engine.run(seed=seed)

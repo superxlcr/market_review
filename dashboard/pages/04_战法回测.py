@@ -1,4 +1,5 @@
 """战法回测 — 多策略对比."""
+import random
 import streamlit as st
 import plotly.graph_objects as go
 from collections import defaultdict
@@ -127,9 +128,10 @@ if st.button("▶ 运行对比", key="bt_run", type="primary", disabled=run_disa
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {}
-        for strategy_cfg in selected_strategies:
-            for rnd in range(run_rounds):
-                fut = executor.submit(svc.run_backtest, selected_pool, strategy_cfg)
+        for rnd in range(run_rounds):
+            seed = random.randint(0, 2**31 - 1)
+            for strategy_cfg in selected_strategies:
+                fut = executor.submit(svc.run_backtest, selected_pool, strategy_cfg, seed)
                 futures[fut] = (strategy_cfg.name, rnd + 1)
 
         for fut in as_completed(futures):

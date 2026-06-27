@@ -50,7 +50,9 @@ class BacktestEngine:
         # K-line cache: {code: list[dict]} sorted date ASC
         self._klines: dict[str, list[dict]] = {}
 
-    def run(self) -> Report:
+    def run(self, seed: int | None = None) -> Report:
+        rng = random.Random(seed) if seed is not None else random
+
         # 1. Determine date range
         lookback = self.strategy.lookback_trading_days
 
@@ -156,7 +158,7 @@ class BacktestEngine:
 
         for date in trade_dates:
             stocks_today = list(self.pool.stocks)
-            random.shuffle(stocks_today)
+            rng.shuffle(stocks_today)
             for s in stocks_today:
                 if not s.code:
                     continue
