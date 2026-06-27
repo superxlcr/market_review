@@ -37,6 +37,10 @@ class DayContext:
     ma120_yesterday: float = 0.0   # yesterday's MA120
     ma240: float = 0.0             # today's MA240
     ma240_yesterday: float = 0.0   # yesterday's MA240
+    ma55: float = 0.0              # today's MA55
+    ma55_yesterday: float = 0.0    # yesterday's MA55
+    ma144: float = 0.0             # today's MA144
+    ma144_yesterday: float = 0.0   # yesterday's MA144
     kline_history: list = field(default_factory=list)  # list[dict] up to today
     in_pool_window: bool = True    # whether still within entry~exit window
     position: Optional[Position] = None  # current holding for this stock

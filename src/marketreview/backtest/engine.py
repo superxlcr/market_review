@@ -23,7 +23,7 @@ class BacktestEngine:
         self.strategy_cfg = strategy_cfg
 
         # Create strategy instance (import strategies to ensure registration)
-        from .strategies import ma60_breakthrough, ma60_breakthrough_basic_time_stop, ma60_breakthrough_full, ma120_breakthrough, ma120_breakthrough_basic_time_stop, ma120_breakthrough_full, ma_pullback_breakthrough, ma_pullback_breakthrough_basic_time_stop, ma_pullback_breakthrough_full  # noqa: F401
+        from .strategies import ma60_breakthrough, ma60_breakthrough_basic_time_stop, ma60_breakthrough_full, ma120_breakthrough, ma120_breakthrough_basic_time_stop, ma120_breakthrough_full, ma55_breakthrough, ma55_breakthrough_basic_time_stop, ma55_breakthrough_full, ma144_breakthrough, ma144_breakthrough_basic_time_stop, ma144_breakthrough_full, ma_pullback_breakthrough, ma_pullback_breakthrough_basic_time_stop, ma_pullback_breakthrough_full, ma_special_pullback_breakthrough, ma_special_pullback_breakthrough_basic_time_stop, ma_special_pullback_breakthrough_full  # noqa: F401
 
         self.strategy = create_strategy(strategy_cfg.class_name)
         if self.strategy is None:
@@ -104,10 +104,12 @@ class BacktestEngine:
                 continue
 
             # Calculate MAs
-            ma_result = calc_ma(df, [20, 60, 120, 240])
+            ma_result = calc_ma(df, [20, 55, 60, 120, 144, 240])
             ma20_vals = ma_result.get("MA20", [])
+            ma55_vals = ma_result.get("MA55", [])
             ma60_vals = ma_result.get("MA60", [])
             ma120_vals = ma_result.get("MA120", [])
+            ma144_vals = ma_result.get("MA144", [])
             ma240_vals = ma_result.get("MA240", [])
 
             # Build list of dicts date ASC with all MAs
@@ -115,8 +117,10 @@ class BacktestEngine:
             for i, (_, row) in enumerate(df.iterrows()):
                 d = row.to_dict()
                 d["ma20"] = ma20_vals[i] if i < len(ma20_vals) else None
+                d["ma55"] = ma55_vals[i] if i < len(ma55_vals) else None
                 d["ma60"] = ma60_vals[i] if i < len(ma60_vals) else None
                 d["ma120"] = ma120_vals[i] if i < len(ma120_vals) else None
+                d["ma144"] = ma144_vals[i] if i < len(ma144_vals) else None
                 d["ma240"] = ma240_vals[i] if i < len(ma240_vals) else None
                 klines_asc.append(d)
             self._klines[s.code] = klines_asc
@@ -265,14 +269,18 @@ class BacktestEngine:
                 break
 
         yesterday_ma20 = 0.0
+        yesterday_ma55 = 0.0
         yesterday_ma60 = 0.0
         yesterday_ma120 = 0.0
+        yesterday_ma144 = 0.0
         yesterday_ma240 = 0.0
         if idx is not None and idx >= 1:
             yesterday = klines[idx - 1]
             yesterday_ma20 = _safe_f(yesterday.get("ma20"))
+            yesterday_ma55 = _safe_f(yesterday.get("ma55"))
             yesterday_ma60 = _safe_f(yesterday.get("ma60"))
             yesterday_ma120 = _safe_f(yesterday.get("ma120"))
+            yesterday_ma144 = _safe_f(yesterday.get("ma144"))
             yesterday_ma240 = _safe_f(yesterday.get("ma240"))
 
         if idx is not None:
@@ -298,6 +306,10 @@ class BacktestEngine:
             ma120_yesterday=yesterday_ma120,
             ma240=_safe_f(today_row.get("ma240")),
             ma240_yesterday=yesterday_ma240,
+            ma55=_safe_f(today_row.get("ma55")),
+            ma55_yesterday=yesterday_ma55,
+            ma144=_safe_f(today_row.get("ma144")),
+            ma144_yesterday=yesterday_ma144,
             kline_history=hist,
             in_pool_window=in_window,
         )
