@@ -103,13 +103,15 @@ class Broker:
         """Execute a buy. Returns Position or None if rejected."""
         ok, reject_reason = self.can_buy(symbol)
         if not ok:
-            # Enrich rejection reason with position details
+            # Prepend signal reason, enrich rejection with position details
+            prefix = f"{reason}，" if reason else ""
             if reject_reason == "已达开仓上限" and position_prices:
                 detail = self._positions_detail(position_prices)
                 reject_reason = f"已达开仓上限({detail})"
             self.trades.append(TradeRecord(
                 date=date, symbol=symbol, symbol_name=symbol_name,
-                trade_type="信号未成交", price=price, reason=reject_reason,
+                trade_type="信号未成交", price=price,
+                reason=f"{prefix}{reject_reason}",
             ))
             return None
 
@@ -118,7 +120,8 @@ class Broker:
         if shares == 0:
             self.trades.append(TradeRecord(
                 date=date, symbol=symbol, symbol_name=symbol_name,
-                trade_type="信号未成交", price=price, reason="资金不足(整手不够)",
+                trade_type="信号未成交", price=price,
+                reason=f"{reason}，资金不足(整手不够)" if reason else "资金不足(整手不够)",
             ))
             return None
 

@@ -1,4 +1,4 @@
-"""拉回战法 — 三条均线(60/120/240)拉回买入，对应均线止损."""
+"""突破战法 — 三条均线(60/120/240)突破买入，对应均线止损."""
 from ..strategy_base import (
     BaseStrategy, DayContext, BuySignal, SellSignal,
     register_strategy, safe_float,
@@ -13,14 +13,14 @@ _MA_LIST = [
 ]
 
 
-@register_strategy("ma_pullback")
-class MAPullbackStrategy(BaseStrategy):
+@register_strategy("ma_breakthrough")
+class MABreakthroughStrategy(BaseStrategy):
 
     @property
     def name(self) -> str:
-        return "拉回战法(MA60/120/240)"
+        return "突破战法(MA60/120/240)"
 
-    # ── 买入：四条均线拉回，短均线优先 ──
+    # ── 买入：三条均线突破，短均线优先 ──
     def check_buy(self, ctx: DayContext) -> BuySignal | None:
         if len(ctx.kline_history) < 2:
             return None
@@ -34,13 +34,13 @@ class MAPullbackStrategy(BaseStrategy):
             ma_yest = getattr(ctx, ma_yest_key, 0.0)
             if ma_today <= 0 or ma_yest <= 0:
                 continue
-            # 拉回条件: 昨日收盘 > 昨日MA AND 今日最低价 ≤ 今日MA
-            if prev_close > ma_yest and ctx.low <= ma_today:
+            # 突破条件: 昨日收盘 < 昨日MA AND 今日最高价 ≥ 今日MA
+            if prev_close < ma_yest and ctx.high >= ma_today:
                 return BuySignal(
                     date=ctx.date, symbol=ctx.symbol,
                     symbol_name=ctx.symbol_name,
                     price=ma_today,
-                    reason=f"拉回{ma_label}",
+                    reason=f"突破{ma_label}",
                     entry_ma_type=ma_label,
                 )
 
@@ -55,7 +55,6 @@ class MAPullbackStrategy(BaseStrategy):
         current_price = ctx.close
         ma_type = pos.entry_ma_type
 
-        # 获取进场均线对应的 ctx 属性名
         ma_attr, ma_yest_attr = self._ma_attrs(ma_type)
         if ma_attr is None:
             return None
@@ -98,7 +97,6 @@ class MAPullbackStrategy(BaseStrategy):
 
     @staticmethod
     def _ma_attrs(ma_type: str) -> tuple[str | None, str | None]:
-        """Map "MA20" → ("ma20", "ma20_yesterday") etc."""
         for label, today_attr, yest_attr in _MA_LIST:
             if label == ma_type:
                 return today_attr, yest_attr

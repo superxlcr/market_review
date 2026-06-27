@@ -15,6 +15,8 @@ class StockSummary:
     cumulative_pnl_pct: float = 0.0
     avg_hold_days: float = 0.0
     profit_loss_ratio: float = 0.0
+    rejected_signals: int = 0
+    rejection_reasons: list = field(default_factory=list)
 
 
 @dataclass
@@ -97,6 +99,7 @@ def build_report(trades: list[TradeRecord],
 
     for symbol, sym_trades in stock_map.items():
         sym_completed = [t for t in sym_trades if t.trade_type == "卖出"]
+        sym_rejected = [t for t in sym_trades if t.trade_type == "信号未成交"]
         sym_wins = sum(1 for t in sym_completed if t.pnl_pct > 0)
         sym_loss = sum(1 for t in sym_completed if t.pnl_pct <= 0)
         sym_total = len(sym_completed)
@@ -116,6 +119,8 @@ def build_report(trades: list[TradeRecord],
             cumulative_pnl_pct=sum(t.pnl_pct for t in sym_completed),
             avg_hold_days=0.0,
             profit_loss_ratio=avg_win / avg_lose if avg_lose > 0 else 0.0,
+            rejected_signals=len(sym_rejected),
+            rejection_reasons=[t.reason for t in sym_rejected],
         ))
 
     return report

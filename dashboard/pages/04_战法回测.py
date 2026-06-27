@@ -243,12 +243,27 @@ if st.session_state.get("bt_has_reports"):
                 if report.stock_summaries:
                     st.markdown("**股票明细**")
                     for ss in report.stock_summaries:
-                        if ss.total_trades == 0:
+                        # Skip stocks with zero activity at all
+                        if ss.total_trades == 0 and ss.rejected_signals == 0:
                             continue
-                        with st.expander(
-                            f"  {ss.symbol_name} — {ss.total_trades}笔 "
-                            f"胜率{ss.win_rate:.1%} 累计{ss.cumulative_pnl_pct:+.2f}%"
-                        ):
+
+                        # Build expander label
+                        if ss.total_trades > 0:
+                            label = (
+                                f"{'🟢' if ss.win_rate >= 0.5 else '🔴'} "
+                                f"{ss.symbol_name} — {ss.total_trades}笔 "
+                                f"胜率{ss.win_rate:.1%} 累计{ss.cumulative_pnl_pct:+.2f}%"
+                            )
+                            if ss.rejected_signals > 0:
+                                label += f"  ⚠️{ss.rejected_signals}次信号未成交"
+                        else:
+                            label = (
+                                f"⚠️ {ss.symbol_name} — "
+                                f"0笔成交, {ss.rejected_signals}次信号未成交"
+                            )
+
+                        with st.expander(label):
+                            # Show all trades (buy/sell/rejected) for this stock
                             stock_trades = [t for t in report.trades if t.symbol == ss.symbol]
                             srows = []
                             for t in stock_trades:
