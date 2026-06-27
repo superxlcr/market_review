@@ -1,4 +1,5 @@
 """Compute statistics from trade records."""
+from collections import defaultdict
 from dataclasses import dataclass, field
 from .broker import TradeRecord
 
@@ -35,6 +36,8 @@ class Report:
     stock_summaries: list[StockSummary] = field(default_factory=list)
     trades: list[TradeRecord] = field(default_factory=list)
     equity_curve: list[dict] = field(default_factory=list)
+    individual_equity_curves: list[list[dict]] = field(default_factory=list)
+    num_rounds: int = 1
 
 
 def build_report(trades: list[TradeRecord],
@@ -124,6 +127,77 @@ def build_report(trades: list[TradeRecord],
         ))
 
     return report
+
+
+def merge_reports(reports: list[Report]) -> Report:
+    """Merge multiple backtest reports into one with averaged metrics."""
+    n = len(reports)
+    if n == 0:
+        return Report()
+    if n == 1:
+        r = reports[0]
+        r.individual_equity_curves = [r.equity_curve]
+        r.num_rounds = 1
+        return r
+
+    merged = Report(
+        trades=[],
+        num_rounds=n,
+        individual_equity_curves=[r.equity_curve for r in reports],
+    )
+
+    # ── Simple averages ──
+    merged.total_trades = sum(r.total_trades for r in reports) / n
+    merged.win_trades = sum(r.win_trades for r in reports) / n
+    merged.lose_trades = sum(r.lose_trades for r in reports) / n
+    merged.win_rate = sum(r.win_rate for r in reports) / n
+    merged.total_return_pct = sum(r.total_return_pct for r in reports) / n
+    merged.max_drawdown_pct = sum(r.max_drawdown_pct for r in reports) / n
+    merged.avg_hold_days = sum(r.avg_hold_days for r in reports) / n
+    merged.avg_win_pct = sum(r.avg_win_pct for r in reports) / n
+    merged.avg_lose_pct = sum(r.avg_lose_pct for r in reports) / n
+    merged.profit_loss_ratio = sum(r.profit_loss_ratio for r in reports) / n
+
+    # ── Equity curve: average by date ──
+    date_map: dict[str, list[dict]] = defaultdict(list)
+    for r in reports:
+        for pt in r.equity_curve:
+            date_map[pt["date"]].append(pt)
+
+    for date in sorted(date_map.keys()):
+        pts = date_map[date]
+        merged.equity_curve.append({
+            "date": date,
+            "equity": sum(p["equity"] for p in pts) / len(pts),
+            "return_pct": sum(p["return_pct"] for p in pts) / len(pts),
+        })
+
+    # ── Trades: combine all ──
+    for r in reports:
+        merged.trades.extend(r.trades)
+
+    # ── Stock summaries: average by symbol ──
+    sym_map: dict[str, list[StockSummary]] = defaultdict(list)
+    for r in reports:
+        for ss in r.stock_summaries:
+            sym_map[ss.symbol].append(ss)
+
+    for sym, summaries in sym_map.items():
+        n_sym = len(summaries)
+        merged.stock_summaries.append(StockSummary(
+            symbol_name=summaries[0].symbol_name,
+            symbol=sym,
+            total_trades=sum(s.total_trades for s in summaries) / n_sym,
+            win_trades=sum(s.win_trades for s in summaries) / n_sym,
+            lose_trades=sum(s.lose_trades for s in summaries) / n_sym,
+            win_rate=sum(s.win_rate for s in summaries) / n_sym,
+            cumulative_pnl_pct=sum(s.cumulative_pnl_pct for s in summaries) / n_sym,
+            avg_hold_days=sum(s.avg_hold_days for s in summaries) / n_sym,
+            profit_loss_ratio=sum(s.profit_loss_ratio for s in summaries) / n_sym,
+            rejected_signals=int(sum(s.rejected_signals for s in summaries) / n_sym),
+        ))
+
+    return merged
 
 
 def _date_to_int(d: str) -> int:

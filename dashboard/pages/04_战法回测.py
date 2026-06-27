@@ -1,6 +1,7 @@
 """战法回测 — 多策略对比."""
 import streamlit as st
 import plotly.graph_objects as go
+from collections import defaultdict
 from services.dashboard_service import DashboardService
 from rendering.styles import PAGE_CSS
 
@@ -42,6 +43,13 @@ selected_strategies = [s for s in strategies if s.name in selected_strategy_name
 if not selected_strategies:
     st.info("请至少选择一个策略。")
     st.stop()
+
+col_r1, col_r2, col_r3 = st.columns(3)
+with col_r1:
+    run_rounds = st.number_input(
+        "每策略跑几轮", min_value=1, max_value=100, value=20,
+        key="bt_rounds", help="多轮取均值，消除买入顺序随机影响",
+    )
 
 # ── Expander: 股票池详情 ──
 with st.expander("📋 股票池详情", expanded=False):
@@ -98,23 +106,36 @@ if st.button("📥 加载数据", key="bt_load", type="primary"):
 # ── Step 3: Run Comparison ──
 run_disabled = not st.session_state.get("bt_data_loaded", False)
 if st.button("▶ 运行对比", key="bt_run", type="primary", disabled=run_disabled):
+    from marketreview.backtest.reporter import merge_reports
+
     reports = {}
     progress = st.progress(0)
-    total = len(selected_strategies)
+    total = len(selected_strategies) * run_rounds
+    current = 0
 
-    for i, strategy_cfg in enumerate(selected_strategies):
-        progress.progress((i) / total, f"正在运行: {strategy_cfg.name}...")
-        try:
-            report = svc.run_backtest(selected_pool, strategy_cfg)
-            reports[strategy_cfg.name] = report
-        except Exception as e:
-            st.error(f"❌ {strategy_cfg.name} 运行失败: {e}")
-            import traceback
-            st.code(traceback.format_exc())
+    for strategy_cfg in selected_strategies:
+        round_reports = []
+        for rnd in range(run_rounds):
+            current += 1
+            progress.progress(
+                current / total,
+                f"正在运行: {strategy_cfg.name} — 第{rnd+1}/{run_rounds}轮...",
+            )
+            try:
+                report = svc.run_backtest(selected_pool, strategy_cfg)
+                round_reports.append(report)
+            except Exception as e:
+                st.error(f"❌ {strategy_cfg.name} 第{rnd+1}轮 运行失败: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+
+        if round_reports:
+            reports[strategy_cfg.name] = merge_reports(round_reports)
 
     progress.progress(1.0, "对比完成")
     st.session_state.bt_reports = reports
     st.session_state.bt_has_reports = True
+    st.session_state.bt_rounds_used = run_rounds
 
 # ── Step 4: Display Results ──
 if st.session_state.get("bt_has_reports"):
@@ -125,14 +146,15 @@ if st.session_state.get("bt_has_reports"):
         st.info("未产生任何回测报告。")
     else:
         # ── 策略对比汇总表 ──
-        st.subheader("📊 策略对比汇总")
+        rounds_used = st.session_state.get("bt_rounds_used", 1)
+        st.subheader(f"📊 策略对比汇总（{rounds_used}轮均值）")
         import datetime as _dt
 
         comp_rows = []
         for sname, report in reports.items():
             comp_rows.append({
                 "策略": sname,
-                "交易笔数": str(report.total_trades),
+                "交易笔数": f"{report.total_trades:.1f}",
                 "胜率": f"{report.win_rate:.1%}",
                 "总收益": f"{report.total_return_pct:+.2f}%",
                 "最大回撤": f"{report.max_drawdown_pct:.2f}%",
@@ -156,21 +178,62 @@ if st.session_state.get("bt_has_reports"):
 
         for i, sname in enumerate(strategy_names_list):
             report = reports[sname]
-            if report.equity_curve:
-                if min_entry:
-                    curve = [pt for pt in report.equity_curve if pt["date"] >= min_entry]
-                else:
-                    curve = report.equity_curve
+            color = colors[i % len(colors)]
 
-                if curve:
-                    dates = [_dt.datetime.strptime(pt["date"], "%Y%m%d") for pt in curve]
-                    net_values = [pt["return_pct"] / 100.0 + 1.0 for pt in curve]
-                    color = colors[i % len(colors)]
+            # ── Multi-round: show shaded band + mean line ──
+            if (report.num_rounds > 1 and report.individual_equity_curves
+                    and len(report.individual_equity_curves) > 1):
+                # Build date → list of net values from individual curves
+                date_vals: dict[str, list[float]] = defaultdict(list)
+                for icurve in report.individual_equity_curves:
+                    for pt in icurve:
+                        d = pt["date"]
+                        if min_entry and d < min_entry:
+                            continue
+                        date_vals[d].append(pt["return_pct"] / 100.0 + 1.0)
+
+                if date_vals:
+                    sorted_dates = sorted(date_vals.keys())
+                    dt_list = [_dt.datetime.strptime(d, "%Y%m%d") for d in sorted_dates]
+                    vals_arrays = [date_vals[d] for d in sorted_dates]
+                    means = [sum(v) / len(v) for v in vals_arrays]
+                    mins = [min(v) for v in vals_arrays]
+                    maxs = [max(v) for v in vals_arrays]
+
+                    # Band (min-max fill)
+                    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+                    band_color = f"rgba({r},{g},{b},0.12)"
                     fig.add_trace(go.Scatter(
-                        x=dates, y=net_values, mode="lines",
-                        line=dict(color=color, width=2),
-                        name=sname,
+                        x=dt_list + dt_list[::-1],
+                        y=maxs + mins[::-1],
+                        fill="toself",
+                        fillcolor=band_color,
+                        line=dict(width=0),
+                        name=f"{sname} 区间",
+                        showlegend=False,
                     ))
+                    # Mean line
+                    fig.add_trace(go.Scatter(
+                        x=dt_list, y=means, mode="lines",
+                        line=dict(color=color, width=2.5),
+                        name=f"{sname} (均值)",
+                    ))
+            else:
+                # Single round: just draw the line
+                if report.equity_curve:
+                    if min_entry:
+                        curve = [pt for pt in report.equity_curve if pt["date"] >= min_entry]
+                    else:
+                        curve = report.equity_curve
+
+                    if curve:
+                        dates = [_dt.datetime.strptime(pt["date"], "%Y%m%d") for pt in curve]
+                        net_values = [pt["return_pct"] / 100.0 + 1.0 for pt in curve]
+                        fig.add_trace(go.Scatter(
+                            x=dates, y=net_values, mode="lines",
+                            line=dict(color=color, width=2),
+                            name=sname,
+                        ))
 
         # Baseline at 1.0
         fig.add_hline(y=1.0, line_dash="dash", line_color="gray", opacity=0.5)
@@ -194,7 +257,7 @@ if st.session_state.get("bt_has_reports"):
                 continue
 
             with st.expander(
-                f"🔹 {sname} — {report.total_trades}笔 "
+                f"🔹 {sname} — {report.total_trades:.1f}笔 "
                 f"胜率{report.win_rate:.1%} "
                 f"收益{report.total_return_pct:+.2f}% "
                 f"回撤{report.max_drawdown_pct:.2f}%"
