@@ -1,4 +1,4 @@
-"""MA144 突破+拉回 买入策略 — 跌破MA144/空间止损/三级浮盈止盈卖出."""
+"""MA144 突破+拉回 战法（空间止损 + 战法卖出 + 时间止损 + 三级止盈）."""
 from ..strategy_base import (
     BaseStrategy, DayContext, BuySignal, SellSignal,
     register_strategy, safe_float,
@@ -8,9 +8,12 @@ from ..strategy_base import (
 @register_strategy("ma144_breakthrough")
 class MA144BreakthroughStrategy(BaseStrategy):
 
+    TIME_STOP_DAYS: int = 8
+    TIME_STOP_MIN_MFP: float = 10.0
+
     @property
     def name(self) -> str:
-        return "MA144突破+拉回"
+        return "MA144突破拉回战法"
 
     def check_buy(self, ctx: DayContext) -> BuySignal | None:
         if ctx.ma144 is None or ctx.ma144_yesterday is None:
@@ -49,24 +52,6 @@ class MA144BreakthroughStrategy(BaseStrategy):
         pos = ctx.position
         current_price = ctx.close
 
-        if ctx.ma144_yesterday > 0:
-            ma144_stop = ctx.ma144_yesterday * 0.97
-            if ctx.low <= ma144_stop:
-                if ctx.open > 0 and ctx.open <= ma144_stop:
-                    return SellSignal(
-                        date=ctx.date, symbol=ctx.symbol,
-                        symbol_name=ctx.symbol_name,
-                        price=ctx.open,
-                        reason=f"开盘价，MA144 3%空间止损(昨日MA144 {ctx.ma144_yesterday:.2f})",
-                    )
-                else:
-                    return SellSignal(
-                        date=ctx.date, symbol=ctx.symbol,
-                        symbol_name=ctx.symbol_name,
-                        price=ma144_stop,
-                        reason=f"盘中价，MA144 3%空间止损(跌破昨日MA144 {ctx.ma144_yesterday:.2f})",
-                    )
-
         if current_price < ctx.ma144:
             return SellSignal(
                 date=ctx.date, symbol=ctx.symbol,
@@ -74,4 +59,20 @@ class MA144BreakthroughStrategy(BaseStrategy):
                 price=current_price, reason="战法卖出(跌破MA144)",
             )
 
+        trading_days = self._trading_days_since_buy(ctx)
+        if trading_days >= self.TIME_STOP_DAYS and pos.max_float_profit_pct < self.TIME_STOP_MIN_MFP:
+            return SellSignal(
+                date=ctx.date, symbol=ctx.symbol,
+                symbol_name=ctx.symbol_name,
+                price=current_price,
+                reason=f"时间止损(持仓{trading_days}日浮盈未达{self.TIME_STOP_MIN_MFP:.0f}%，收盘卖出)",
+            )
+
         return self.check_take_profit(ctx)
+
+    def _trading_days_since_buy(self, ctx: DayContext) -> int:
+        if ctx.position is None:
+            return 0
+        buy_date = ctx.position.buy_date
+        return sum(1 for bar in ctx.kline_history
+                   if str(bar.get("date", "")) > buy_date)

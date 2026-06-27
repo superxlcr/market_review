@@ -69,12 +69,7 @@ class Broker:
         )
         allowed = self.max_positions + qualified
         if self.position_count >= allowed:
-            if qualified > 0:
-                return False, (
-                    f"已达开仓上限(基础{self.max_positions}只"
-                    f"+达标解锁{qualified}只={allowed}只)"
-                )
-            return False, f"已达开仓上限({self.max_positions}只)"
+            return False, "已达开仓上限"
         trade_amount = self.init_capital * self.position_pct / 100.0
         if self.cash < trade_amount:
             return False, "资金不足"
