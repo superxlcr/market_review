@@ -1,4 +1,4 @@
-"""战法回测 — 股票池 × 策略日线回测."""
+"""战法回测 — 多策略对比."""
 import streamlit as st
 import plotly.graph_objects as go
 from services.dashboard_service import DashboardService
@@ -10,7 +10,7 @@ st.markdown(PAGE_CSS, unsafe_allow_html=True)
 svc = DashboardService()
 
 st.title("🔬 战法回测")
-st.caption(f"股票池 × 策略日线回测 ｜ AI v{DashboardService._AI_VERSION}")
+st.caption(f"股票池 × 策略日线回测 — 多策略对比 ｜ AI v{DashboardService._AI_VERSION}")
 
 # ── Step 1: Load configs ──
 pools = svc.load_backtest_pools()
@@ -31,9 +31,17 @@ col1, col2 = st.columns(2)
 with col1:
     selected_pool_name = st.selectbox("股票池", pool_names, key="bt_pool")
 with col2:
-    selected_strategy_name = st.selectbox("策略", strategy_names, key="bt_strategy")
+    selected_strategy_names = st.multiselect(
+        "策略对比（可多选）", strategy_names,
+        default=strategy_names, key="bt_strategies",
+    )
 
 selected_pool = next(p for p in pools if p.name == selected_pool_name)
+selected_strategies = [s for s in strategies if s.name in selected_strategy_names]
+
+if not selected_strategies:
+    st.info("请至少选择一个策略。")
+    st.stop()
 
 # ── Expander: 股票池详情 ──
 with st.expander("📋 股票池详情", expanded=False):
@@ -47,7 +55,6 @@ with st.expander("📋 股票池详情", expanded=False):
 
 # ── Step 2: Load Data ──
 if st.button("📥 加载数据", key="bt_load", type="primary"):
-    selected_strategy_cfg = next(s for s in strategies if s.name == selected_strategy_name)
     codes = [s.code for s in selected_pool.stocks if s.code]
 
     if not codes:
@@ -56,21 +63,21 @@ if st.button("📥 加载数据", key="bt_load", type="primary"):
         with st.spinner("正在加载K线数据..."):
             try:
                 import datetime as _dt
-                from marketreview.backtest.strategy_base import (
-                    STRATEGY_REGISTRY, create_strategy,
-                )
+                from marketreview.backtest.strategy_base import create_strategy
 
                 # Determine date range
                 all_dates = [s.entry_date for s in selected_pool.stocks if s.entry_date]
                 min_entry = min(all_dates) if all_dates else "20240101"
                 max_exit = svc.get_latest_trade_date()
 
-                # lookback buffer
-                strat = create_strategy(selected_strategy_cfg.class_name)
-                lookback = strat.lookback_trading_days if strat else 60
-                buff_dt = _dt.datetime.strptime(min_entry, "%Y%m%d") - _dt.timedelta(
-                    days=max(365, int(lookback * 2.5))
-                )
+                # Use max lookback across all selected strategies
+                lookback = 60
+                for sc in selected_strategies:
+                    strat = create_strategy(sc.class_name)
+                    if strat:
+                        lookback = max(lookback, strat.lookback_trading_days)
+                actual_buffer = max(365, int(lookback * 2.5))
+                buff_dt = _dt.datetime.strptime(min_entry, "%Y%m%d") - _dt.timedelta(days=actual_buffer)
                 start_date = buff_dt.strftime("%Y%m%d")
 
                 svc._dp.ensure_data_loaded_for_codes(codes, start_date, max_exit)
@@ -78,7 +85,6 @@ if st.button("📥 加载数据", key="bt_load", type="primary"):
                 st.session_state.bt_codes = codes
                 st.session_state.bt_start = start_date
                 st.session_state.bt_end = max_exit
-                actual_buffer = max(365, int(lookback * 2.5))
                 st.success(
                     f"✅ 已加载 {len(codes)} 只股票, "
                     f"缓冲{actual_buffer}日历日, "
@@ -89,126 +95,169 @@ if st.button("📥 加载数据", key="bt_load", type="primary"):
                 import traceback
                 st.code(traceback.format_exc())
 
-# ── Step 3: Run Backtest ──
+# ── Step 3: Run Comparison ──
 run_disabled = not st.session_state.get("bt_data_loaded", False)
-if st.button("▶ 运行回测", key="bt_run", type="primary", disabled=run_disabled):
-    with st.spinner("回测运行中..."):
+if st.button("▶ 运行对比", key="bt_run", type="primary", disabled=run_disabled):
+    reports = {}
+    progress = st.progress(0)
+    total = len(selected_strategies)
+
+    for i, strategy_cfg in enumerate(selected_strategies):
+        progress.progress((i) / total, f"正在运行: {strategy_cfg.name}...")
         try:
-            selected_strategy_cfg = next(
-                s for s in strategies if s.name == selected_strategy_name
-            )
-            report = svc.run_backtest(selected_pool, selected_strategy_cfg)
-            st.session_state.bt_report = report
-            st.session_state.bt_has_report = True
+            report = svc.run_backtest(selected_pool, strategy_cfg)
+            reports[strategy_cfg.name] = report
         except Exception as e:
-            st.error(f"回测运行失败: {e}")
+            st.error(f"❌ {strategy_cfg.name} 运行失败: {e}")
             import traceback
             st.code(traceback.format_exc())
 
+    progress.progress(1.0, "对比完成")
+    st.session_state.bt_reports = reports
+    st.session_state.bt_has_reports = True
+
 # ── Step 4: Display Results ──
-if st.session_state.get("bt_has_report"):
-    report = st.session_state.bt_report
-    if report.total_trades == 0:
-        st.info("未产生任何交易。")
+if st.session_state.get("bt_has_reports"):
+    reports = st.session_state.bt_reports
+    strategy_names_list = list(reports.keys())
+
+    if not reports:
+        st.info("未产生任何回测报告。")
     else:
-        # Summary cards
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric(
-                "总交易笔数", report.total_trades,
-                delta=f"赢{report.win_trades} / 亏{report.lose_trades}",
-            )
-        with c2:
-            st.metric("胜率", f"{report.win_rate:.1%}")
-        with c3:
-            st.metric("总收益率", f"{report.total_return_pct:+.2f}%")
+        # ── 策略对比汇总表 ──
+        st.subheader("📊 策略对比汇总")
+        import datetime as _dt
 
-        c4, c5, c6 = st.columns(3)
-        with c4:
-            st.metric("最大回撤", f"{report.max_drawdown_pct:.2f}%")
-        with c5:
-            st.metric("平均持仓天", f"{report.avg_hold_days:.1f}天")
-        with c6:
-            st.metric("盈亏比", f"{report.profit_loss_ratio:.2f}:1")
+        comp_rows = []
+        for sname, report in reports.items():
+            comp_rows.append({
+                "策略": sname,
+                "交易笔数": str(report.total_trades),
+                "胜率": f"{report.win_rate:.1%}",
+                "总收益": f"{report.total_return_pct:+.2f}%",
+                "最大回撤": f"{report.max_drawdown_pct:.2f}%",
+                "平均持仓": f"{report.avg_hold_days:.1f}天",
+                "盈亏比": f"{report.profit_loss_ratio:.2f}",
+            })
+        st.dataframe(comp_rows, use_container_width=True, hide_index=True)
 
-        # Equity curve — net value, filtered from min entry date
-        if report.equity_curve:
-            import datetime as _dt
-            # Find min entry date to trim flat buffer period
-            min_entry = min(
-                (s.entry_date for s in selected_pool.stocks if s.entry_date),
-                default=None
-            )
-            if min_entry:
-                curve = [pt for pt in report.equity_curve if pt["date"] >= min_entry]
-            else:
-                curve = report.equity_curve
+        # ── 净值曲线叠加图 ──
+        st.subheader("📈 净值曲线对比")
+        fig = go.Figure()
 
-            if curve:
-                dates = [_dt.datetime.strptime(pt["date"], "%Y%m%d") for pt in curve]
-                net_values = [pt["return_pct"] / 100.0 + 1.0 for pt in curve]
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=dates, y=net_values, mode="lines",
-                    line=dict(color="#cf2c2c", width=2),
-                    name="净值",
-                ))
-                # Add baseline at 1.0
-                fig.add_hline(y=1.0, line_dash="dash", line_color="gray", opacity=0.5)
-                fig.update_layout(
-                    title="净值曲线",
-                    xaxis_title="日期",
-                    yaxis_title="净值",
-                    height=400,
-                    margin=dict(l=40, r=20, t=40, b=40),
-                    xaxis=dict(tickformat="%Y-%m", dtick="M1"),
-                )
-                st.plotly_chart(fig, use_container_width=True)
+        # Color palette for strategies
+        colors = ["#cf2c2c", "#2c6fcf", "#2c9f4f", "#e68a2e", "#8b5cf6", "#ec4899"]
 
-        # ── Trade detail table ──
-        st.subheader("交易明细")
-        if report.trades:
-            trade_rows = []
-            for t in sorted(report.trades, key=lambda x: x.date):
-                pnl_str = f"{t.pnl_pct:+.2f}%" if t.trade_type == "卖出" else ""
-                trade_rows.append({
-                    "日期": t.date,
-                    "股票": t.symbol_name,
-                    "类型": t.trade_type,
-                    "价格": f"{t.price:.2f}",
-                    "盈亏": pnl_str,
-                    "原因": t.reason,
-                    "当前持仓": t.positions_after,
-                })
-            st.dataframe(
-                trade_rows, use_container_width=True, hide_index=True,
-                column_config={
-                    "日期": st.column_config.TextColumn(width="small"),
-                    "股票": st.column_config.TextColumn(width="small"),
-                    "类型": st.column_config.TextColumn(width="small"),
-                    "价格": st.column_config.TextColumn(width="small"),
-                    "盈亏": st.column_config.TextColumn(width="small"),
-                    "原因": st.column_config.TextColumn(width="large"),
-                    "当前持仓": st.column_config.TextColumn(width="large"),
-                },
-            )
+        # Find common min entry date across pool for x-axis trim
+        min_entry = min(
+            (s.entry_date for s in selected_pool.stocks if s.entry_date),
+            default=None
+        )
 
-        # Per-stock summary + trade detail
-        st.subheader("股票明细")
-        for ss in report.stock_summaries:
+        for i, sname in enumerate(strategy_names_list):
+            report = reports[sname]
+            if report.equity_curve:
+                if min_entry:
+                    curve = [pt for pt in report.equity_curve if pt["date"] >= min_entry]
+                else:
+                    curve = report.equity_curve
+
+                if curve:
+                    dates = [_dt.datetime.strptime(pt["date"], "%Y%m%d") for pt in curve]
+                    net_values = [pt["return_pct"] / 100.0 + 1.0 for pt in curve]
+                    color = colors[i % len(colors)]
+                    fig.add_trace(go.Scatter(
+                        x=dates, y=net_values, mode="lines",
+                        line=dict(color=color, width=2),
+                        name=sname,
+                    ))
+
+        # Baseline at 1.0
+        fig.add_hline(y=1.0, line_dash="dash", line_color="gray", opacity=0.5)
+        fig.update_layout(
+            title="净值曲线（多策略叠加）",
+            xaxis_title="日期",
+            yaxis_title="净值",
+            height=450,
+            margin=dict(l=40, r=20, t=40, b=40),
+            xaxis=dict(tickformat="%Y-%m", dtick="M1"),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # ── 各策略明细 ──
+        st.subheader("📋 各策略明细")
+        for sname in strategy_names_list:
+            report = reports[sname]
+            if report.total_trades == 0:
+                with st.expander(f"🔹 {sname} — 无交易"):
+                    st.caption("未产生任何交易。")
+                continue
+
             with st.expander(
-                f"{ss.symbol_name} — {ss.total_trades}笔 "
-                f"胜率{ss.win_rate:.1%} 累计{ss.cumulative_pnl_pct:+.2f}%"
+                f"🔹 {sname} — {report.total_trades}笔 "
+                f"胜率{report.win_rate:.1%} "
+                f"收益{report.total_return_pct:+.2f}% "
+                f"回撤{report.max_drawdown_pct:.2f}%"
             ):
-                stock_trades = [t for t in report.trades if t.symbol == ss.symbol]
-                rows_data = []
-                for t in stock_trades:
-                    pnl_str = f"{t.pnl_pct:+.2f}%" if t.trade_type == "卖出" else ""
-                    rows_data.append({
-                        "日期": t.date,
-                        "类型": t.trade_type,
-                        "价格": f"{t.price:.2f}",
-                        "盈亏": pnl_str,
-                        "原因": t.reason,
-                    })
-                st.dataframe(rows_data, use_container_width=True, hide_index=True)
+                # Mini summary
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                with mc1:
+                    st.metric("交易数", report.total_trades,
+                              delta=f"赢{report.win_trades}/亏{report.lose_trades}")
+                with mc2:
+                    st.metric("胜率", f"{report.win_rate:.1%}")
+                with mc3:
+                    st.metric("总收益", f"{report.total_return_pct:+.2f}%")
+                with mc4:
+                    st.metric("最大回撤", f"{report.max_drawdown_pct:.2f}%")
+
+                # Trade detail table
+                st.markdown("**交易明细**")
+                if report.trades:
+                    trade_rows = []
+                    for t in sorted(report.trades, key=lambda x: x.date):
+                        pnl_str = f"{t.pnl_pct:+.2f}%" if t.trade_type == "卖出" else ""
+                        trade_rows.append({
+                            "日期": t.date,
+                            "股票": t.symbol_name,
+                            "类型": t.trade_type,
+                            "价格": f"{t.price:.2f}",
+                            "盈亏": pnl_str,
+                            "原因": t.reason,
+                            "当前持仓": t.positions_after,
+                        })
+                    st.dataframe(
+                        trade_rows, use_container_width=True, hide_index=True,
+                        column_config={
+                            "日期": st.column_config.TextColumn(width="small"),
+                            "股票": st.column_config.TextColumn(width="small"),
+                            "类型": st.column_config.TextColumn(width="small"),
+                            "价格": st.column_config.TextColumn(width="small"),
+                            "盈亏": st.column_config.TextColumn(width="small"),
+                            "原因": st.column_config.TextColumn(width="large"),
+                            "当前持仓": st.column_config.TextColumn(width="large"),
+                        },
+                    )
+
+                # Per-stock summary
+                if report.stock_summaries:
+                    st.markdown("**股票明细**")
+                    for ss in report.stock_summaries:
+                        if ss.total_trades == 0:
+                            continue
+                        with st.expander(
+                            f"  {ss.symbol_name} — {ss.total_trades}笔 "
+                            f"胜率{ss.win_rate:.1%} 累计{ss.cumulative_pnl_pct:+.2f}%"
+                        ):
+                            stock_trades = [t for t in report.trades if t.symbol == ss.symbol]
+                            srows = []
+                            for t in stock_trades:
+                                pnl_str = f"{t.pnl_pct:+.2f}%" if t.trade_type == "卖出" else ""
+                                srows.append({
+                                    "日期": t.date,
+                                    "类型": t.trade_type,
+                                    "价格": f"{t.price:.2f}",
+                                    "盈亏": pnl_str,
+                                    "原因": t.reason,
+                                })
+                            st.dataframe(srows, use_container_width=True, hide_index=True)
