@@ -50,6 +50,11 @@ with col_r1:
         "每策略跑几轮", min_value=1, max_value=100, value=20,
         key="bt_rounds", help="多轮取均值，消除买入顺序随机影响",
     )
+with col_r2:
+    max_workers = st.number_input(
+        "并发数", min_value=1, max_value=16, value=4,
+        key="bt_workers", help="并行线程数，建议 4~8",
+    )
 
 # ── Expander: 股票池详情 ──
 with st.expander("📋 股票池详情", expanded=False):
@@ -106,33 +111,46 @@ if st.button("📥 加载数据", key="bt_load", type="primary"):
 # ── Step 3: Run Comparison ──
 run_disabled = not st.session_state.get("bt_data_loaded", False)
 if st.button("▶ 运行对比", key="bt_run", type="primary", disabled=run_disabled):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from marketreview.backtest.reporter import merge_reports
 
     reports = {}
     progress = st.progress(0)
     total = len(selected_strategies) * run_rounds
-    current = 0
+    completed = 0
 
-    for strategy_cfg in selected_strategies:
-        round_reports = []
-        for rnd in range(run_rounds):
-            current += 1
-            progress.progress(
-                current / total,
-                f"正在运行: {strategy_cfg.name} — 第{rnd+1}/{run_rounds}轮...",
-            )
+    # Group results by strategy name
+    round_results: dict[str, list] = {s.name: [] for s in selected_strategies}
+    status = st.empty()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        for strategy_cfg in selected_strategies:
+            for rnd in range(run_rounds):
+                fut = executor.submit(svc.run_backtest, selected_pool, strategy_cfg)
+                futures[fut] = (strategy_cfg.name, rnd + 1)
+
+        for fut in as_completed(futures):
+            sname, rnd = futures[fut]
+            completed += 1
             try:
-                report = svc.run_backtest(selected_pool, strategy_cfg)
-                round_reports.append(report)
+                report = fut.result()
+                round_results[sname].append(report)
             except Exception as e:
-                st.error(f"❌ {strategy_cfg.name} 第{rnd+1}轮 运行失败: {e}")
+                st.error(f"❌ {sname} 第{rnd}轮 运行失败: {e}")
                 import traceback
                 st.code(traceback.format_exc())
 
-        if round_reports:
-            reports[strategy_cfg.name] = merge_reports(round_reports)
+            progress.progress(completed / total)
+            status.text(f"已完成 {completed}/{total} — {sname} 第{rnd}轮")
+
+    # Merge round results per strategy
+    for sname, round_list in round_results.items():
+        if round_list:
+            reports[sname] = merge_reports(round_list)
 
     progress.progress(1.0, "对比完成")
+    status.empty()
     st.session_state.bt_reports = reports
     st.session_state.bt_has_reports = True
     st.session_state.bt_rounds_used = run_rounds
