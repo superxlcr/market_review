@@ -14,6 +14,7 @@ class Position:
     shares: int
     cost: float               # total cost = buy_price * shares
     max_float_profit_pct: float = 0.0  # highest intraday gain since buy
+    entry_ma_type: str = ""   # which MA triggered entry: "MA20"/"MA60"/"MA120"/"MA240"
 
 
 @dataclass
@@ -28,8 +29,14 @@ class DayContext:
     close: float
     volume: float
     amount: float
-    ma60: float                    # today's MA60
-    ma60_yesterday: float          # yesterday's MA60
+    ma20: float = 0.0              # today's MA20
+    ma20_yesterday: float = 0.0    # yesterday's MA20
+    ma60: float = 0.0              # today's MA60
+    ma60_yesterday: float = 0.0    # yesterday's MA60
+    ma120: float = 0.0             # today's MA120
+    ma120_yesterday: float = 0.0   # yesterday's MA120
+    ma240: float = 0.0             # today's MA240
+    ma240_yesterday: float = 0.0   # yesterday's MA240
     kline_history: list = field(default_factory=list)  # list[dict] up to today
     in_pool_window: bool = True    # whether still within entry~exit window
     position: Optional[Position] = None  # current holding for this stock
@@ -43,6 +50,7 @@ class BuySignal:
     symbol_name: str
     price: float           # suggested entry price
     reason: str            # "突破MA60" | "拉回MA60"
+    entry_ma_type: str = ""  # which MA: "MA20"/"MA60"/"MA120"/"MA240"
 
 
 @dataclass

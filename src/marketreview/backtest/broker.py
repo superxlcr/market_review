@@ -98,7 +98,8 @@ class Broker:
 
     def buy(self, date: str, symbol: str, symbol_name: str,
             price: float, reason: str = "",
-            position_prices: dict[str, float] | None = None) -> Position | None:
+            position_prices: dict[str, float] | None = None,
+            entry_ma_type: str = "") -> Position | None:
         """Execute a buy. Returns Position or None if rejected."""
         ok, reject_reason = self.can_buy(symbol)
         if not ok:
@@ -127,6 +128,7 @@ class Broker:
             symbol=symbol, symbol_name=symbol_name,
             buy_date=date, buy_price=price,
             shares=shares, cost=cost,
+            entry_ma_type=entry_ma_type,
         )
         self.positions[symbol] = pos
         self.trades.append(TradeRecord(

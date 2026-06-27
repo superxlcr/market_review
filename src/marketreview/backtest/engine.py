@@ -22,7 +22,7 @@ class BacktestEngine:
         self.strategy_cfg = strategy_cfg
 
         # Create strategy instance (import strategies to ensure registration)
-        from .strategies import ma60_breakthrough, ma60_breakthrough_basic, ma60_breakthrough_time_stop, ma60_breakthrough_basic_time_stop  # noqa: F401
+        from .strategies import ma60_breakthrough, ma60_breakthrough_basic_time_stop, ma_pullback  # noqa: F401
 
         self.strategy = create_strategy(strategy_cfg.class_name)
         if self.strategy is None:
@@ -102,15 +102,21 @@ class BacktestEngine:
                 log.warning("K线DataFrame为空: %s %s", s.code, s.name)
                 continue
 
-            # Calculate MA60
-            ma_result = calc_ma(df, [60])
+            # Calculate MAs
+            ma_result = calc_ma(df, [20, 60, 120, 240])
+            ma20_vals = ma_result.get("MA20", [])
             ma60_vals = ma_result.get("MA60", [])
+            ma120_vals = ma_result.get("MA120", [])
+            ma240_vals = ma_result.get("MA240", [])
 
-            # Build list of dicts date ASC with MA60
+            # Build list of dicts date ASC with all MAs
             klines_asc = []
             for i, (_, row) in enumerate(df.iterrows()):
                 d = row.to_dict()
+                d["ma20"] = ma20_vals[i] if i < len(ma20_vals) else None
                 d["ma60"] = ma60_vals[i] if i < len(ma60_vals) else None
+                d["ma120"] = ma120_vals[i] if i < len(ma120_vals) else None
+                d["ma240"] = ma240_vals[i] if i < len(ma240_vals) else None
                 klines_asc.append(d)
             self._klines[s.code] = klines_asc
             loaded_count += 1
@@ -188,6 +194,7 @@ class BacktestEngine:
                                 date, s.code, s.name,
                                 buy_sig.price, buy_sig.reason,
                                 position_prices=pos_prices,
+                                entry_ma_type=buy_sig.entry_ma_type,
                             )
                             self._enrich_positions(date)
 
@@ -254,10 +261,16 @@ class BacktestEngine:
                 idx = i
                 break
 
+        yesterday_ma20 = 0.0
         yesterday_ma60 = 0.0
+        yesterday_ma120 = 0.0
+        yesterday_ma240 = 0.0
         if idx is not None and idx >= 1:
             yesterday = klines[idx - 1]
+            yesterday_ma20 = _safe_f(yesterday.get("ma20"))
             yesterday_ma60 = _safe_f(yesterday.get("ma60"))
+            yesterday_ma120 = _safe_f(yesterday.get("ma120"))
+            yesterday_ma240 = _safe_f(yesterday.get("ma240"))
 
         if idx is not None:
             hist = klines[:idx + 1]
@@ -274,8 +287,14 @@ class BacktestEngine:
             close=_safe_f(today_row.get("close")),
             volume=_safe_f(today_row.get("vol")),
             amount=_safe_f(today_row.get("amount")),
+            ma20=_safe_f(today_row.get("ma20")),
+            ma20_yesterday=yesterday_ma20,
             ma60=_safe_f(today_row.get("ma60")),
             ma60_yesterday=yesterday_ma60,
+            ma120=_safe_f(today_row.get("ma120")),
+            ma120_yesterday=yesterday_ma120,
+            ma240=_safe_f(today_row.get("ma240")),
+            ma240_yesterday=yesterday_ma240,
             kline_history=hist,
             in_pool_window=in_window,
         )
