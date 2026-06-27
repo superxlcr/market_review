@@ -52,8 +52,8 @@ with col_r1:
     )
 with col_r2:
     max_workers = st.number_input(
-        "并发数", min_value=1, max_value=16, value=4,
-        key="bt_workers", help="并行线程数，建议 4~8",
+        "并发数", min_value=1, max_value=16, value=10,
+        key="bt_workers", help="并行线程数，建议 4~12",
     )
 
 # ── Expander: 股票池详情 ──
@@ -114,14 +114,16 @@ if st.button("▶ 运行对比", key="bt_run", type="primary", disabled=run_disa
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from marketreview.backtest.reporter import merge_reports
 
+    total = len(selected_strategies) * run_rounds
+    status = st.empty()
+    status.info(f"⏳ 已提交 {total} 个回测任务（{len(selected_strategies)}策略 × {run_rounds}轮），等待首个结果返回...")
+
     reports = {}
     progress = st.progress(0)
-    total = len(selected_strategies) * run_rounds
     completed = 0
 
     # Group results by strategy name
     round_results: dict[str, list] = {s.name: [] for s in selected_strategies}
-    status = st.empty()
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {}
