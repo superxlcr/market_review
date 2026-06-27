@@ -30,6 +30,7 @@ class StrategyConfig:
     max_positions: int           # max concurrent positions
     space_stop_pct: float        # 0~100, e.g. 3 means -3% stop loss
     new_position_threshold_pct: float = 0.0  # 现有持仓浮盈达此值才可开新仓
+    addon_threshold_pct: float = 999.0        # 浮盈加仓阈值%，999=不启用
 
 
 def load_pools(dp) -> list[PoolConfig]:
@@ -79,7 +80,7 @@ def _resolve_stock_name(dp, name: str) -> str:
 
 def load_strategies() -> list[StrategyConfig]:
     """Parse backtest_strategies.txt.
-    Format: 策略名 战法类名 仓位% 开仓上限 空间止损% [开仓浮盈阈值%]
+    Format: 策略名 战法类名 仓位% 开仓上限 空间止损% [开仓浮盈阈值%] [加仓阈值%]
     """
     path = CONFIG_DIR / "backtest_strategies.txt"
     if not path.exists():
@@ -100,5 +101,6 @@ def load_strategies() -> list[StrategyConfig]:
                     max_positions=int(parts[3]),
                     space_stop_pct=float(parts[4]),
                     new_position_threshold_pct=float(parts[5]) if len(parts) >= 6 else 0.0,
+                    addon_threshold_pct=float(parts[6]) if len(parts) >= 7 else 999.0,
                 ))
     return strategies

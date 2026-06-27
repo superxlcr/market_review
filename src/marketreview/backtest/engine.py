@@ -39,7 +39,13 @@ class BacktestEngine:
             max_positions=strategy_cfg.max_positions,
             space_stop_pct=strategy_cfg.space_stop_pct,
             new_position_threshold_pct=strategy_cfg.new_position_threshold_pct,
+            tp_tier3_mfp=self.strategy.TP_TIER3_MFP_THRESHOLD,
+            tp_tier3_protect=self.strategy.TP_TIER3_PROTECT_PCT,
+            tp_tier2_mfp=self.strategy.TP_TIER2_MFP_THRESHOLD,
+            tp_tier2_protect_ratio=self.strategy.TP_TIER2_PROTECT_PRICE_RATIO,
+            strategy_name=strategy_cfg.name,
         )
+        self._addon_threshold_pct = strategy_cfg.addon_threshold_pct
 
         # K-line cache: {code: list[dict]} sorted date ASC
         self._klines: dict[str, list[dict]] = {}
@@ -170,6 +176,46 @@ class BacktestEngine:
                     self.broker.update_max_float_profit(
                         s.code, _safe_f(today_row.get("high"))
                     )
+
+                    # a2) 浮盈加仓检查
+                    pos = self.broker.positions.get(s.code)
+                    if pos and pos.addon_count < 1 and self._addon_threshold_pct < 999:
+                        if pos.max_float_profit_pct >= self._addon_threshold_pct:
+                            trigger_price = pos.buy_price * (
+                                1 + self._addon_threshold_pct / 100.0
+                            )
+                            today_open = _safe_f(today_row.get("open"))
+                            today_high = _safe_f(today_row.get("high"))
+                            # 跳空高开 → 开盘价；否则条件单触发价
+                            if today_open > trigger_price:
+                                entry_price = today_open
+                            elif today_high >= trigger_price:
+                                entry_price = trigger_price
+                            else:
+                                entry_price = 0.0
+                            if entry_price > 0:
+                                addon_shares = pos.shares // 2
+                                self.broker.addon_buy(
+                                    date, s.code, entry_price, addon_shares
+                                )
+                                self._enrich_positions(date)
+
+                    # a3) 加仓部分：更新MFP + 三级止盈 + 空间止损
+                    if pos and pos.addon_shares > 0:
+                        self.broker.update_addon_mfp(
+                            s.code, _safe_f(today_row.get("high"))
+                        )
+                        tp_triggered = self.broker.check_addon_take_profit(
+                            date, s.code, _safe_f(today_row.get("low"))
+                        )
+                        if tp_triggered:
+                            self._enrich_positions(date)
+                        ss_triggered = self.broker.check_addon_space_stop(
+                            date, s.code, _safe_f(today_row.get("low")),
+                            _safe_f(today_row.get("open")),
+                        )
+                        if ss_triggered:
+                            self._enrich_positions(date)
 
                     # b) Space stop (intraday) — 盘中优先
                     triggered = self.broker.check_space_stop(

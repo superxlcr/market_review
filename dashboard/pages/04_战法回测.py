@@ -300,7 +300,7 @@ if st.session_state.get("bt_has_reports"):
                 if report.trades:
                     trade_rows = []
                     for t in sorted(report.trades, key=lambda x: x.date):
-                        pnl_str = f"{t.pnl_pct:+.2f}%" if t.trade_type == "卖出" else ""
+                        pnl_str = f"{t.pnl_pct:+.2f}%" if "卖出" in t.trade_type else ""
                         trade_rows.append({
                             "日期": t.date,
                             "股票": t.symbol_name,
@@ -336,7 +336,7 @@ if st.session_state.get("bt_has_reports"):
                             label = (
                                 f"{'🟢' if ss.cumulative_pnl_pct >= 0 else '🔴'} "
                                 f"{ss.symbol_name} — {ss.total_trades}笔 "
-                                f"胜率{ss.win_rate:.1%} 累计{ss.cumulative_pnl_pct:+.2f}%"
+                                f"胜率{ss.win_rate:.1%} 累计{ss.cumulative_pnl_pct:+.2f}% ({ss.impact_pct:+.2f}%)"
                             )
                             if ss.rejected_signals > 0:
                                 label += f"  ⚠️{ss.rejected_signals}次信号未成交"
@@ -351,7 +351,7 @@ if st.session_state.get("bt_has_reports"):
                             stock_trades = [t for t in report.trades if t.symbol == ss.symbol]
                             srows = []
                             for t in stock_trades:
-                                pnl_str = f"{t.pnl_pct:+.2f}%" if t.trade_type == "卖出" else ""
+                                pnl_str = f"{t.pnl_pct:+.2f}%" if "卖出" in t.trade_type else ""
                                 srows.append({
                                     "日期": t.date,
                                     "类型": t.trade_type,

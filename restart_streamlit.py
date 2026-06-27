@@ -33,9 +33,12 @@ def kill_on_port(port: int):
 
 
 def clear_pycache():
-    """Remove all __pycache__ dirs under project root."""
+    """Remove all __pycache__ dirs under project root, skip .venv."""
     removed = 0
     for root, dirs, _files in os.walk(PROJECT_ROOT):
+        # Skip .venv entirely — third-party cache is irrelevant
+        if ".venv" in root.split(os.sep):
+            continue
         for d in dirs:
             if d == "__pycache__":
                 path = os.path.join(root, d)

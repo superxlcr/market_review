@@ -14,6 +14,7 @@ class StockSummary:
     lose_trades: int = 0
     win_rate: float = 0.0
     cumulative_pnl_pct: float = 0.0
+    impact_pct: float = 0.0          # 对总净值的贡献 (profit / 1M)
     avg_hold_days: float = 0.0
     profit_loss_ratio: float = 0.0
     rejected_signals: int = 0
@@ -45,8 +46,8 @@ def build_report(trades: list[TradeRecord],
     """Build a Report from trade records and equity curve."""
     report = Report(trades=trades, equity_curve=equity_curve)
 
-    # Filter completed sell trades
-    completed = [t for t in trades if t.trade_type == "卖出"]
+    # Filter completed sell trades (include addon sells)
+    completed = [t for t in trades if t.trade_type in ("卖出", "加仓卖出")]
     report.total_trades = len(completed)
     report.win_trades = sum(1 for t in completed if t.pnl_pct > 0)
     report.lose_trades = sum(1 for t in completed if t.pnl_pct <= 0)
@@ -80,7 +81,7 @@ def build_report(trades: list[TradeRecord],
     # Average hold days — match buy/sell pairs (calendar days approximation)
     buys_by_symbol: dict[str, list[TradeRecord]] = {}
     for t in trades:
-        if t.trade_type == "买入":
+        if t.trade_type in ("买入", "加仓买入"):
             buys_by_symbol.setdefault(t.symbol, []).append(t)
     hold_days_list = []
     for t in completed:
@@ -101,7 +102,7 @@ def build_report(trades: list[TradeRecord],
         stock_map.setdefault(t.symbol, []).append(t)
 
     for symbol, sym_trades in stock_map.items():
-        sym_completed = [t for t in sym_trades if t.trade_type == "卖出"]
+        sym_completed = [t for t in sym_trades if t.trade_type in ("卖出", "加仓卖出")]
         sym_rejected = [t for t in sym_trades if t.trade_type == "信号未成交"]
         sym_wins = sum(1 for t in sym_completed if t.pnl_pct > 0)
         sym_loss = sum(1 for t in sym_completed if t.pnl_pct <= 0)
@@ -112,6 +113,17 @@ def build_report(trades: list[TradeRecord],
         avg_win = sum_win / sym_wins if sym_wins > 0 else 0.0
         avg_lose = sum_lose / sym_loss if sym_loss > 0 else 0.0
 
+        # Dollar-weighted cumulative return (not simple sum of %)
+        total_cost = 0.0
+        total_profit = 0.0
+        for t in sym_completed:
+            if t.shares > 0 and t.price > 0:
+                buy_price = t.price / (1.0 + t.pnl_pct / 100.0)
+                cost_basis = t.shares * buy_price
+                total_cost += cost_basis
+                total_profit += t.shares * t.price - cost_basis
+        cumulative = total_profit / total_cost * 100.0 if total_cost > 0 else 0.0
+
         report.stock_summaries.append(StockSummary(
             symbol_name=sym_trades[0].symbol_name if sym_trades else "",
             symbol=symbol,
@@ -119,7 +131,8 @@ def build_report(trades: list[TradeRecord],
             win_trades=sym_wins,
             lose_trades=sym_loss,
             win_rate=sym_wins / sym_total if sym_total > 0 else 0.0,
-            cumulative_pnl_pct=sum(t.pnl_pct for t in sym_completed),
+            cumulative_pnl_pct=cumulative,
+            impact_pct=total_profit / 1_000_000 * 100.0,
             avg_hold_days=0.0,
             profit_loss_ratio=avg_win / avg_lose if avg_lose > 0 else 0.0,
             rejected_signals=len(sym_rejected),

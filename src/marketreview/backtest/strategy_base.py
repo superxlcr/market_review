@@ -16,6 +16,13 @@ class Position:
     max_float_profit_pct: float = 0.0  # highest intraday gain since buy
     entry_ma_type: str = ""   # which MA triggered entry: "MA20"/"MA60"/"MA120"/"MA240"
     strategy_tag: str = ""    # which sub-strategy generated this position (composite use)
+    # 浮盈加仓
+    addon_shares: int = 0              # 加仓股数 (0=未加仓)
+    addon_price: float = 0.0           # 加仓买入价
+    addon_cost: float = 0.0            # 加仓总成本
+    addon_date: str = ""               # 加仓日期 YYYYMMDD
+    addon_mfp_pct: float = 0.0         # 加仓部分独立最大浮盈%
+    addon_count: int = 0                # 已加仓次数（触发后自增，卖出不复位）
 
 
 @dataclass

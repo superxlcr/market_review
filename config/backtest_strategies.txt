@@ -1,13 +1,19 @@
 # 回测策略配置
-# 格式: 策略名 战法类名 仓位% 开仓上限 空间止损% [开仓浮盈阈值%]
+# 格式: 策略名 战法类名 仓位% 开仓上限 空间止损% 开仓浮盈阈值% 加仓阈值%
 
-# MA60_突破拉回_时间止损_2个_2成 ma60_breakthrough 20 2 5 10
-# MA120_突破拉回_时间止损_2个_2成 ma120_breakthrough 20 2 5 10
-MA55_突破拉回_时间止损_2个_2成 ma55_breakthrough 20 2 5 10
-MA144_突破拉回_时间止损_2个_2成 ma144_breakthrough 20 2 5 10
-突破回调一半_时间止损_2个_2成 half_retrace 20 2 5 10
-突破回调一半简化_时间止损_2个_2成 half_retrace_simple 20 2 5 10
+MA60_突破拉回_时间止损 ma60_breakthrough 20 2 5 10 999
+MA120_突破拉回_时间止损 ma120_breakthrough 20 2 5 10 999
+MA55_突破拉回_时间止损 ma55_breakthrough 20 2 5 10 999
+MA144_突破拉回_时间止损 ma144_breakthrough 20 2 5 10 999
+突破回调一半_时间止损 half_retrace 20 2 5 10 999
+突破回调一半简化_时间止损 half_retrace_simple 20 2 5 10 999
+MA60_突破拉回_时间止损_加仓 ma60_breakthrough 20 2 5 10 20
+MA120_突破拉回_时间止损_加仓 ma120_breakthrough 20 2 5 10 20
+MA55_突破拉回_时间止损_加仓 ma55_breakthrough 20 2 5 10 20
+MA144_突破拉回_时间止损_加仓 ma144_breakthrough 20 2 5 10 20
+突破回调一半_时间止损_加仓 half_retrace 20 2 5 10 20
+突破回调一半简化_时间止损_加仓 half_retrace_simple 20 2 5 10 20
 # 组合战法
-回调一半+MA55_时间止损_2个_2成 half_retrace_ma55 20 2 5 10
-MA60+MA120_时间止损_2个_2成 ma60_ma120 20 2 5 10
-MA55+MA144_时间止损_2个_2成 ma55_ma144 20 2 5 10
+# 回调一半+MA55_时间止损_2个_2成 half_retrace_ma55 20 2 5 10 999
+# MA60+MA120_时间止损_2个_2成 ma60_ma120 20 2 5 10 999
+# MA55+MA144_时间止损_2个_2成 ma55_ma144 20 2 5 10 999
