@@ -334,7 +334,7 @@ if st.session_state.get("bt_has_reports"):
                         # Build expander label
                         if ss.total_trades > 0:
                             label = (
-                                f"{'🟢' if ss.win_rate >= 0.5 else '🔴'} "
+                                f"{'🟢' if ss.cumulative_pnl_pct >= 0 else '🔴'} "
                                 f"{ss.symbol_name} — {ss.total_trades}笔 "
                                 f"胜率{ss.win_rate:.1%} 累计{ss.cumulative_pnl_pct:+.2f}%"
                             )
