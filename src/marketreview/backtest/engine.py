@@ -9,6 +9,7 @@ from .broker import Broker
 from .reporter import Report, build_report
 from .config import PoolConfig, StrategyConfig
 from marketreview.tools.technical import rows_to_df, calc_ma
+from marketreview.data.data_provider import DataProvider
 from marketreview.log_util import get_logger
 
 log = get_logger(__name__)
@@ -23,7 +24,7 @@ class BacktestEngine:
         self.strategy_cfg = strategy_cfg
 
         # Create strategy instance (import strategies to ensure registration)
-        from .strategies import ma60_breakthrough, ma120_breakthrough, ma55_breakthrough, ma144_breakthrough, ma_pullback_breakthrough, ma_special_pullback_breakthrough  # noqa: F401
+        from .strategies import ma60_breakthrough, ma120_breakthrough, ma55_breakthrough, ma144_breakthrough, ma_pullback_breakthrough, ma_special_pullback_breakthrough, half_retrace, half_retrace_simple  # noqa: F401
 
         self.strategy = create_strategy(strategy_cfg.class_name)
         if self.strategy is None:
@@ -102,6 +103,9 @@ class BacktestEngine:
                 empty_count += 1
                 log.warning("K线DataFrame为空: %s %s", s.code, s.name)
                 continue
+
+            # Convert to 前复权 (QFQ) before any calculations
+            df = DataProvider.raw_to_qfq(df)
 
             # Calculate MAs
             ma_result = calc_ma(df, [20, 55, 60, 120, 144, 240])

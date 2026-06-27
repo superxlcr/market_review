@@ -47,7 +47,7 @@ if not selected_strategies:
 col_r1, col_r2, col_r3 = st.columns(3)
 with col_r1:
     run_rounds = st.number_input(
-        "每策略跑几轮", min_value=1, max_value=100, value=10,
+        "每策略跑几轮", min_value=1, max_value=100, value=20,
         key="bt_rounds", help="多轮取均值，消除买入顺序随机影响",
     )
 with col_r2:
