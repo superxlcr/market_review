@@ -1,5 +1,6 @@
 """Backtest engine — daily loop over stocks, orchestrate buy/sell."""
 from datetime import datetime, timedelta
+import random
 import pandas as pd
 from .strategy_base import (
     BaseStrategy, DayContext, create_strategy, Position,
@@ -140,7 +141,9 @@ class BacktestEngine:
         equity_curve = []
 
         for date in trade_dates:
-            for s in self.pool.stocks:
+            stocks_today = list(self.pool.stocks)
+            random.shuffle(stocks_today)
+            for s in stocks_today:
                 if not s.code:
                     continue
                 klines = self._klines.get(s.code, [])
