@@ -80,7 +80,7 @@ def render_ohlcv_section(
     chart_col, ohlc_col = st.columns([3, 2])
 
     with chart_col:
-        chart_ma_periods = [5, 10, 20, 55, 144, 240] if section_type == "stock" else [5, 10, 20, 60, 120, 240]
+        chart_ma_periods = [5, 10, 20, 60, 120, 240]
         fig = plot_kline_with_ma(df, ma_periods=chart_ma_periods)
         st.plotly_chart(fig, width="stretch")
 
@@ -137,13 +137,8 @@ def render_ohlcv_section(
 
     with ma_col:
         st.markdown("**均线分析**")
-        # ── 根据类型选择均线周期 ──
-        if section_type == "stock":
-            ma_periods = [5, 10, 20, 55, 144, 240]
-            medium_long_periods = [55, 144, 240]
-        else:
-            ma_periods = [5, 10, 20, 60, 120, 240]
-            medium_long_periods = [60, 120, 240]
+        ma_periods = [5, 10, 20, 60, 120, 240]
+        medium_long_periods = [60, 120, 240]
         mas = calc_ma(df, ma_periods)
         ma_dirs = {}
         for p in ma_periods:

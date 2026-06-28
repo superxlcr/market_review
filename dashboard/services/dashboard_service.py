@@ -1798,7 +1798,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "4.2.0"
+    _AI_VERSION = "4.2.1"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -2085,7 +2085,7 @@ class DashboardService:
 
         # ── Compute all MAs (matching engine's precompute) ──
         try:
-            ma_result = calc_ma(df, [20, 55, 60, 120, 144, 240])
+            ma_result = calc_ma(df, [20, 60, 120, 240])
         except Exception:
             return {
                 "has_signal": False, "price_reachable": False,
@@ -2106,7 +2106,7 @@ class DashboardService:
                 "vol": safe_float(df["vol"].iloc[i]) if "vol" in df.columns else 0.0,
                 "amount": safe_float(df["amount"].iloc[i]) if "amount" in df.columns else 0.0,
             }
-            for p in [20, 55, 60, 120, 144, 240]:
+            for p in [20, 60, 120, 240]:
                 ma_key = f"MA{p}"
                 vals = ma_result.get(ma_key, [])
                 row[ma_key.lower()] = safe_float(vals[i]) if i < len(vals) else 0.0
