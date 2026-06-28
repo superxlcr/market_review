@@ -2183,14 +2183,20 @@ class DashboardService:
             lower = today_close * (1 - limit)
             upper = today_close * (1 + limit)
 
+            # 红色高亮标签（HTML callout 下生效）
+            _r = '<span style="color:#e53935;font-weight:bold;">'
+            _e = '</span>'
+
             if lower > target or target > upper:
                 return {
                     "has_signal": True,
                     "price_reachable": False,
                     "message": (
-                        f"⚠️ **{strategy.name}**：目标价 {target:.2f} "
+                        f"⚠️ <strong>{strategy.name}</strong>：目标价 "
+                        f"{_r}{target:.2f}{_e} "
                         f"超出{limit*100:.0f}%涨跌停限制"
-                        f"（涨停价 {upper:.2f} / 跌停价 {lower:.2f}），"
+                        f"（涨停价 {_r}{upper:.2f}{_e} "
+                        f"/ 跌停价 {_r}{lower:.2f}{_e}），"
                         f"无法设置条件单 — {buy_sig.reason}"
                     ),
                     "error": None,
@@ -2202,17 +2208,15 @@ class DashboardService:
                 shares = max(100, round(raw_shares / 100) * 100)
                 stop_price = round(target * (1 - space_stop_pct / 100.0), 2)
 
-                _r = '<span style="color:#e53935;font-weight:bold;">'
-                _e = '</span>'
                 return {
                     "has_signal": True,
                     "price_reachable": True,
                     "message": (
-                        f"✅ **{strategy.name}**：目标价 "
+                        f"✅ <strong>{strategy.name}</strong>：目标价 "
                         f"{_r}{target:.2f}{_e} "
                         f"处设条件单，开盘追价上限 "
                         f"{_r}{open_cap:.2f}{_e}"
-                        f" — {buy_sig.reason}\n\n"
+                        f" — {buy_sig.reason}<br>"
                         f"目标仓位 "
                         f"{_r}{shares:,}{_e} 股，"
                         f"{space_stop_pct:.0f}%止损价："
@@ -2227,6 +2231,6 @@ class DashboardService:
             return {
                 "has_signal": False,
                 "price_reachable": False,
-                "message": f"📋 **{strategy.name}**：无信号 — {diag}",
+                "message": f"📋 <strong>{strategy.name}</strong>：无信号 — {diag}",
                 "error": None,
             }
