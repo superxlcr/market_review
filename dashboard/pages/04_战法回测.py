@@ -341,8 +341,8 @@ if st.session_state.get("bt_has_reports"):
                 if report.trades:
                     trade_rows = []
                     for t in sorted(report.trades, key=lambda x: x.date):
-                        if t.trade_type == "设置条件单":
-                            continue  # 交易明细不显示设单，股票明细保留
+                        if t.trade_type in ("设置条件单", "量能过滤"):
+                            continue  # 交易明细不显示设单/量能过滤，股票明细保留
                         pnl_str = f"{t.pnl_pct:+.2f}%" if "卖出" in t.trade_type else ""
                         trade_rows.append({
                             "日期": t.date,

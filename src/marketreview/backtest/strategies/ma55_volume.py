@@ -9,7 +9,7 @@ class MA55VolumeStrategy(MABreakthroughStrategy):
 
     与纯 MA55 策略买卖逻辑一致，增加量能门槛：
       - 昨额 vs 5日均量 ≥ -10%（不萎缩超10%）
-      - 昨额 vs 10日均量 > 0%（高于10日均量）
+      - 昨额 vs 10日均量 ≥ -5%（不低于10日均量5%）
       - 不满足 → 量能过滤记录，不开仓
     """
 
@@ -68,7 +68,7 @@ class MA55VolumeStrategy(MABreakthroughStrategy):
         return " ".join(parts)
 
     def _check_volume_pass(self, hist: list[dict]) -> tuple[bool, str]:
-        """量能过滤：昨日成交额 vs 5日均量 ≥ -10% 且 vs 10日均量 > 0%.
+        """量能过滤：昨日成交额 vs 5日均量 ≥ -10% 且 vs 10日均量 ≥ -5%.
 
         Returns (passed, detail_str). detail_str 仅在不过关时有内容.
         """
@@ -100,8 +100,8 @@ class MA55VolumeStrategy(MABreakthroughStrategy):
         fails = []
         if vs_5 < -10:
             fails.append(f"昨额vs5均{vs_5:+.0f}%(需≥-10%)")
-        if vs_10 <= 0:
-            fails.append(f"昨额vs10均{vs_10:+.0f}%(需>0%)")
+        if vs_10 < -5:
+            fails.append(f"昨额vs10均{vs_10:+.0f}%(需≥-5%)")
 
         if fails:
             return False, " | ".join(fails)
