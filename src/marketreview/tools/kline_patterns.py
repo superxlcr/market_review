@@ -32,8 +32,10 @@ INDEX_LONG_PCT = 1.5   # |chg%| > 1.5  → 长阳/长阴
 INDEX_MID_PCT = 0.8    # 0.8 ≤ |chg%| ≤ 1.5 → 中阳/中阴
 # |chg%| < 0.8 → 小阳/小阴
 
-# 长影线: 影线长度 ≥ 实体 × 2
+# 长影线: 影线长度 ≥ 实体 × 2 (index/sector)
 LONG_SHADOW_BODY_RATIO = 2.0
+# 个股长影线: 影线 ≥ ATR × 0.3
+STOCK_SHADOW_ATR_RATIO = 0.3
 
 
 def _entity_strength(
@@ -72,8 +74,13 @@ def _entity_strength(
     return {"is_bullish": is_bullish, "entity_label": label, "chg_pct": chg_pct}
 
 
-def _candle_shape(o: float, h: float, l: float, c: float) -> dict[str, Any]:
+def _candle_shape(o: float, h: float, l: float, c: float,
+                  atr: float | None = None) -> dict[str, Any]:
     """Analyze the shape of a single candle — body, shadows, etc.
+
+    Args:
+        atr: ATR(14) value. When provided (stock mode), shadow significance
+             is judged by shadow_length / ATR instead of body ratio.
 
     Returns dict with keys:
       body, total_range, upper_wick, lower_wick,
@@ -97,9 +104,15 @@ def _candle_shape(o: float, h: float, l: float, c: float) -> dict[str, Any]:
     upper_pct = round(upper_wick / total * 100, 1)
     lower_pct = round(lower_wick / total * 100, 1)
 
-    # 长影线判定：影线 ≥ 实体 × 2
-    has_long_upper = upper_wick >= body * LONG_SHADOW_BODY_RATIO
-    has_long_lower = lower_wick >= body * LONG_SHADOW_BODY_RATIO
+    # ── 长影线判定 ──
+    if atr is not None and atr > 0:
+        # 个股模式：ATR 归一化
+        has_long_upper = upper_wick >= atr * STOCK_SHADOW_ATR_RATIO
+        has_long_lower = lower_wick >= atr * STOCK_SHADOW_ATR_RATIO
+    else:
+        # 指数/行业模式：固定比例
+        has_long_upper = upper_wick >= body * LONG_SHADOW_BODY_RATIO
+        has_long_lower = lower_wick >= body * LONG_SHADOW_BODY_RATIO
 
     return {
         "body": round(body, 4),
@@ -138,7 +151,7 @@ def classify_candle(
     pc = prev_close if prev_close is not None else c
 
     entity = _entity_strength(o, c, pc, obj_type, atr)
-    shape = _candle_shape(o, h, l, c)
+    shape = _candle_shape(o, h, l, c, atr)
 
     return {**entity, **shape}
 
@@ -157,6 +170,7 @@ def classify_candle(
 
 def detect_bullish_engulfing_shadow(
     df: pd.DataFrame, obj_type: str = "index",
+    atr: float | None = None,
 ) -> dict[str, Any] | None:
     """检测多头吞影线（仙人指路）。
 
@@ -179,6 +193,7 @@ def detect_bullish_engulfing_shadow(
     prev_shape = _candle_shape(
         float(prev["open"]), float(prev["high"]),
         float(prev["low"]), float(prev["close"]),
+        atr=atr,
     )
 
     # ① 昨上影线显著（上影线 ≥ 实体）—— 确保上影线是昨K线的显著特征
@@ -215,6 +230,7 @@ def detect_bullish_engulfing_shadow(
 
 def detect_bearish_engulfing_shadow(
     df: pd.DataFrame, obj_type: str = "index",
+    atr: float | None = None,
 ) -> dict[str, Any] | None:
     """检测空头吞影线。
 
@@ -233,6 +249,7 @@ def detect_bearish_engulfing_shadow(
     prev_shape = _candle_shape(
         float(prev["open"]), float(prev["high"]),
         float(prev["low"]), float(prev["close"]),
+        atr=atr,
     )
 
     # ① 昨有下影线
@@ -298,6 +315,7 @@ def _neck_common(
 
 def detect_neck_above(
     df: pd.DataFrame, obj_type: str = "index",
+    atr: float | None = None,
 ) -> dict[str, Any] | None:
     """检测颈上线（迫切线）。
 
@@ -330,6 +348,7 @@ def detect_neck_above(
 
 def detect_neck_inside(
     df: pd.DataFrame, obj_type: str = "index",
+    atr: float | None = None,
 ) -> dict[str, Any] | None:
     """检测颈内线（入首线）。
 
@@ -425,6 +444,7 @@ def _high_low_position(df: pd.DataFrame) -> str:
 
 def detect_spinning_top(
     df: pd.DataFrame, obj_type: str = "index",
+    atr: float | None = None,
 ) -> dict[str, Any] | None:
     """检测纺锤线（上影线型）。
 
@@ -445,6 +465,7 @@ def detect_spinning_top(
     shape = _candle_shape(
         float(curr["open"]), float(curr["high"]),
         float(curr["low"]), float(curr["close"]),
+        atr=atr,
     )
 
     # ① 长上影线
@@ -475,6 +496,7 @@ def detect_spinning_top(
 
 def detect_high_level_long_yang(
     df: pd.DataFrame, obj_type: str = "index",
+    atr: float | None = None,
 ) -> dict[str, Any] | None:
     """检测高档长阳。
 
@@ -504,15 +526,25 @@ def detect_high_level_long_yang(
     if close <= open_:
         return None
 
-    # ③ 长阳：|chg%| > 1.5%（复用现有阈值）
+    # ③ 长阳判定
     prev_close = float(df.iloc[-2]["close"])
-    chg_pct = abs((close / prev_close - 1) * 100)
-    if chg_pct <= INDEX_LONG_PCT:
+    if obj_type == "stock" and atr and atr > 0:
+        is_long = (body / atr) >= 0.5
+    else:
+        chg_pct = abs((close / prev_close - 1) * 100)
+        is_long = chg_pct > INDEX_LONG_PCT
+    if not is_long:
         return None
 
-    # ④ 几乎无上影线：上影线 < 实体 × 0.3
-    if body > 0 and upper_wick >= body * 0.3:
-        return None
+    # ④ 几乎无上影线
+    if body > 0:
+        if obj_type == "stock" and atr and atr > 0:
+            # ATR 模式：上影线 < ATR × 0.15 → 几乎无上影线
+            if upper_wick >= atr * 0.15:
+                return None
+        else:
+            if upper_wick >= body * 0.3:
+                return None
 
     return {
         "name": "高档长阳",
@@ -526,6 +558,7 @@ def detect_high_level_long_yang(
 
 def detect_rising_anti_drag(
     df: pd.DataFrame, obj_type: str = "index",
+    atr: float | None = None,
 ) -> dict[str, Any] | None:
     """检测上升反托线。
 
@@ -602,6 +635,15 @@ def detect_patterns(
     if df.empty or len(df) < 2:
         return []
 
+    # ── 个股模式：计算 ATR(14) 用于实体强度 + 影线判定 ──
+    atr = None
+    if obj_type == "stock":
+        from .technical import calc_atr
+        atr_vals = calc_atr(df, period=14)
+        atr = next((v for v in reversed(atr_vals) if not np.isnan(v)), None)
+        if atr is None or atr <= 0:
+            atr = None  # 数据不足，退化为通用标签
+
     results = []
     _has_rising_anti_drag = False
     for detector in _PATTERN_DETECTORS:
@@ -609,7 +651,7 @@ def detect_patterns(
         if _has_rising_anti_drag and detector in (detect_neck_above, detect_neck_inside):
             continue
         try:
-            match = detector(df, obj_type)
+            match = detector(df, obj_type, atr=atr)
             if match is not None:
                 results.append(match)
                 if match["name"] == "上升反托线":
