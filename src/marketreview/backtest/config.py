@@ -32,6 +32,8 @@ class StrategyConfig:
     new_position_threshold_pct: float = 0.0  # 现有持仓浮盈达此值才可开新仓
     addon_threshold_pct: float = 999.0        # 浮盈加仓阈值%，999=不启用
     open_chase_cap_pct: float = 102.0        # 开盘追高上限%
+    volume_5d_threshold_pct: float = -10.0   # 量能过滤：昨额 vs 5日均量 最低%
+    volume_10d_threshold_pct: float = -5.0   # 量能过滤：昨额 vs 10日均量 最低%
 
 
 def load_pools(dp) -> list[PoolConfig]:
@@ -110,6 +112,8 @@ def load_strategies() -> list[StrategyConfig]:
         "开仓浮盈阈值%": "new_position_threshold_pct",
         "加仓阈值%": "addon_threshold_pct",
         "开盘追高上限%": "open_chase_cap_pct",
+        "量能5均阈值%": "volume_5d_threshold_pct",
+        "量能10均阈值%": "volume_10d_threshold_pct",
     }
     FIELD_TYPES = {
         "position_pct": float,
@@ -118,6 +122,8 @@ def load_strategies() -> list[StrategyConfig]:
         "new_position_threshold_pct": float,
         "addon_threshold_pct": float,
         "open_chase_cap_pct": float,
+        "volume_5d_threshold_pct": float,
+        "volume_10d_threshold_pct": float,
     }
     DEFAULTS = {
         "position_pct": 20.0,
@@ -126,6 +132,8 @@ def load_strategies() -> list[StrategyConfig]:
         "new_position_threshold_pct": 10.0,
         "addon_threshold_pct": 999.0,
         "open_chase_cap_pct": 102.0,
+        "volume_5d_threshold_pct": -10.0,
+        "volume_10d_threshold_pct": -5.0,
     }
 
     global_defaults = dict(DEFAULTS)
@@ -147,6 +155,8 @@ def load_strategies() -> list[StrategyConfig]:
             new_position_threshold_pct=cfg["new_position_threshold_pct"],
             addon_threshold_pct=cfg["addon_threshold_pct"],
             open_chase_cap_pct=cfg["open_chase_cap_pct"],
+            volume_5d_threshold_pct=cfg["volume_5d_threshold_pct"],
+            volume_10d_threshold_pct=cfg["volume_10d_threshold_pct"],
         ))
         current_strategy = None
 

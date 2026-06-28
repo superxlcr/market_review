@@ -1798,7 +1798,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "4.0.0"
+    _AI_VERSION = "4.2.0"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -2057,13 +2057,22 @@ class DashboardService:
                 "error": "strategy_not_found",
             }
 
-        # ── Get strategy config for open_chase_cap_pct ──
+        # ── Get strategy config for open_chase_cap_pct & volume thresholds ──
         strategies_cfg = self.load_backtest_strategies()
         open_chase_cap_pct = 102.0  # default
+        vol_5d_threshold = -10.0
+        vol_10d_threshold = -5.0
         for sc in strategies_cfg:
             if sc.class_name == strategy_class:
                 open_chase_cap_pct = sc.open_chase_cap_pct
+                vol_5d_threshold = sc.volume_5d_threshold_pct
+                vol_10d_threshold = sc.volume_10d_threshold_pct
                 break
+
+        # 注入量能阈值
+        if hasattr(strategy, 'VOLUME_5D_THRESHOLD_PCT'):
+            strategy.VOLUME_5D_THRESHOLD_PCT = vol_5d_threshold
+            strategy.VOLUME_10D_THRESHOLD_PCT = vol_10d_threshold
 
         # ── Load K-line data ──
         df = self.get_index_data(ts_code, lookback=500, end_date=trade_date)

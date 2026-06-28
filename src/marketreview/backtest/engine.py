@@ -37,7 +37,7 @@ class BacktestEngine:
         self.strategy_cfg = strategy_cfg
 
         # Create strategy instance (import strategies to ensure registration)
-        from .strategies import ma_breakthrough, ma60_breakthrough, ma120_breakthrough, ma55_volume, ma60_volume, half_retrace, half_retrace_simple, composite  # noqa: F401
+        from .strategies import ma_breakthrough, ma60_breakthrough, ma120_breakthrough, ma60_volume, ma120_volume, half_retrace, half_retrace_simple, composite  # noqa: F401
 
         self.strategy = create_strategy(strategy_cfg.class_name)
         if self.strategy is None:
@@ -46,6 +46,11 @@ class BacktestEngine:
                 f"Unknown strategy: {strategy_cfg.class_name}. "
                 f"Available: {list(STRATEGY_REGISTRY.keys())}"
             )
+
+        # 注入量能阈值配置（仅对成交量限制战法生效）
+        if hasattr(self.strategy, 'VOLUME_5D_THRESHOLD_PCT'):
+            self.strategy.VOLUME_5D_THRESHOLD_PCT = strategy_cfg.volume_5d_threshold_pct
+            self.strategy.VOLUME_10D_THRESHOLD_PCT = strategy_cfg.volume_10d_threshold_pct
 
         self.broker = Broker(
             position_pct=strategy_cfg.position_pct,
