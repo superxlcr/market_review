@@ -76,6 +76,18 @@ class SellSignal:
     reason: str            # "止盈" | "战法止损" | "战法卖出"
 
 
+@dataclass
+class ConditionalOrder:
+    """条件单：前一天收盘后设置，第二天触发."""
+    date_set: str           # 设置日期 YYYYMMDD
+    symbol: str
+    symbol_name: str
+    target_price: float         # 目标买入价
+    open_price_cap: float       # 开盘追高上限
+    reason: str                 # 信号原因（来自策略）
+    strategy_tag: str = ""
+
+
 class BaseStrategy(ABC):
     """Abstract base for all trading strategies."""
 
