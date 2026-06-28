@@ -1798,7 +1798,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "4.3.1"
+    _AI_VERSION = "4.4.0"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -2062,11 +2062,17 @@ class DashboardService:
         open_chase_cap_pct = 102.0  # default
         vol_5d_threshold = -10.0
         vol_10d_threshold = -5.0
+        position_pct = 20.0
+        space_stop_pct = 5.0
+        total_capital = 2_500_000
         for sc in strategies_cfg:
             if sc.class_name == strategy_class:
                 open_chase_cap_pct = sc.open_chase_cap_pct
                 vol_5d_threshold = sc.volume_5d_threshold_pct
                 vol_10d_threshold = sc.volume_10d_threshold_pct
+                position_pct = sc.position_pct
+                space_stop_pct = sc.space_stop_pct
+                total_capital = sc.total_capital
                 break
 
         # 注入量能阈值
@@ -2190,13 +2196,20 @@ class DashboardService:
                     "error": None,
                 }
             else:
+                # ── 计算目标仓位 & 止损价 ──
+                trade_capital = total_capital * position_pct / 100.0
+                raw_shares = trade_capital / target
+                shares = max(100, round(raw_shares / 100) * 100)
+                stop_price = round(target * (1 - space_stop_pct / 100.0), 2)
                 return {
                     "has_signal": True,
                     "price_reachable": True,
                     "message": (
                         f"✅ **{strategy.name}**：目标价 **{target:.2f}** "
                         f"处设条件单，开盘追价上限 **{open_cap:.2f}**"
-                        f" — {buy_sig.reason}"
+                        f" — {buy_sig.reason}\n\n"
+                        f"目标仓位 **{shares:,}** 股，"
+                        f"{space_stop_pct:.0f}%止损价：**{stop_price:.2f}**"
                     ),
                     "error": None,
                 }

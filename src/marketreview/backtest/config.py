@@ -34,6 +34,7 @@ class StrategyConfig:
     open_chase_cap_pct: float = 102.0        # 开盘追高上限%
     volume_5d_threshold_pct: float = -10.0   # 量能过滤：昨额 vs 5日均量 最低%
     volume_10d_threshold_pct: float = -5.0   # 量能过滤：昨额 vs 10日均量 最低%
+    total_capital: float = 2_500_000         # 总仓位资金（用于个股追踪仓位计算）
 
 
 def load_pools(dp) -> list[PoolConfig]:
@@ -114,6 +115,7 @@ def load_strategies() -> list[StrategyConfig]:
         "开盘追高上限%": "open_chase_cap_pct",
         "量能5均阈值%": "volume_5d_threshold_pct",
         "量能10均阈值%": "volume_10d_threshold_pct",
+        "总仓位资金": "total_capital",
     }
     FIELD_TYPES = {
         "position_pct": float,
@@ -124,6 +126,7 @@ def load_strategies() -> list[StrategyConfig]:
         "open_chase_cap_pct": float,
         "volume_5d_threshold_pct": float,
         "volume_10d_threshold_pct": float,
+        "total_capital": float,
     }
     DEFAULTS = {
         "position_pct": 20.0,
@@ -134,6 +137,7 @@ def load_strategies() -> list[StrategyConfig]:
         "open_chase_cap_pct": 102.0,
         "volume_5d_threshold_pct": -10.0,
         "volume_10d_threshold_pct": -5.0,
+        "total_capital": 2_500_000,
     }
 
     global_defaults = dict(DEFAULTS)
@@ -157,6 +161,7 @@ def load_strategies() -> list[StrategyConfig]:
             open_chase_cap_pct=cfg["open_chase_cap_pct"],
             volume_5d_threshold_pct=cfg["volume_5d_threshold_pct"],
             volume_10d_threshold_pct=cfg["volume_10d_threshold_pct"],
+            total_capital=cfg["total_capital"],
         ))
         current_strategy = None
 
