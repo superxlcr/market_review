@@ -4,8 +4,9 @@ import random
 import pandas as pd
 from .strategy_base import (
     BaseStrategy, DayContext, create_strategy, Position,
+    ConditionalOrder,
 )
-from .broker import Broker
+from .broker import Broker, TradeRecord
 from .reporter import Report, build_report
 from .config import PoolConfig, StrategyConfig
 from marketreview.tools.technical import rows_to_df, calc_ma
@@ -165,128 +166,139 @@ class BacktestEngine:
                  trade_dates[0] if trade_dates else "?",
                  trade_dates[-1] if trade_dates else "?")
 
-        # 5. Daily loop
+        # 5. Daily loop — 5 步模型
+        #  ① 开盘卖出 → ② 开盘买入 → ③ 盘中买入
+        #  → ④ 盘中+收盘卖出 → ⑤ 条件单设置
         equity_curve = []
 
         for date in trade_dates:
             stocks_today = list(self.pool.stocks)
-            rng.shuffle(stocks_today)
+
+            # 构建今日行情快照
+            today_rows = self._build_today_rows(date)
+
+            # ── ① 开盘卖出 ──
+            # 先更新 MFP（用于止盈判断）
+            for sym in list(self.broker.positions.keys()):
+                row = today_rows.get(sym)
+                if row:
+                    self.broker.update_max_float_profit(sym, _safe_f(row.get("high")))
+                    pos = self.broker.positions.get(sym)
+                    if pos and pos.addon_shares > 0:
+                        self.broker.update_addon_mfp(sym, _safe_f(row.get("high")))
+            self.broker.execute_open_sells(date, today_rows)
+            self._enrich_positions(date)
+
+            # ── ② 开盘买入 ──
+            self.broker.process_open_orders(date, today_rows, rng)
+            self._enrich_positions(date)
+
+            # ── ③ 盘中买入 ──
+            self.broker.process_intraday_orders(date, today_rows, rng)
+            self._enrich_positions(date)
+
+            # ── 浮盈加仓（④之前，因为加仓可能是盘中触发）──
+            for sym in list(self.broker.positions.keys()):
+                pos = self.broker.positions.get(sym)
+                if pos is None or pos.addon_count >= 1:
+                    continue
+                if self._addon_threshold_pct >= 999:
+                    continue
+                if pos.max_float_profit_pct < self._addon_threshold_pct:
+                    continue
+                row = today_rows.get(sym)
+                if row is None:
+                    continue
+                trigger_price = pos.buy_price * (1 + self._addon_threshold_pct / 100.0)
+                today_open = _safe_f(row.get("open"))
+                today_high = _safe_f(row.get("high"))
+                if today_open > trigger_price:
+                    entry_price = today_open
+                elif today_high >= trigger_price:
+                    entry_price = trigger_price
+                else:
+                    entry_price = 0.0
+                if entry_price > 0:
+                    addon_shares = pos.shares // 2
+                    self.broker.addon_buy(date, sym, entry_price, addon_shares)
+                    self._enrich_positions(date)
+
+            # ── ④ 盘中+收盘卖出 ──
+            self.broker.execute_intraday_sells(date, today_rows)
+            self._enrich_positions(date)
+
+            # 策略卖出（收盘） + 时间止损
+            for s in stocks_today:
+                if not s.code or s.code not in self.broker.positions:
+                    continue
+                ctx = self._build_ctx(date, s,
+                    today_rows.get(s.code, {}), self._klines.get(s.code, []),
+                    self._in_window(s, date))
+                if ctx.position is None:
+                    ctx.position = self.broker.positions.get(s.code)
+                sell_sig = self.strategy.check_sell(ctx)
+                if sell_sig:
+                    label = "收盘卖出"
+                    self.broker.sell(date, s.code, sell_sig.price,
+                        f"{label}({sell_sig.reason})")
+                    self._enrich_positions(date)
+
+            # ── ⑤ 条件单设置 ──
+            self.broker.clear_orders()
             for s in stocks_today:
                 if not s.code:
                     continue
+                if s.code in self.broker.positions:
+                    continue
+                if not self._in_window(s, date):
+                    continue
                 klines = self._klines.get(s.code, [])
-                today_row = self._get_day(klines, date)
+                today_row = today_rows.get(s.code)
                 if today_row is None:
                     continue
-
-                in_window = self._in_window(s, date)
-
-                # Build context
-                ctx = self._build_ctx(date, s, today_row, klines, in_window)
-
-                # ── Sell checks (if holding) ──
-                if s.code in self.broker.positions:
-                    # a) Update max float profit
-                    self.broker.update_max_float_profit(
-                        s.code, _safe_f(today_row.get("high"))
-                    )
-
-                    # a2) 浮盈加仓检查
-                    pos = self.broker.positions.get(s.code)
-                    if pos and pos.addon_count < 1 and self._addon_threshold_pct < 999:
-                        if pos.max_float_profit_pct >= self._addon_threshold_pct:
-                            trigger_price = pos.buy_price * (
-                                1 + self._addon_threshold_pct / 100.0
-                            )
-                            today_open = _safe_f(today_row.get("open"))
-                            today_high = _safe_f(today_row.get("high"))
-                            # 跳空高开 → 开盘价；否则条件单触发价
-                            if today_open > trigger_price:
-                                entry_price = today_open
-                            elif today_high >= trigger_price:
-                                entry_price = trigger_price
-                            else:
-                                entry_price = 0.0
-                            if entry_price > 0:
-                                addon_shares = pos.shares // 2
-                                self.broker.addon_buy(
-                                    date, s.code, entry_price, addon_shares
-                                )
-                                self._enrich_positions(date)
-
-                    # a3) 加仓部分：更新MFP + 三级止盈 + 空间止损
-                    if pos and pos.addon_shares > 0:
-                        self.broker.update_addon_mfp(
-                            s.code, _safe_f(today_row.get("high"))
+                ctx = self._build_ctx(date, s, today_row, klines, True)
+                ctx.position = None
+                buy_sig = self.strategy.check_buy(ctx)
+                if buy_sig is None:
+                    # 检查量能过滤
+                    vol_filter = getattr(self.strategy, '_last_volume_filter', None)
+                    if vol_filter:
+                        self.broker.report_volume_filter(
+                            vol_filter["date"], vol_filter["symbol"],
+                            vol_filter["symbol_name"], vol_filter["price"],
+                            vol_filter["reason"],
                         )
-                        tp_triggered = self.broker.check_addon_take_profit(
-                            date, s.code, _safe_f(today_row.get("low"))
-                        )
-                        if tp_triggered:
-                            self._enrich_positions(date)
-                        ss_triggered = self.broker.check_addon_space_stop(
-                            date, s.code, _safe_f(today_row.get("low")),
-                            _safe_f(today_row.get("open")),
-                        )
-                        if ss_triggered:
-                            self._enrich_positions(date)
-
-                    # b) Space stop (intraday) — 盘中优先
-                    triggered = self.broker.check_space_stop(
-                        date, s.code, _safe_f(today_row.get("low")),
-                        _safe_f(today_row.get("open")),
-                    )
-                    if triggered:
-                        self._enrich_positions(date)
-
-                    # c) Strategy sell (MA60止损 / 跌破MA60 / 止盈)
-                    ctx.position = self.broker.positions.get(s.code)
-                    sell_sig = self.strategy.check_sell(ctx)
-                    if sell_sig:
-                        self.broker.sell(date, s.code, sell_sig.price, sell_sig.reason)
-                        self._enrich_positions(date)
-
+                        self.strategy._last_volume_filter = None
                     continue
 
-                # ── Buy check (if not holding + in window) ──
-                else:
-                    if in_window:
-                        ctx.position = None
-                        buy_sig = self.strategy.check_buy(ctx)
-                        if buy_sig:
-                            # Build current prices for rejection detail + enrich
-                            pos_prices = {}
-                            for pcode in self.broker.positions:
-                                prow = self._get_day(
-                                    self._klines.get(pcode, []), date
-                                )
-                                if prow:
-                                    pos_prices[pcode] = _safe_f(prow.get("close"))
-                            self.broker.buy(
-                                date, s.code, s.name,
-                                buy_sig.price, buy_sig.reason,
-                                position_prices=pos_prices,
-                                entry_ma_type=buy_sig.entry_ma_type,
-                                strategy_tag=buy_sig.strategy_tag,
-                            )
-                            self._enrich_positions(date)
-                        else:
-                            # 量能过滤记录（策略设置 _last_volume_filter 时触发）
-                            vol_filter = getattr(
-                                self.strategy, '_last_volume_filter', None
-                            )
-                            if vol_filter:
-                                self.broker.report_volume_filter(
-                                    vol_filter["date"], vol_filter["symbol"],
-                                    vol_filter["symbol_name"], vol_filter["price"],
-                                    vol_filter["reason"],
-                                )
-                                self.strategy._last_volume_filter = None
+                # 判断明天能不能到（涨跌停限制）
+                today_close = _safe_f(today_row.get("close"))
+                target = buy_sig.price
+                limit = get_limit_pct(s.code)
+                if today_close * (1 - limit) > target or target > today_close * (1 + limit):
+                    continue  # 明天到不了，不设单
 
-            # Record daily equity (mark-to-market)
+                # 设条件单
+                open_cap = target * self.strategy_cfg.open_chase_cap_pct / 100.0
+                order = ConditionalOrder(
+                    date_set=date,
+                    symbol=s.code,
+                    symbol_name=s.name,
+                    target_price=target,
+                    open_price_cap=open_cap,
+                    reason=buy_sig.reason,
+                )
+                self.broker.add_order(order)
+                self.broker.trades.append(TradeRecord(
+                    date=date, symbol=s.code, symbol_name=s.name,
+                    trade_type="设置条件单", price=target,
+                    reason=f"目标价={target:.2f} 开盘上限≤{open_cap:.2f} {buy_sig.reason}",
+                ))
+
+            # ── 日终权益快照 ──
             pos_prices_daily = {}
             for pcode in self.broker.positions:
-                prow = self._get_day(self._klines.get(pcode, []), date)
+                prow = today_rows.get(pcode)
                 if prow:
                     pos_prices_daily[pcode] = _safe_f(prow.get("close"))
             market_eq = self.broker.get_market_equity(pos_prices_daily)
