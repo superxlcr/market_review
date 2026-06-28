@@ -1,6 +1,7 @@
 """Virtual broker — cash accounting, position tracking, T+1 enforcement."""
 from dataclasses import dataclass
-from .strategy_base import Position
+import random
+from .strategy_base import Position, ConditionalOrder
 from marketreview.log_util import get_logger
 
 log = get_logger(__name__)
@@ -47,6 +48,7 @@ class Broker:
         self.tp_tier2_protect_ratio = tp_tier2_protect_ratio
         self.positions: dict[str, Position] = {}   # symbol → Position
         self.trades: list[TradeRecord] = []
+        self.pending_orders: list[ConditionalOrder] = []
 
     @property
     def position_count(self) -> int:
@@ -113,6 +115,110 @@ class Broker:
             date=date, symbol=symbol, symbol_name=symbol_name,
             trade_type="量能过滤", price=price, reason=reason,
         ))
+
+    # ── 条件单 ──
+
+    def add_order(self, order: ConditionalOrder):
+        """设置一个明日条件单."""
+        self.pending_orders.append(order)
+
+    def clear_orders(self):
+        """清空所有未触发条件单."""
+        self.pending_orders.clear()
+
+    def process_open_orders(self, date: str, today_rows: dict[str, dict],
+                            rng: random.Random) -> None:
+        """② 开盘买入：遍历 shuffled 条件单，仅判断 open 触发."""
+        orders = list(self.pending_orders)
+        rng.shuffle(orders)
+        remaining: list[ConditionalOrder] = []
+
+        for order in orders:
+            row = today_rows.get(order.symbol)
+            if row is None:
+                remaining.append(order)
+                continue
+
+            ok, _ = self.can_buy(order.symbol)
+            if not ok:
+                remaining.append(order)
+                continue
+
+            open_p = _safe_f(row.get("open"))
+            if open_p > order.target_price and open_p <= order.open_price_cap:
+                shares = int(self.init_capital * self.position_pct / 100.0 / open_p)
+                if shares == 0:
+                    remaining.append(order)
+                    continue
+                cost = shares * open_p
+                self.cash -= cost
+                pos = Position(
+                    symbol=order.symbol, symbol_name=order.symbol_name,
+                    buy_date=date, buy_price=open_p,
+                    shares=shares, cost=cost,
+                )
+                self.positions[order.symbol] = pos
+                self.trades.append(TradeRecord(
+                    date=date, symbol=order.symbol,
+                    symbol_name=order.symbol_name,
+                    trade_type="开盘买入", price=open_p, shares=shares,
+                    reason=f"追高买入(开盘≤上限{order.open_price_cap:.2f})，{order.reason}",
+                ))
+                log.info("[%s] 开盘买入 %s %s @ %.2f × %d股 (%s)",
+                         self.strategy_name, date, order.symbol_name,
+                         open_p, shares, order.reason)
+            else:
+                remaining.append(order)
+
+        self.pending_orders = remaining
+
+    def process_intraday_orders(self, date: str, today_rows: dict[str, dict],
+                                rng: random.Random) -> None:
+        """③ 盘中买入：剩余条件单 target ∈ [low, high] 触发."""
+        orders = list(self.pending_orders)
+        rng.shuffle(orders)
+        remaining: list[ConditionalOrder] = []
+
+        for order in orders:
+            row = today_rows.get(order.symbol)
+            if row is None:
+                remaining.append(order)
+                continue
+
+            ok, _ = self.can_buy(order.symbol)
+            if not ok:
+                remaining.append(order)
+                continue
+
+            low_p = _safe_f(row.get("low"))
+            high_p = _safe_f(row.get("high"))
+            if low_p <= order.target_price <= high_p:
+                price = order.target_price
+                shares = int(self.init_capital * self.position_pct / 100.0 / price)
+                if shares == 0:
+                    remaining.append(order)
+                    continue
+                cost = shares * price
+                self.cash -= cost
+                pos = Position(
+                    symbol=order.symbol, symbol_name=order.symbol_name,
+                    buy_date=date, buy_price=price,
+                    shares=shares, cost=cost,
+                )
+                self.positions[order.symbol] = pos
+                self.trades.append(TradeRecord(
+                    date=date, symbol=order.symbol,
+                    symbol_name=order.symbol_name,
+                    trade_type="盘中买入", price=price, shares=shares,
+                    reason=order.reason,
+                ))
+                log.info("[%s] 盘中买入 %s %s @ %.2f × %d股 (%s)",
+                         self.strategy_name, date, order.symbol_name,
+                         price, shares, order.reason)
+            else:
+                remaining.append(order)
+
+        self.pending_orders = remaining
 
     def buy(self, date: str, symbol: str, symbol_name: str,
             price: float, reason: str = "",
@@ -332,3 +438,13 @@ class Broker:
                     f"加仓空间止损(盘中{self.space_stop_pct:.0f}%)")
             return "加仓空间止损"
         return ""
+
+
+def _safe_f(v) -> float:
+    """Safely convert a value to float."""
+    if v is None:
+        return 0.0
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
