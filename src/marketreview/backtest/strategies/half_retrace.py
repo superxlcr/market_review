@@ -90,11 +90,11 @@ class HalfRetraceStrategy(BaseStrategy):
 
         midpoint = (peak_high + lowest_low) / 2.0
 
-        # ── 6. 上穿触发 ──
+        # ── 6. 预判上穿（条件单：收盘在半分位下方，明天可能突破）──
         yesterday = history[today_idx - 1]
         yesterday_close = safe_float(yesterday.get("close"))
 
-        if yesterday_close < midpoint and ctx.high >= midpoint:
+        if yesterday_close < midpoint:
             peak_date = str(history[peak_idx].get("date", "?"))
             return BuySignal(
                 date=ctx.date,

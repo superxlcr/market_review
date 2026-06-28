@@ -37,30 +37,26 @@ class MABreakthroughStrategy(BaseStrategy):
         suffix = "_yesterday" if yesterday else ""
         return safe_float(getattr(ctx, f"ma{self.ma_period}{suffix}"))
 
-    # ── 买入：突破 + 拉回 ──
+    # ── 买入：突破预期 + 拉回预期（条件单预判，不做确认）──
 
     def check_buy(self, ctx: DayContext) -> BuySignal | None:
         ma = self._ma(ctx)
-        ma_yest = self._ma(ctx, yesterday=True)
-        if ma <= 0 or ma_yest <= 0:
+        if ma <= 0:
             return None
 
         if len(ctx.kline_history) < 2:
             return None
 
-        yesterday = ctx.kline_history[-2]
-        prev_close = safe_float(yesterday.get("close"))
-
-        # 突破：昨收在MA下方，今日最高价上穿MA
-        if prev_close > 0 and prev_close < ma_yest and ctx.high >= ma:
+        # 收盘价在MA下方 → 预期突破，明天可能上穿MA
+        if ctx.close > 0 and ctx.close < ma:
             return BuySignal(
                 date=ctx.date, symbol=ctx.symbol,
                 symbol_name=ctx.symbol_name,
                 price=ma, reason=f"突破MA{self.ma_period}",
             )
 
-        # 拉回：昨收在MA上方，今日最低价回踩MA
-        if prev_close > 0 and prev_close > ma_yest and ctx.low <= ma:
+        # 收盘价在MA上方 → 预期拉回，明天可能回踩MA
+        if ctx.close > 0 and ctx.close > ma:
             return BuySignal(
                 date=ctx.date, symbol=ctx.symbol,
                 symbol_name=ctx.symbol_name,
