@@ -185,6 +185,12 @@ class Broker:
                 remaining.append(order)
                 continue
 
+            low_p = _safe_f(row.get("low"))
+            high_p = _safe_f(row.get("high"))
+            if not (low_p <= order.target_price <= high_p):
+                remaining.append(order)  # 价格未触及，不报信号
+                continue
+
             ok, reject_reason = self.can_buy(order.symbol)
             if not ok:
                 self.trades.append(TradeRecord(
@@ -195,38 +201,34 @@ class Broker:
                 ))
                 continue
 
-            low_p = _safe_f(row.get("low"))
-            high_p = _safe_f(row.get("high"))
-            if low_p <= order.target_price <= high_p:
-                price = order.target_price
-                shares = int(self.init_capital * self.position_pct / 100.0 / price)
-                if shares == 0:
-                    self.trades.append(TradeRecord(
-                        date=date, symbol=order.symbol,
-                        symbol_name=order.symbol_name,
-                        trade_type="信号未成交", price=price,
-                        reason=f"{order.reason}，资金不足(整手不够)",
-                    ))
-                    continue
-                cost = shares * price
-                self.cash -= cost
-                pos = Position(
-                    symbol=order.symbol, symbol_name=order.symbol_name,
-                    buy_date=date, buy_price=price,
-                    shares=shares, cost=cost,
-                )
-                self.positions[order.symbol] = pos
+            # 价格触及 + 可买 → 执行
+            price = order.target_price
+            shares = int(self.init_capital * self.position_pct / 100.0 / price)
+            if shares == 0:
                 self.trades.append(TradeRecord(
                     date=date, symbol=order.symbol,
                     symbol_name=order.symbol_name,
-                    trade_type="盘中买入", price=price, shares=shares,
-                    reason=order.reason,
+                    trade_type="信号未成交", price=price,
+                    reason=f"{order.reason}，资金不足(整手不够)",
                 ))
-                log.info("[%s] 盘中买入 %s %s @ %.2f × %d股 (%s)",
-                         self.strategy_name, date, order.symbol_name,
-                         price, shares, order.reason)
-            else:
-                remaining.append(order)
+                continue
+            cost = shares * price
+            self.cash -= cost
+            pos = Position(
+                symbol=order.symbol, symbol_name=order.symbol_name,
+                buy_date=date, buy_price=price,
+                shares=shares, cost=cost,
+            )
+            self.positions[order.symbol] = pos
+            self.trades.append(TradeRecord(
+                date=date, symbol=order.symbol,
+                symbol_name=order.symbol_name,
+                trade_type="盘中买入", price=price, shares=shares,
+                reason=order.reason,
+            ))
+            log.info("[%s] 盘中买入 %s %s @ %.2f × %d股 (%s)",
+                     self.strategy_name, date, order.symbol_name,
+                     price, shares, order.reason)
 
         self.pending_orders = remaining
 
