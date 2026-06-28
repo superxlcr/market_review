@@ -306,28 +306,112 @@ class Broker:
 
         return pos
 
-    def check_space_stop(self, date: str, symbol: str,
-                         today_low: float, today_open: float = 0.0) -> str:
-        """Check if space stop-loss triggers intraday.
-        If open already below stop → sell at open (gap down);
-        otherwise sell at stop price (intraday trigger).
-        Returns reason string if triggered, empty string otherwise.
-        """
-        pos = self.positions.get(symbol)
-        if pos is None:
-            return ""
+    # ── 卖出阶段 ──
 
-        stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+    def execute_open_sells(self, date: str, today_rows: dict[str, dict]) -> None:
+        """① 开盘卖出：检查所有持仓，open ≤ 止损/止盈触发价则卖出."""
+        for sym in list(self.positions.keys()):
+            pos = self.positions.get(sym)
+            if pos is None:
+                continue
+            row = today_rows.get(sym)
+            if row is None:
+                continue
+            open_p = _safe_f(row.get("open"))
+            if open_p <= 0:
+                continue
 
-        if today_low <= stop_price:
-            if today_open > 0 and today_open <= stop_price:
-                self.sell(date, symbol, today_open,
-                          f"开盘价，{self.space_stop_pct:.0f}%空间止损")
-            else:
-                self.sell(date, symbol, stop_price,
-                          f"盘中价，{self.space_stop_pct:.0f}%空间止损")
-            return "空间止损"
-        return ""
+            # ── 加仓部分（先判断，因为卖出是独立的）──
+            if pos.addon_shares > 0:
+                addon_stop = pos.addon_price * (1 - self.space_stop_pct / 100.0)
+                if open_p <= addon_stop:
+                    self.sell_addon(date, sym, open_p,
+                        f"开盘止损(加仓{self.space_stop_pct:.0f}%)")
+                else:
+                    self._check_addon_open_tp(date, sym, open_p)
+
+            # ── 基础仓位空间止损 ──
+            if sym not in self.positions:
+                continue  # 加仓卖出不影响基础仓位
+            stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+            if open_p <= stop_price:
+                self.sell(date, sym, open_p,
+                    f"开盘止损({self.space_stop_pct:.0f}%)")
+
+    def _check_addon_open_tp(self, date: str, sym: str, open_p: float) -> None:
+        """加仓开盘止盈检查."""
+        pos = self.positions.get(sym)
+        if pos is None or pos.addon_shares == 0:
+            return
+        mfp = pos.addon_mfp_pct
+        if mfp >= self.tp_tier3_mfp:
+            threshold = pos.addon_price * (1 + mfp * self.tp_tier3_protect / 100.0)
+            if open_p <= threshold:
+                self.sell_addon(date, sym, open_p,
+                    f"开盘止盈(浮盈曾达{mfp:.1f}%)")
+        elif mfp >= self.tp_tier2_mfp:
+            protect = pos.addon_price * self.tp_tier2_protect_ratio
+            if open_p <= protect:
+                pct = (self.tp_tier2_protect_ratio - 1) * 100
+                self.sell_addon(date, sym, open_p,
+                    f"开盘止盈(浮盈曾达{mfp:.1f}%→保{pct:.0f}%)")
+
+    def execute_intraday_sells(self, date: str, today_rows: dict[str, dict]) -> None:
+        """④ 盘中卖出：低价触及止损/止盈 → 盘中止损/止盈."""
+        for sym in list(self.positions.keys()):
+            pos = self.positions.get(sym)
+            if pos is None:
+                continue
+            row = today_rows.get(sym)
+            if row is None:
+                continue
+            open_p = _safe_f(row.get("open"))
+            low_p = _safe_f(row.get("low"))
+            if low_p <= 0:
+                continue
+
+            # ── 加仓部分 ──
+            if pos.addon_shares > 0:
+                addon_stop = pos.addon_price * (1 - self.space_stop_pct / 100.0)
+                if low_p <= addon_stop:
+                    # 如果开盘已经触发则跳过（已在 execute_open_sells 处理）
+                    if open_p <= 0 or open_p > addon_stop:
+                        self.sell_addon(date, sym, addon_stop,
+                            f"盘中止损(加仓{self.space_stop_pct:.0f}%)")
+                    continue
+                self._check_addon_intraday_tp(date, sym, open_p, low_p)
+
+            # ── 基础仓位空间止损 ──
+            if sym not in self.positions:
+                continue
+            stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+            if low_p <= stop_price:
+                if open_p <= 0 or open_p > stop_price:
+                    self.sell(date, sym, stop_price,
+                        f"盘中止损({self.space_stop_pct:.0f}%)")
+
+    def _check_addon_intraday_tp(self, date: str, sym: str,
+                                  open_p: float, low_p: float) -> None:
+        """加仓盘中止盈检查."""
+        pos = self.positions.get(sym)
+        if pos is None or pos.addon_shares == 0:
+            return
+        mfp = pos.addon_mfp_pct
+        triggered = False
+        if mfp >= self.tp_tier3_mfp:
+            threshold = pos.addon_price * (1 + mfp * self.tp_tier3_protect / 100.0)
+            if low_p <= threshold and (open_p <= 0 or open_p > threshold):
+                self.sell_addon(date, sym, threshold,
+                    f"盘中止盈(浮盈曾达{mfp:.1f}%)")
+                triggered = True
+        if not triggered and mfp >= self.tp_tier2_mfp:
+            protect = pos.addon_price * self.tp_tier2_protect_ratio
+            if low_p <= protect and (open_p <= 0 or open_p > protect):
+                pct = (self.tp_tier2_protect_ratio - 1) * 100
+                self.sell_addon(date, sym, protect,
+                    f"盘中止盈(浮盈曾达{mfp:.1f}%→保{pct:.0f}%)")
+
+    # ── MFP 更新 ──
 
     def update_max_float_profit(self, symbol: str, today_high: float):
         """Update the max floating profit for a position."""
@@ -396,48 +480,6 @@ class Broker:
         addon_float = (today_high - pos.addon_price) / pos.addon_price * 100.0
         if addon_float > pos.addon_mfp_pct:
             pos.addon_mfp_pct = addon_float
-
-    def check_addon_take_profit(self, date: str, symbol: str,
-                                today_low: float) -> str | None:
-        """Three-tier take-profit for add-on. Returns reason if triggered."""
-        pos = self.positions.get(symbol)
-        if pos is None or pos.addon_shares == 0:
-            return None
-        mfp = pos.addon_mfp_pct
-
-        if mfp >= self.tp_tier3_mfp:
-            threshold = pos.addon_price * (1 + mfp * self.tp_tier3_protect / 100.0)
-            if today_low <= threshold:
-                self.sell_addon(date, symbol, threshold,
-                    f"加仓止盈(浮盈曾达{mfp:.1f}%→保{self.tp_tier3_protect*100:.0f}%即{threshold:.2f})")
-                return "加仓T3止盈"
-
-        elif mfp >= self.tp_tier2_mfp:
-            protect_price = pos.addon_price * self.tp_tier2_protect_ratio
-            if today_low <= protect_price:
-                pct = (self.tp_tier2_protect_ratio - 1) * 100
-                self.sell_addon(date, symbol, protect_price,
-                    f"加仓止盈(浮盈曾达{mfp:.1f}%→保{pct:.0f}%即{protect_price:.2f})")
-                return "加仓T2止盈"
-
-        return None
-
-    def check_addon_space_stop(self, date: str, symbol: str,
-                               today_low: float, today_open: float = 0.0) -> str:
-        """Space stop-loss for add-on. Returns reason if triggered."""
-        pos = self.positions.get(symbol)
-        if pos is None or pos.addon_shares == 0:
-            return ""
-        stop_price = pos.addon_price * (1 - self.space_stop_pct / 100.0)
-        if today_low <= stop_price:
-            if today_open > 0 and today_open <= stop_price:
-                self.sell_addon(date, symbol, today_open,
-                    f"加仓空间止损(开盘{self.space_stop_pct:.0f}%)")
-            else:
-                self.sell_addon(date, symbol, stop_price,
-                    f"加仓空间止损(盘中{self.space_stop_pct:.0f}%)")
-            return "加仓空间止损"
-        return ""
 
 
 def _safe_f(v) -> float:
