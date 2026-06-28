@@ -56,15 +56,20 @@ def ma_direction(ma_values: list[float]) -> str:
     return "→"
 
 
-def ma_arrangement(df: pd.DataFrame) -> str:
+def ma_arrangement(df: pd.DataFrame,
+                   medium_long_periods: list[int] | None = None) -> str:
     """
     Determine MA arrangement by splitting into two groups:
       - 短期: MA5 / MA10 / MA20
-      - 中长期: MA60 / MA120 / MA240
+      - 中长期: 默认 MA60 / MA120 / MA240（个股传 [55, 144, 240]）
 
     Each group is classified as 多头 / 空头 / 缠绕, then combined.
     """
-    mas = calc_ma(df, [5, 10, 20, 60, 120, 240])
+    if medium_long_periods is None:
+        medium_long_periods = [60, 120, 240]
+
+    all_periods = [5, 10, 20] + list(medium_long_periods)
+    mas = calc_ma(df, all_periods)
 
     def _latest(ma_key: str) -> float | None:
         for v in reversed(mas[ma_key]):
@@ -73,7 +78,7 @@ def ma_arrangement(df: pd.DataFrame) -> str:
         return None
 
     short = [v for v in (_latest(f"MA{p}") for p in [5, 10, 20]) if v is not None]
-    medium_long = [v for v in (_latest(f"MA{p}") for p in [60, 120, 240]) if v is not None]
+    medium_long = [v for v in (_latest(f"MA{p}") for p in medium_long_periods) if v is not None]
 
     def _judge(vals: list[float]) -> str:
         if len(vals) < 2:
