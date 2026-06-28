@@ -36,17 +36,28 @@ class ConditionalOrder:
 |------|------|
 | `pending_orders: list[ConditionalOrder]` | 待触发条件单 |
 | `add_order(order)` | 收盘后设条件单 |
-| `process_orders(today_data, rng)` | 遍历昨日条件单，按 seed 随机顺序尝试成交 |
-| `clear_orders()` | 清空未触发条件单（收盘后） |
+| `process_open_orders(...)` | ①b 开盘买入：遍历 shuffled 条件单，仅判断 open 触发 |
+| `process_intraday_orders(...)` | ②b 盘中买入：剩余条件单，仅判断 target ∈ [low,high] |
+| `clear_orders()` | 清空未触发条件单（日末） |
+
+卖出也拆分为开盘+盘中两阶段：
+| `process_open_sells(...)` | ① 仅判断 open ≤ 触发价 |
+| `process_intraday_close_sells(...)` | ⑤ 盘中 + 收盘触发 |
 
 ### 条件单成交逻辑
 
 ```
-for order in shuffled(orders, rng):  # 同 seed 下可复现
-    if not can_buy(): continue        # 仓位/资金限制
-    if open > target and open ≤ open_price_cap: → 开盘买入 @open
-    elif target in [low, high]:               → 盘中买入 @target
-    else:                                      → 过期，跳过
+①b 开盘买入:
+  for order in shuffled(orders, rng):
+      if not can_buy(): continue
+      if open > target and open ≤ open_price_cap: → 开盘买入 @open
+      else: → 保留到盘中阶段
+
+②b 盘中买入:
+  for order in shuffled(remaining, rng):
+      if not can_buy(): continue
+      if target in [low, high]: → 盘中买入 @target
+      else: → 过期，跳过
 ```
 
 ### 新增 TradeRecord 类型
@@ -55,17 +66,29 @@ for order in shuffled(orders, rng):  # 同 seed 下可复现
 - `盘中买入` — reason: `突破MA60(昨额:...)`
 - `设置条件单` — reason: `目标价=X.XX 开盘上限≤X.XX 突破MA60(量能过关)`
 
-## 4. Engine 日循环改造
+## 4. Engine 日循环改造（最终顺序）
 
 ```
 Day N:
-  ① 处理条件单 → broker.process_orders(today_date, all_klines, rng)
-  ② 卖出检查 → 现有逻辑，文案细化
-  ③ 收盘后设置明日条件单:
+  ① 开盘卖出 → broker.process_open_sells()
+       开盘价已触发止损/止盈 → 开盘止损 / 开盘止盈
+       释放仓位后，开盘买入可用
+
+  ② 开盘买入 → broker.process_open_orders(rng)
+       open > target AND open ≤ open_price_cap → 开盘买入 @open
+
+  ③ 盘中买入 → broker.process_intraday_orders(rng)
+       剩余条件单 target ∈ [low, high] → 盘中买入 @target
+
+  ④ 盘中+收盘卖出 → broker.process_intraday_close_sells()
+       盘中止损/止盈 + 收盘卖出（战法卖出/时间止损）
+       注意：此处释放的仓位当天不再用于买入
+
+  ⑤ 条件单设置:
      for 未持仓 + in_window 股票:
        buy_sig = strategy.check_buy(ctx)
        if buy_sig is None: continue
-       # 量能过滤（MA55Volume 等战法内部处理 _last_volume_filter）
+       # 量能过滤（MA55Volume 等战法内部 _last_volume_filter）
        if vol_filter_failed: 记录「量能过滤」; continue
        # 判断明天能不能到
        limit = get_limit_pct(s.code)
