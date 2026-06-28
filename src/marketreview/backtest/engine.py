@@ -233,7 +233,8 @@ class BacktestEngine:
                     if sell_sig:
                         self.broker.sell(date, s.code, sell_sig.price, sell_sig.reason)
                         self._enrich_positions(date)
-                        continue
+
+                    continue
 
                 # ── Buy check (if not holding + in window) ──
                 else:
@@ -257,6 +258,18 @@ class BacktestEngine:
                                 strategy_tag=buy_sig.strategy_tag,
                             )
                             self._enrich_positions(date)
+                        else:
+                            # 量能过滤记录（策略设置 _last_volume_filter 时触发）
+                            vol_filter = getattr(
+                                self.strategy, '_last_volume_filter', None
+                            )
+                            if vol_filter:
+                                self.broker.report_volume_filter(
+                                    vol_filter["date"], vol_filter["symbol"],
+                                    vol_filter["symbol_name"], vol_filter["price"],
+                                    vol_filter["reason"],
+                                )
+                                self.strategy._last_volume_filter = None
 
             # Record daily equity (mark-to-market)
             pos_prices_daily = {}

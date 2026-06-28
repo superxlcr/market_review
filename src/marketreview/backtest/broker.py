@@ -106,6 +106,14 @@ class Broker:
         if self.trades:
             self.trades[-1].positions_after = self._positions_detail(prices)
 
+    def report_volume_filter(self, date: str, symbol: str, symbol_name: str,
+                             price: float, reason: str):
+        """记录一条量能过滤（买入信号被量能条件拦截）."""
+        self.trades.append(TradeRecord(
+            date=date, symbol=symbol, symbol_name=symbol_name,
+            trade_type="量能过滤", price=price, reason=reason,
+        ))
+
     def buy(self, date: str, symbol: str, symbol_name: str,
             price: float, reason: str = "",
             position_prices: dict[str, float] | None = None,
