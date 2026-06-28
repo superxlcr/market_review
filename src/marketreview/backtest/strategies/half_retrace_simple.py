@@ -23,8 +23,6 @@ class HalfRetraceSimpleStrategy(BaseStrategy):
     # ── 参数 ──
     PEAK_LOOKBACK_DAYS: int = 126   # 波峰回溯 ~6个月(交易日)
     PULLBACK_MIN_DAYS: int = 13     # 回调最小交易日数
-    TIME_STOP_DAYS: int = 8         # 时间止损天数
-    TIME_STOP_MIN_MFP: float = 10.0 # 时间止损浮盈阈值
     V_DIVISOR: float = 2.33         # P / V_DIVISOR = 前低 V
 
     @property
@@ -168,21 +166,9 @@ class HalfRetraceSimpleStrategy(BaseStrategy):
             )
 
         # ── 1. 时间止损 ──
-        trading_days = self._trading_days_since_buy(ctx)
-        if trading_days >= self.TIME_STOP_DAYS and pos.max_float_profit_pct < self.TIME_STOP_MIN_MFP:
-            return SellSignal(
-                date=ctx.date, symbol=ctx.symbol,
-                symbol_name=ctx.symbol_name,
-                price=current_price,
-                reason=f"时间止损(持仓{trading_days}日浮盈未达{self.TIME_STOP_MIN_MFP:.0f}%，收盘卖出)",
-            )
+        time_stop = self.check_time_stop(ctx)
+        if time_stop:
+            return time_stop
 
         # ── 2. 三级浮盈止盈（基类实现）──
         return self.check_take_profit(ctx)
-
-    def _trading_days_since_buy(self, ctx: DayContext) -> int:
-        if ctx.position is None:
-            return 0
-        buy_date = ctx.position.buy_date
-        return sum(1 for bar in ctx.kline_history
-                   if str(bar.get("date", "")) > buy_date)

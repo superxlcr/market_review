@@ -17,10 +17,6 @@ class MABreakthroughStrategy(BaseStrategy):
 
     ma_period: int = 60  # 子类覆写此值
 
-    # ── 时间止损参数（子类可覆写）──
-    TIME_STOP_DAYS: int = 8
-    TIME_STOP_MIN_MFP: float = 10.0
-
     @property
     def name(self) -> str:
         return f"MA{self.ma_period}突破拉回战法"
@@ -93,23 +89,10 @@ class MABreakthroughStrategy(BaseStrategy):
                 reason=f"战法卖出(跌破MA{self.ma_period})",
             )
 
-        # 2. 时间止损: N 个交易日内浮盈从未达阈值 → 收盘卖出
-        trading_days = self._trading_days_since_buy(ctx)
-        if trading_days >= self.TIME_STOP_DAYS and pos.max_float_profit_pct < self.TIME_STOP_MIN_MFP:
-            return SellSignal(
-                date=ctx.date, symbol=ctx.symbol,
-                symbol_name=ctx.symbol_name,
-                price=current_price,
-                reason=f"时间止损(持仓{trading_days}日浮盈未达{self.TIME_STOP_MIN_MFP:.0f}%，收盘卖出)",
-            )
+        # 2. 时间止损
+        time_stop = self.check_time_stop(ctx)
+        if time_stop:
+            return time_stop
 
         # 3. 三级浮盈止盈（通用，基类实现）
         return self.check_take_profit(ctx)
-
-    def _trading_days_since_buy(self, ctx: DayContext) -> int:
-        """持仓交易日数（买入日不计）."""
-        if ctx.position is None:
-            return 0
-        buy_date = ctx.position.buy_date
-        return sum(1 for bar in ctx.kline_history
-                   if str(bar.get("date", "")) > buy_date)

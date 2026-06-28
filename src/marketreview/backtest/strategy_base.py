@@ -91,6 +91,10 @@ class ConditionalOrder:
 class BaseStrategy(ABC):
     """Abstract base for all trading strategies."""
 
+    # ── 时间止损参数（子类可覆写）──
+    TIME_STOP_DAYS: int = 8         # 持仓 ≥N 日且最大浮盈从未达阈值 → 时间止损
+    TIME_STOP_MIN_MFP: float = 10.0 # 时间止损浮盈阈值（%）
+
     # ── 三级浮盈止盈阈值（子类可覆写）──
     TP_TIER3_MFP_THRESHOLD: float = 20.0   # 浮盈达此%触发 Tier 3
     TP_TIER3_PROTECT_PCT: float = 0.50     # Tier 3: 保留最高浮盈的50%
@@ -126,6 +130,34 @@ class BaseStrategy(ABC):
         """Return a sell signal (strategy-level stop/take-profit) or None.
         Space stop-loss is handled by engine, NOT here."""
         ...
+
+    def _trading_days_since_buy(self, ctx: DayContext) -> int:
+        """持仓交易日数（买入日不计）."""
+        if ctx.position is None:
+            return 0
+        buy_date = ctx.position.buy_date
+        return sum(1 for bar in ctx.kline_history
+                   if str(bar.get("date", "")) > buy_date)
+
+    def check_time_stop(self, ctx: DayContext) -> Optional[SellSignal]:
+        """时间止损（通用）：持仓 N 日浮盈未达阈值 → 收盘卖出.
+
+        各策略 check_sell 可在自身特有逻辑之后调用本方法作为 fallback.
+        子类可覆写 TIME_STOP_DAYS / TIME_STOP_MIN_MFP 调整阈值.
+        """
+        if ctx.position is None:
+            return None
+
+        pos = ctx.position
+        trading_days = self._trading_days_since_buy(ctx)
+        if trading_days >= self.TIME_STOP_DAYS and pos.max_float_profit_pct < self.TIME_STOP_MIN_MFP:
+            return SellSignal(
+                date=ctx.date, symbol=ctx.symbol,
+                symbol_name=ctx.symbol_name,
+                price=ctx.close,
+                reason=f"时间止损(持仓{trading_days}日浮盈未达{self.TIME_STOP_MIN_MFP:.0f}%，收盘卖出)",
+            )
+        return None
 
     def check_take_profit(self, ctx: DayContext) -> Optional[SellSignal]:
         """三级浮盈止盈（通用）— 用日内最低价判断盘中触发。
