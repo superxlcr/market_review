@@ -65,8 +65,8 @@ def render_ohlcv_section(
         section_type: "index" → show 权重贡献; "industry" → show 成分股分析.
         industry_level: "L1"/"L2"/"L3" for industry constituent lookup.
     """
-    if section_type not in ("index", "industry"):
-        raise ValueError(f"section_type must be 'index' or 'industry', got {section_type!r}")
+    if section_type not in ("index", "industry", "stock"):
+        raise ValueError(f"section_type must be 'index', 'industry', or 'stock', got {section_type!r}")
 
     if df.empty:
         st.warning(f"暂无 {name} 数据，请先加载数据")
@@ -113,7 +113,7 @@ def render_ohlcv_section(
         """)
 
         st.markdown("**K线形态**")
-        patterns = service.get_kline_patterns(df)
+        patterns = service.get_kline_patterns(df, obj_type=section_type)
         if patterns:
             for p in patterns:
                 dir_color = "#e53935" if "偏多" in p["direction"] else "#43a047"
@@ -136,8 +136,14 @@ def render_ohlcv_section(
 
     with ma_col:
         st.markdown("**均线分析**")
-        mas = calc_ma(df)
-        ma_periods = [5, 10, 20, 60, 120, 240]
+        # ── 根据类型选择均线周期 ──
+        if section_type == "stock":
+            ma_periods = [5, 10, 20, 55, 144, 240]
+            medium_long_periods = [55, 144, 240]
+        else:
+            ma_periods = [5, 10, 20, 60, 120, 240]
+            medium_long_periods = [60, 120, 240]
+        mas = calc_ma(df, ma_periods)
         ma_dirs = {}
         for p in ma_periods:
             ma_dirs[f"MA{p}"] = ma_direction(mas[f"MA{p}"])
@@ -211,7 +217,7 @@ def render_ohlcv_section(
         """)
         st.caption("扣抵量: 扣抵日当日量 vs 今日量 | 后续均量: 扣抵日+后续4天窗口均量（MA5/10不适用）| 红色=安全 绿色=危险 灰色=持平")
 
-        arrangement = ma_arrangement(df)
+        arrangement = ma_arrangement(df, medium_long_periods=medium_long_periods)
         st.markdown(f"**均线排列:** {arrangement}")
 
     with vol_col:
@@ -535,38 +541,39 @@ def render_ohlcv_section(
     else:
         st.caption("RSI 数据不足")
 
-    # --- BIAS Card ---
-    st.markdown("**BIAS 乖离率**")
-    binfo = bias_status(bias, [10, 20])
+    # --- BIAS Card (skip for stocks — ATR-normalised patterns replace it) ---
+    if section_type != "stock":
+        st.markdown("**BIAS 乖离率**")
+        binfo = bias_status(bias, [10, 20])
 
-    def _bias_cell(key: str) -> str:
-        entry = binfo.get(key, {})
-        val = entry.get("value")
-        if val is None:
-            return "N/A"
-        s = f"{val:.2f}"
-        if entry.get("status"):
-            s += f' <span style="color:{entry["color"]};font-weight:bold;">({entry["status"]})</span>'
-        return s
+        def _bias_cell(key: str) -> str:
+            entry = binfo.get(key, {})
+            val = entry.get("value")
+            if val is None:
+                return "N/A"
+            s = f"{val:.2f}"
+            if entry.get("status"):
+                s += f' <span style="color:{entry["color"]};font-weight:bold;">({entry["status"]})</span>'
+            return s
 
-    b10_html = _bias_cell("BIAS10")
-    b20_html = _bias_cell("BIAS20")
+        b10_html = _bias_cell("BIAS10")
+        b20_html = _bias_cell("BIAS20")
 
-    st.html(f"""
-    <table style="width:100%;font-size:18px;border-collapse:collapse;table-layout:fixed;">
-        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:16px;">
-            <th style="text-align:center;width:10%;">指标</th>
-            <th style="text-align:center;">10日乖离</th>
-            <th style="text-align:center;">月线乖离(20日)</th>
-        </tr></thead>
-        <tbody><tr>
-            <td style="text-align:center;font-weight:600;width:10%;">BIAS</td>
-            <td style="text-align:center;font-weight:bold;font-size:20px;">{b10_html}</td>
-            <td style="text-align:center;font-weight:bold;font-size:20px;">{b20_html}</td>
-        </tr></tbody>
-    </table>
-    """)
-    st.caption("10日乖离 > 10 短线超买 | < -10 短线超卖 | 月线乖离(20日) > 7 超买 | < -7 超卖")
+        st.html(f"""
+        <table style="width:100%;font-size:18px;border-collapse:collapse;table-layout:fixed;">
+            <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:16px;">
+                <th style="text-align:center;width:10%;">指标</th>
+                <th style="text-align:center;">10日乖离</th>
+                <th style="text-align:center;">月线乖离(20日)</th>
+            </tr></thead>
+            <tbody><tr>
+                <td style="text-align:center;font-weight:600;width:10%;">BIAS</td>
+                <td style="text-align:center;font-weight:bold;font-size:20px;">{b10_html}</td>
+                <td style="text-align:center;font-weight:bold;font-size:20px;">{b20_html}</td>
+            </tr></tbody>
+        </table>
+        """)
+        st.caption("10日乖离 > 10 短线超买 | < -10 短线超卖 | 月线乖离(20日) > 7 超买 | < -7 超卖")
 
     # ── 成分股分析 (industry) ──
     if section_type == "industry":
