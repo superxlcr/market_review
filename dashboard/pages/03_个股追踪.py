@@ -5,6 +5,7 @@ Agent 3 — 个股追踪页面
 import streamlit as st
 import sys
 import os
+import numpy as np
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -93,14 +94,15 @@ for s in _stocks:
     else:
         entity_label = "阳线" if chg_pct >= 0 else "阴线"
 
-    # ── Expander ──
-    title_html = (
-        f"{name} ({code}) — {industry} | "
-        f'<span style="color:{chg_color};">{chg_sign}{chg_pct:.2f}%</span> | '
-        f"{entity_label}"
+    # ── Info line above expander ──
+    info_line = (
+        f"{name} ({code}) — {industry}  ·  "
+        f"<span style='color:{chg_color};font-weight:bold;'>{chg_sign}{chg_pct:.2f}%</span>"
+        f"  <span style='font-size:13px;color:#888;'>{entity_label}</span>"
     )
+    st.html(f"<div style='margin-bottom:2px;font-size:15px;'>{info_line}</div>")
 
-    with st.expander(title_html, expanded=False):
+    with st.expander(f"{name} ({code})", expanded=False):
         render_ohlcv_section(df, code, name, _service, section_type="stock")
 
 st.divider()

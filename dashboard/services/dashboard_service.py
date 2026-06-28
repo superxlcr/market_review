@@ -368,10 +368,15 @@ class DashboardService:
 
         # Batch-fetch industry for matched stocks
         if matched_codes:
+            from marketreview.tools.industry import resolve_industry_label
             industries = self._dp.cache.get_stock_industries(matched_codes)
             for item in result["matched"]:
                 ind = industries.get(item["ts_code"], {})
-                item["industry"] = ind.get("L1", "未知")
+                item["industry"] = resolve_industry_label(
+                    l1_name=ind.get("l1_name", ""),
+                    l2_name=ind.get("l2_name", ""),
+                    l3_name=ind.get("l3_name", ""),
+                ) or ind.get("l1_name", "未知")
 
         log.info("get_watchlist_stocks: %d matched, %d unmatched",
                  len(result["matched"]), len(result["unmatched"]))
@@ -1789,7 +1794,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "3.0.0"
+    _AI_VERSION = "3.0.5"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """

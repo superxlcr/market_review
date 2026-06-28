@@ -9,9 +9,12 @@ from plotly.subplots import make_subplots
 from marketreview.tools.technical import calc_ma
 
 
-def plot_kline_with_ma(df: pd.DataFrame, display_days: int = 60):
+def plot_kline_with_ma(df: pd.DataFrame, display_days: int = 60,
+                       ma_periods: list[int] | None = None):
     """Plotly candlestick + MA overlay + amount bar. MAs computed on full data, chart shows last N days."""
-    mas = calc_ma(df)
+    if ma_periods is None:
+        ma_periods = [5, 10, 20, 60, 120, 240]
+    mas = calc_ma(df, periods=ma_periods)
     plot_df = df.tail(display_days)
 
     # Convert amount from 千元 to 亿
@@ -38,14 +41,15 @@ def plot_kline_with_ma(df: pd.DataFrame, display_days: int = 60):
         increasing_line_color="#e53935", decreasing_line_color="#43a047",
     ), row=1, col=1)
 
-    ma_colors = {"MA5": "#2196f3", "MA10": "#ff9800", "MA20": "#9c27b0",
-                 "MA60": "#4caf50", "MA120": "#ff5722", "MA240": "#795548"}
-    for name, color in ma_colors.items():
+    _ma_palette = ["#2196f3", "#ff9800", "#9c27b0", "#4caf50", "#ff5722", "#795548",
+                   "#00bcd4", "#e91e63"]
+    for i, p in enumerate(ma_periods):
+        name = f"MA{p}"
         if name in mas:
             ma_slice = mas[name][-display_days:]
             fig.add_trace(go.Scatter(
                 x=plot_df["date"], y=ma_slice, mode="lines",
-                line=dict(color=color, width=1.2), name=name,
+                line=dict(color=_ma_palette[i % len(_ma_palette)], width=1.2), name=name,
             ), row=1, col=1)
 
     # --- Row 2: Amount bars ---

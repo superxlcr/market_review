@@ -80,7 +80,8 @@ def render_ohlcv_section(
     chart_col, ohlc_col = st.columns([3, 2])
 
     with chart_col:
-        fig = plot_kline_with_ma(df)
+        chart_ma_periods = [5, 10, 20, 55, 144, 240] if section_type == "stock" else [5, 10, 20, 60, 120, 240]
+        fig = plot_kline_with_ma(df, ma_periods=chart_ma_periods)
         st.plotly_chart(fig, width="stretch")
 
     with ohlc_col:
