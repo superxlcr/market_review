@@ -10,6 +10,15 @@ st.set_page_config(page_title="战法回测", page_icon="🔬", layout="wide")
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
 
+def _trade_color(trade_type: str) -> str:
+    """按交易类型返回颜色：买入红/卖出绿/信号灰."""
+    if trade_type in ("开盘买入", "盘中买入", "加仓买入", "买入"):
+        return "#cf2c2c"  # 红色 买入系
+    if "卖出" in trade_type or "止损" in trade_type or "止盈" in trade_type:
+        return "#2c9f4f"  # 绿色 卖出系
+    return "#888"  # 灰色 信号系
+
+
 def _render_html_table(rows: list[dict], col_widths: dict[str, str] | None = None) -> None:
     """Render a list of dicts as an auto-wrapping HTML table."""
     if not rows:
@@ -25,7 +34,8 @@ def _render_html_table(rows: list[dict], col_widths: dict[str, str] | None = Non
         bg = "#fafafa" if i % 2 == 0 else "#fff"
         cells = "".join(
             f'<td style="white-space:normal;word-wrap:break-word;overflow-wrap:break-word;'
-            f'padding:4px 8px;vertical-align:top;width:{widths.get(k, "auto")}">'
+            f'padding:4px 8px;vertical-align:top;width:{widths.get(k, "auto")};'
+            f'color:{_trade_color(row.get("类型", ""))}">'
             f'{row.get(k, "")}</td>'
             for k in keys
         )
