@@ -226,12 +226,7 @@ class Broker:
                          self.strategy_name, date, order.symbol_name,
                          price, shares, order.reason)
             else:
-                self.trades.append(TradeRecord(
-                    date=date, symbol=order.symbol,
-                    symbol_name=order.symbol_name,
-                    trade_type="信号未成交", price=order.target_price,
-                    reason=f"{order.reason}，目标价{order.target_price:.2f}未触及(最低{low_p:.2f}~最高{high_p:.2f})",
-                ))
+                remaining.append(order)
 
         self.pending_orders = remaining
 
