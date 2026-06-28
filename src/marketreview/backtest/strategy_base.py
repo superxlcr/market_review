@@ -113,6 +113,14 @@ class BaseStrategy(ABC):
         """Return a buy signal or None."""
         ...
 
+    def diagnose_buy(self, ctx: DayContext) -> Optional[str]:
+        """Return a human-readable reason when check_buy returns None.
+
+        Subclasses should override this to provide strategy-specific
+        diagnostics.  Returns None if no detailed explanation is available.
+        """
+        return None
+
     @abstractmethod
     def check_sell(self, ctx: DayContext) -> Optional[SellSignal]:
         """Return a sell signal (strategy-level stop/take-profit) or None.

@@ -14,8 +14,12 @@ from datetime import datetime, timedelta
 from marketreview.data.data_provider import DataProvider
 from marketreview.tools.technical import rows_to_df, build_technical_summary
 from marketreview.backtest.config import load_pools, load_strategies, PoolConfig, StrategyConfig
-from marketreview.backtest.engine import BacktestEngine
+from marketreview.backtest.engine import BacktestEngine, get_limit_pct
+from marketreview.backtest.strategy_base import (
+    DayContext, BuySignal, create_strategy, safe_float,
+)
 from marketreview.backtest.reporter import Report
+from marketreview.tools.technical import calc_ma
 from marketreview.log_util import get_logger
 
 log = get_logger(__name__)
@@ -1794,7 +1798,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "3.0.5"
+    _AI_VERSION = "3.1.0"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -2021,3 +2025,179 @@ class DashboardService:
         """Create engine, run backtest, return report."""
         engine = BacktestEngine(self._dp, pool, strategy_cfg)
         return engine.run(seed=seed)
+
+    def check_stock_signal(
+        self, ts_code: str, name: str,
+        trade_date: str, strategy_class: str,
+    ) -> dict:
+        """Check if a strategy would set a conditional order for a stock.
+
+        Args:
+            ts_code: Stock code e.g. "002709.SZ".
+            name: Display name e.g. "天赐材料".
+            trade_date: YYYYMMDD trade date.
+            strategy_class: Registry key e.g. "ma55_breakthrough".
+
+        Returns:
+            {
+                "has_signal": bool,
+                "price_reachable": bool,
+                "message": str,
+                "error": str | None,
+            }
+        """
+        # ── Ensure strategy registration ──
+        import marketreview.backtest.strategies  # noqa: F811 — triggers @register_strategy
+
+        strategy = create_strategy(strategy_class)
+        if strategy is None:
+            return {
+                "has_signal": False, "price_reachable": False,
+                "message": f"⚠️ 战法「{strategy_class}」不存在",
+                "error": "strategy_not_found",
+            }
+
+        # ── Get strategy config for open_chase_cap_pct ──
+        strategies_cfg = self.load_backtest_strategies()
+        open_chase_cap_pct = 102.0  # default
+        for sc in strategies_cfg:
+            if sc.class_name == strategy_class:
+                open_chase_cap_pct = sc.open_chase_cap_pct
+                break
+
+        # ── Load K-line data ──
+        df = self.get_index_data(ts_code, lookback=500, end_date=trade_date)
+        if df.empty or len(df) < 2:
+            return {
+                "has_signal": False, "price_reachable": False,
+                "message": f"⚠️ {name}：无足够K线数据",
+                "error": "no_data",
+            }
+
+        # ── Compute all MAs (matching engine's precompute) ──
+        try:
+            ma_result = calc_ma(df, [20, 55, 60, 120, 144, 240])
+        except Exception:
+            return {
+                "has_signal": False, "price_reachable": False,
+                "message": f"⚠️ {name}：MA计算失败",
+                "error": "ma_error",
+            }
+
+        # ── Build klines_asc (list[dict] date ASC, with MA columns) ──
+        df_dates = df["date"].tolist()
+        klines_asc = []
+        for i in range(len(df)):
+            row = {
+                "date": str(df_dates[i]).replace("-", "")[:8],
+                "open": safe_float(df["open"].iloc[i]),
+                "high": safe_float(df["high"].iloc[i]),
+                "low": safe_float(df["low"].iloc[i]),
+                "close": safe_float(df["close"].iloc[i]),
+                "vol": safe_float(df["vol"].iloc[i]) if "vol" in df.columns else 0.0,
+                "amount": safe_float(df["amount"].iloc[i]) if "amount" in df.columns else 0.0,
+            }
+            for p in [20, 55, 60, 120, 144, 240]:
+                ma_key = f"MA{p}"
+                vals = ma_result.get(ma_key, [])
+                row[ma_key.lower()] = safe_float(vals[i]) if i < len(vals) else 0.0
+            klines_asc.append(row)
+
+        # ── Find trade_date index ──
+        idx = None
+        for i, r in enumerate(klines_asc):
+            if r["date"] == trade_date:
+                idx = i
+                break
+        if idx is None:
+            return {
+                "has_signal": False, "price_reachable": False,
+                "message": f"⚠️ {name}：{trade_date} 不在K线数据中",
+                "error": "date_not_found",
+            }
+
+        today = klines_asc[idx]
+        yesterday = klines_asc[idx - 1] if idx >= 1 else {}
+
+        # ── Build DayContext ──
+        def _yma(key: str) -> float:
+            return safe_float(yesterday.get(key, 0.0))
+
+        ctx = DayContext(
+            date=trade_date,
+            symbol=ts_code,
+            symbol_name=name,
+            open=today["open"],
+            high=today["high"],
+            low=today["low"],
+            close=today["close"],
+            volume=today["vol"],
+            amount=today["amount"],
+            ma20=today.get("ma20", 0.0),
+            ma20_yesterday=_yma("ma20"),
+            ma55=today.get("ma55", 0.0),
+            ma55_yesterday=_yma("ma55"),
+            ma60=today.get("ma60", 0.0),
+            ma60_yesterday=_yma("ma60"),
+            ma120=today.get("ma120", 0.0),
+            ma120_yesterday=_yma("ma120"),
+            ma144=today.get("ma144", 0.0),
+            ma144_yesterday=_yma("ma144"),
+            ma240=today.get("ma240", 0.0),
+            ma240_yesterday=_yma("ma240"),
+            kline_history=klines_asc[:idx + 1],
+            in_pool_window=True,
+            position=None,
+        )
+
+        # ── Call check_buy ──
+        try:
+            buy_sig = strategy.check_buy(ctx)
+        except Exception as e:
+            return {
+                "has_signal": False, "price_reachable": False,
+                "message": f"⚠️ {name}：信号检查异常 — {e}",
+                "error": "check_buy_error",
+            }
+
+        if buy_sig is not None:
+            target = buy_sig.price
+            open_cap = round(target * open_chase_cap_pct / 100.0, 2)
+            today_close = today["close"]
+            limit = get_limit_pct(ts_code)
+            lower = today_close * (1 - limit)
+            upper = today_close * (1 + limit)
+
+            if lower > target or target > upper:
+                return {
+                    "has_signal": True,
+                    "price_reachable": False,
+                    "message": (
+                        f"⚠️ **{strategy.name}**：目标价 {target:.2f} "
+                        f"超出{limit*100:.0f}%涨跌停限制"
+                        f"（涨停价 {upper:.2f} / 跌停价 {lower:.2f}），"
+                        f"无法设置条件单 — {buy_sig.reason}"
+                    ),
+                    "error": None,
+                }
+            else:
+                return {
+                    "has_signal": True,
+                    "price_reachable": True,
+                    "message": (
+                        f"✅ **{strategy.name}**：目标价 **{target:.2f}** "
+                        f"处设条件单，开盘追价上限 **{open_cap:.2f}**"
+                        f" — {buy_sig.reason}"
+                    ),
+                    "error": None,
+                }
+        else:
+            diag = strategy.diagnose_buy(ctx)
+            if diag is None:
+                diag = "当前状态不符合买入条件"
+            return {
+                "has_signal": False,
+                "price_reachable": False,
+                "message": f"📋 **{strategy.name}**：无信号 — {diag}",
+                "error": None,
+            }

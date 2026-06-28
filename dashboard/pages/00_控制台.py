@@ -19,6 +19,17 @@ st.markdown(PAGE_CSS, unsafe_allow_html=True)
 # ── Layout & styling ──
 st.markdown("""
 <style>
+/* Strategy selectbox — inline with form, purple border */
+div[data-testid="stSelectbox"] {
+    display: inline-block !important;
+    vertical-align: bottom !important;
+    border: 2px solid #7b1fa2 !important;
+    border-radius: 8px !important;
+    padding: 6px 10px !important;
+}
+div[data-testid="stSelectbox"]:hover {
+    border-color: #6a1b9a !important;
+}
 /* Date input */
 div[data-testid="stDateInput"] {
     max-width: 230px;
@@ -174,18 +185,37 @@ if _current:
         unsafe_allow_html=True,
     )
 
-st.markdown("---")
+# ── 战法 + 日期 同一行 ──
+_strategies = _service.load_backtest_strategies()
+_strategy_options = {s.name: s.class_name for s in _strategies} if _strategies else {}
+_default_name = st.session_state.get("selected_strategy_name")
+_default_idx = 0
+if _default_name and _default_name in _strategy_options:
+    _default_idx = list(_strategy_options.keys()).index(_default_name)
 
-# ── Form: no columns, CSS inline layout ──
-with st.form("ctrl_form", clear_on_submit=False):
-    selected_date = st.date_input(
-        "📅 选择交易日",
-        value=_default_date,
-        max_value=datetime.now(),
-        format="YYYY-MM-DD",
-        key="ctrl_date_picker",
-    )
-    apply_btn = st.form_submit_button("✅ 应用", type="primary")
+date_col, strat_col = st.columns([1, 2])
+with date_col:
+    with st.form("ctrl_form", clear_on_submit=False):
+        selected_date = st.date_input(
+            "📅 选择交易日",
+            value=_default_date,
+            max_value=datetime.now(),
+            format="YYYY-MM-DD",
+            key="ctrl_date_picker",
+        )
+        apply_btn = st.form_submit_button("✅ 应用", type="primary")
+
+with strat_col:
+    if _strategy_options:
+        selected_name = st.selectbox(
+            "📊 战法信号检查",
+            options=list(_strategy_options.keys()),
+            index=_default_idx,
+        )
+        st.session_state.selected_strategy_name = selected_name
+        st.session_state.selected_strategy_class = _strategy_options[selected_name]
+    else:
+        st.caption("⚠️ 无战法配置")
 
 # ── Handle form submit ──
 if apply_btn:

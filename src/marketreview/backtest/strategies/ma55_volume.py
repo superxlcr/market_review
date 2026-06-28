@@ -155,3 +155,10 @@ class MA55VolumeStrategy(MABreakthroughStrategy):
             f" | {avg_str})"
         )
         return signal
+
+    def diagnose_buy(self, ctx: DayContext) -> str | None:
+        vol_filter = getattr(self, '_last_volume_filter', None)
+        if vol_filter:
+            self._last_volume_filter = None
+            return f"量能不足 — {vol_filter['reason']}"
+        return super().diagnose_buy(ctx)

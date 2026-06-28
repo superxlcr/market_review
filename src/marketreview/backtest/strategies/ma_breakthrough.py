@@ -65,6 +65,12 @@ class MABreakthroughStrategy(BaseStrategy):
 
         return None
 
+    def diagnose_buy(self, ctx: DayContext) -> str | None:
+        ma = self._ma(ctx)
+        if ma <= 0:
+            return f"MA{self.ma_period} 数据不可用（K线不足或计算异常）"
+        return f"收盘价 {ctx.close:.2f} 与 MA{self.ma_period}（{ma:.2f}）相等，无法判定方向"
+
     # ── 卖出：战法卖出 → 时间止损 → 三级止盈 ──
 
     def check_sell(self, ctx: DayContext) -> SellSignal | None:

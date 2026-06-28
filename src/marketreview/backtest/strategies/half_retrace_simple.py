@@ -99,6 +99,57 @@ class HalfRetraceSimpleStrategy(BaseStrategy):
 
         return None
 
+    def diagnose_buy(self, ctx: DayContext) -> str | None:
+        history = ctx.kline_history
+        if len(history) < self.PULLBACK_MIN_DAYS + 2:
+            return f"K线不足（需≥{self.PULLBACK_MIN_DAYS + 2}日，当前{len(history)}日）"
+
+        today_idx = len(history) - 1
+
+        # 1. 找波峰 P
+        lookback_start = max(0, today_idx - self.PEAK_LOOKBACK_DAYS)
+        peak_high, peak_idx = 0.0, -1
+        for i in range(lookback_start, today_idx + 1):
+            h = safe_float(history[i].get("high"))
+            if h > peak_high:
+                peak_high, peak_idx = h, i
+
+        if peak_idx < 0:
+            return "近半年内未找到有效波峰"
+
+        days_since = today_idx - peak_idx
+        if days_since < self.PULLBACK_MIN_DAYS:
+            peak_date = str(history[peak_idx].get("date", "?"))
+            return (f"波峰（{peak_date} {peak_high:.2f}）距今仅{days_since}日，"
+                    f"需≥{self.PULLBACK_MIN_DAYS}日")
+
+        # 2. 固定 V = P / 2.33
+        valley_low = peak_high / self.V_DIVISOR
+
+        # 3. 算 62.5% 线
+        line_625 = valley_low + 0.625 * (peak_high - valley_low)
+
+        # 4. 跌破 62.5% 线？
+        has_broken = any(
+            safe_float(history[i].get("low")) <= line_625
+            for i in range(peak_idx, today_idx + 1))
+        if not has_broken:
+            return f"尚未跌破62.5%回调线（{line_625:.2f}），不触发监控"
+
+        # 5. 最低低点 L → 半分位
+        lowest_low = min(
+            (safe_float(history[i].get("low")) for i in range(peak_idx, today_idx + 1)),
+            default=float('inf'))
+        midpoint = (peak_high + lowest_low) / 2.0
+
+        # 6. 触发条件
+        yesterday_close = safe_float(history[today_idx - 1].get("close"))
+        if yesterday_close >= midpoint:
+            return (f"昨日收盘{yesterday_close:.2f} ≥ 半分位{midpoint:.2f}，"
+                    f"未触发上穿条件")
+
+        return None
+
     # ── 卖出: 收盘跌破突破价 → 时间止损 → 三级止盈 ──
     def check_sell(self, ctx: DayContext) -> SellSignal | None:
         if ctx.position is None:

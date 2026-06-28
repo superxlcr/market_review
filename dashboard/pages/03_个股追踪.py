@@ -23,12 +23,21 @@ if not _td:
     st.warning("⚠️ 尚未选择日期，请前往「控制台」设置")
     st.stop()
 
+# ── Strategy guard ──
+_strategy_class = st.session_state.get("selected_strategy_class")
+_strategy_name = st.session_state.get("selected_strategy_name", "")
+if not _strategy_class:
+    st.warning("⚠️ 尚未选择战法策略，请前往「控制台」设置")
+    st.stop()
+
 st.title("📋 个股追踪")
 st.caption("Agent 3 — 个股技术分析")
 
 st.markdown(
     f"📅 当前日期：<span style='color:#e53935;font-weight:bold;'>"
-    f"{_td[:4]}-{_td[4:6]}-{_td[6:8]}</span>",
+    f"{_td[:4]}-{_td[4:6]}-{_td[6:8]}</span>"
+    f" &nbsp;|&nbsp; 📊 战法：<span style='color:#1976d2;font-weight:bold;'>"
+    f"{_strategy_name}</span>",
     unsafe_allow_html=True,
 )
 
@@ -103,6 +112,20 @@ for s in _stocks:
     st.html(f"<div style='margin-bottom:2px;font-size:15px;'>{info_line}</div>")
 
     with st.expander(f"{name} ({code})", expanded=False):
+        # ── 战法信号检查 ──
+        result = _service.check_stock_signal(
+            ts_code=code, name=name,
+            trade_date=_td, strategy_class=_strategy_class,
+        )
+        if result.get("error"):
+            st.caption(f"⚠️ {result['error']}")
+        elif result["has_signal"] and result["price_reachable"]:
+            st.success(result["message"])
+        elif result["has_signal"] and not result["price_reachable"]:
+            st.warning(result["message"])
+        else:
+            st.info(result["message"])
+
         render_ohlcv_section(df, code, name, _service, section_type="stock")
 
 st.divider()

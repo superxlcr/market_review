@@ -48,6 +48,16 @@ class CompositeStrategy(BaseStrategy):
                 return sig
         return None
 
+    def diagnose_buy(self, ctx: DayContext) -> str | None:
+        lines = []
+        for tag, sub in self._subs:
+            diag = sub.diagnose_buy(ctx)
+            if diag:
+                lines.append(f"• {sub.name}：{diag}")
+            else:
+                lines.append(f"• {sub.name}：未触发")
+        return "\n".join(lines) if lines else None
+
     # ── 卖出: 找到入库时的子策略，委托给它 ──
     def check_sell(self, ctx: DayContext) -> SellSignal | None:
         if ctx.position is None:
