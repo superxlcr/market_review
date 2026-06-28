@@ -8,3 +8,4 @@ __pycache__/
 logs/
 .claude/
 config/watchlist_industries.txt
+config/watchlist_stocks.txt
