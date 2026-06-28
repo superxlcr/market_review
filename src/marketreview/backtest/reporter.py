@@ -81,7 +81,7 @@ def build_report(trades: list[TradeRecord],
     # Average hold days — match buy/sell pairs (calendar days approximation)
     buys_by_symbol: dict[str, list[TradeRecord]] = {}
     for t in trades:
-        if t.trade_type in ("买入", "加仓买入"):
+        if t.trade_type in ("买入", "开盘买入", "盘中买入", "加仓买入"):
             buys_by_symbol.setdefault(t.symbol, []).append(t)
     hold_days_list = []
     for t in completed:

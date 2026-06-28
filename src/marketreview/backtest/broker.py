@@ -185,9 +185,14 @@ class Broker:
                 remaining.append(order)
                 continue
 
-            ok, _ = self.can_buy(order.symbol)
+            ok, reject_reason = self.can_buy(order.symbol)
             if not ok:
-                remaining.append(order)
+                self.trades.append(TradeRecord(
+                    date=date, symbol=order.symbol,
+                    symbol_name=order.symbol_name,
+                    trade_type="信号未成交", price=order.target_price,
+                    reason=f"{order.reason}，{reject_reason}",
+                ))
                 continue
 
             low_p = _safe_f(row.get("low"))
@@ -196,7 +201,12 @@ class Broker:
                 price = order.target_price
                 shares = int(self.init_capital * self.position_pct / 100.0 / price)
                 if shares == 0:
-                    remaining.append(order)
+                    self.trades.append(TradeRecord(
+                        date=date, symbol=order.symbol,
+                        symbol_name=order.symbol_name,
+                        trade_type="信号未成交", price=price,
+                        reason=f"{order.reason}，资金不足(整手不够)",
+                    ))
                     continue
                 cost = shares * price
                 self.cash -= cost
@@ -216,7 +226,12 @@ class Broker:
                          self.strategy_name, date, order.symbol_name,
                          price, shares, order.reason)
             else:
-                remaining.append(order)
+                self.trades.append(TradeRecord(
+                    date=date, symbol=order.symbol,
+                    symbol_name=order.symbol_name,
+                    trade_type="信号未成交", price=order.target_price,
+                    reason=f"{order.reason}，目标价{order.target_price:.2f}未触及(最低{low_p:.2f}~最高{high_p:.2f})",
+                ))
 
         self.pending_orders = remaining
 

@@ -240,7 +240,7 @@ class BacktestEngine:
                 if sell_sig:
                     label = "收盘卖出"
                     self.broker.sell(date, s.code, sell_sig.price,
-                        f"{label}({sell_sig.reason})")
+                        f"{label}，{sell_sig.reason}")
                     self._enrich_positions(date)
 
             # ── ⑤ 条件单设置 ──
