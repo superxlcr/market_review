@@ -353,6 +353,43 @@ def bias_status(bias_dict: dict, periods: list[int] = None) -> dict:
     return result
 
 
+def calc_atr(df: pd.DataFrame, period: int = 14) -> list[float]:
+    """Compute ATR (Average True Range) using Wilder's smoothing.
+
+    Used by stock-mode K-line pattern detection for entity strength
+    and shadow significance normalisation.
+
+    Args:
+        df: OHLCV DataFrame (date ASC), must have open/high/low/close.
+        period: ATR lookback (default 14).
+
+    Returns:
+        List of ATR values (same length as df), NaN for first period-1 rows.
+    """
+    high = df["high"].values
+    low = df["low"].values
+    close = df["close"].values
+    n = len(df)
+
+    tr = np.zeros(n)
+    for i in range(1, n):
+        tr[i] = max(
+            high[i] - low[i],
+            abs(high[i] - close[i - 1]),
+            abs(low[i] - close[i - 1]),
+        )
+
+    atr = np.full(n, np.nan)
+    if n > period:
+        # Seed: simple average of the first <period> TR values
+        atr[period] = float(np.mean(tr[1:period + 1]))
+        # Wilder's smoothing: ATR_t = (ATR_{t-1} * (p-1) + TR_t) / p
+        for i in range(period + 1, n):
+            atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
+
+    return atr.tolist()
+
+
 # ═══════════════════════════════════════════════════════════════════
 # TODO — 新版技术指标（待逐个实现，取代上面的旧版 KDJ/RSI/BIAS）
 # ═══════════════════════════════════════════════════════════════════
