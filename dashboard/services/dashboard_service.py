@@ -2217,7 +2217,7 @@ class DashboardService:
                         f"处设条件单，开盘追价上限 "
                         f"{_r}{open_cap:.2f}{_e}"
                         f" — {buy_sig.reason}<br>"
-                        f"目标仓位 "
+                        f"{position_pct:.0f}%目标仓位 "
                         f"{_r}{shares:,}{_e} 股，"
                         f"{space_stop_pct:.0f}%止损价："
                         f"{_r}{stop_price:.2f}{_e}"
