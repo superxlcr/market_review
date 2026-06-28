@@ -201,15 +201,19 @@ class DashboardService:
 
     # ---- K-line pattern detection ----
 
-    def get_kline_patterns(self, df) -> list[dict]:
+    def get_kline_patterns(self, df, obj_type: str = "index") -> list[dict]:
         """
         Run all K-line pattern detectors and return matched patterns.
         The caller provides the DataFrame (already loaded via get_index_data).
+
+        Args:
+            df: OHLCV DataFrame (date ASC).
+            obj_type: "index", "industry", or "stock".
         Returns a list of dicts: [{name, direction, note}, ...]
         """
         try:
             from marketreview.tools.kline_patterns import detect_patterns
-            return detect_patterns(df, obj_type="index")
+            return detect_patterns(df, obj_type=obj_type)
         except Exception as e:
             log.warning("get_kline_patterns failed: %s", e)
             return []
@@ -310,6 +314,66 @@ class DashboardService:
                 log.warning("get_watchlist_industries: name '%s' not found in classification", name)
 
         log.info("get_watchlist_industries: %d matched, %d unmatched",
+                 len(result["matched"]), len(result["unmatched"]))
+        return result
+
+    def get_watchlist_stocks(self) -> dict:
+        """
+        Read config/watchlist_stocks.txt, match names against
+        stock_basic_cache table.
+
+        Returns dict:
+          - matched: list of {ts_code, name, industry}
+          - unmatched: list of names that couldn't be resolved
+        """
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "config", "watchlist_stocks.txt",
+        )
+        result: dict = {"matched": [], "unmatched": []}
+        if not os.path.exists(config_path):
+            log.info("get_watchlist_stocks: config file not found at %s", config_path)
+            return result
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        names = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            names.append(stripped)
+
+        if not names:
+            return result
+
+        # Match against stock_basic_cache
+        all_stocks = self._dp.cache.get_stock_basic()
+        name_to_stock: dict[str, dict] = {s["name"]: s for s in all_stocks}
+
+        matched_codes = []
+        for name in names:
+            stock = name_to_stock.get(name)
+            if stock:
+                matched_codes.append(stock["ts_code"])
+                result["matched"].append({
+                    "ts_code": stock["ts_code"],
+                    "name": name,
+                    "industry": "",  # filled below
+                })
+            else:
+                result["unmatched"].append(name)
+                log.warning("get_watchlist_stocks: name '%s' not found in stock_basic", name)
+
+        # Batch-fetch industry for matched stocks
+        if matched_codes:
+            industries = self._dp.cache.get_stock_industries(matched_codes)
+            for item in result["matched"]:
+                ind = industries.get(item["ts_code"], {})
+                item["industry"] = ind.get("L1", "未知")
+
+        log.info("get_watchlist_stocks: %d matched, %d unmatched",
                  len(result["matched"]), len(result["unmatched"]))
         return result
 
