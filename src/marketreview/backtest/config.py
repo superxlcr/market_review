@@ -31,6 +31,7 @@ class StrategyConfig:
     space_stop_pct: float        # 0~100, e.g. 3 means -3% stop loss
     new_position_threshold_pct: float = 0.0  # 现有持仓浮盈达此值才可开新仓
     addon_threshold_pct: float = 999.0        # 浮盈加仓阈值%，999=不启用
+    open_chase_cap_pct: float = 102.0        # 开盘追高上限%
 
 
 def load_pools(dp) -> list[PoolConfig]:
@@ -80,27 +81,116 @@ def _resolve_stock_name(dp, name: str) -> str:
 
 def load_strategies() -> list[StrategyConfig]:
     """Parse backtest_strategies.txt.
-    Format: 策略名 战法类名 仓位% 开仓上限 空间止损% [开仓浮盈阈值%] [加仓阈值%]
+
+    新格式::
+
+        # 全局默认
+        仓位%=20
+        开仓上限=2
+        空间止损%=5
+        开仓浮盈阈值%=10
+        加仓阈值%=999
+
+        ---
+
+        # 策略列表（缩进行覆盖对应参数）
+        MA60_突破拉回_时间止损 ma60_breakthrough
+
+        MA60_突破拉回_时间止损_加仓 ma60_breakthrough
+          加仓阈值%=10
     """
     path = CONFIG_DIR / "backtest_strategies.txt"
     if not path.exists():
         return []
 
+    KEY_MAP = {
+        "仓位%": "position_pct",
+        "开仓上限": "max_positions",
+        "空间止损%": "space_stop_pct",
+        "开仓浮盈阈值%": "new_position_threshold_pct",
+        "加仓阈值%": "addon_threshold_pct",
+        "开盘追高上限%": "open_chase_cap_pct",
+    }
+    FIELD_TYPES = {
+        "position_pct": float,
+        "max_positions": int,
+        "space_stop_pct": float,
+        "new_position_threshold_pct": float,
+        "addon_threshold_pct": float,
+        "open_chase_cap_pct": float,
+    }
+    DEFAULTS = {
+        "position_pct": 20.0,
+        "max_positions": 2,
+        "space_stop_pct": 5.0,
+        "new_position_threshold_pct": 10.0,
+        "addon_threshold_pct": 999.0,
+        "open_chase_cap_pct": 102.0,
+    }
+
+    global_defaults = dict(DEFAULTS)
     strategies: list[StrategyConfig] = []
+    current_strategy: tuple[str, str, dict] | None = None  # (name, class_name, overrides)
+
+    def _commit_current():
+        nonlocal current_strategy
+        if current_strategy is None:
+            return
+        name, class_name, overrides = current_strategy
+        cfg = dict(global_defaults)
+        cfg.update(overrides)
+        strategies.append(StrategyConfig(
+            name=name, class_name=class_name,
+            position_pct=cfg["position_pct"],
+            max_positions=cfg["max_positions"],
+            space_stop_pct=cfg["space_stop_pct"],
+            new_position_threshold_pct=cfg["new_position_threshold_pct"],
+            addon_threshold_pct=cfg["addon_threshold_pct"],
+            open_chase_cap_pct=cfg["open_chase_cap_pct"],
+        ))
+        current_strategy = None
+
+    def _parse_val(field: str, val: str):
+        typ = FIELD_TYPES.get(field, float)
+        return typ(val) if typ is int else typ(val)
+
+    section = "global"
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
+            raw = line.rstrip("\n")
+            stripped = raw.strip()
+
+            if not stripped or stripped.startswith("#"):
                 continue
-            parts = line.split()
-            if len(parts) >= 5:
-                strategies.append(StrategyConfig(
-                    name=parts[0],
-                    class_name=parts[1],
-                    position_pct=float(parts[2]),
-                    max_positions=int(parts[3]),
-                    space_stop_pct=float(parts[4]),
-                    new_position_threshold_pct=float(parts[5]) if len(parts) >= 6 else 0.0,
-                    addon_threshold_pct=float(parts[6]) if len(parts) >= 7 else 999.0,
-                ))
+
+            if stripped == "---":
+                section = "strategies"
+                continue
+
+            if section == "global":
+                if "=" in stripped:
+                    k, v = stripped.split("=", 1)
+                    field = KEY_MAP.get(k.strip())
+                    if field:
+                        global_defaults[field] = _parse_val(field, v.strip())
+                continue
+
+            # section == "strategies"
+            if raw.startswith((" ", "\t")):
+                # 缩进行 → 当前策略的参数覆盖
+                if "=" in stripped and current_strategy is not None:
+                    k, v = stripped.split("=", 1)
+                    field = KEY_MAP.get(k.strip())
+                    if field:
+                        current_strategy[2][field] = _parse_val(field, v.strip())
+                continue
+
+            # 非缩进行 → 新策略: "策略名 战法类名"
+            parts = stripped.split()
+            if len(parts) >= 2:
+                _commit_current()
+                current_strategy = (parts[0], parts[1], {})
+
+        _commit_current()
+
     return strategies
