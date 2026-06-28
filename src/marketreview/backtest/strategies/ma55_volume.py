@@ -1,24 +1,23 @@
-"""MA55 突破拉回 + 成交量观察 战法 — 买入原因附成交额上下文，不做过滤判断."""
+"""MA55 突破拉回 + 成交量限制 战法."""
 from .ma_breakthrough import MABreakthroughStrategy, register_strategy, safe_float
 from ..strategy_base import DayContext, BuySignal
 
 
 @register_strategy("ma55_volume")
 class MA55VolumeStrategy(MABreakthroughStrategy):
-    """MA55 突破拉回 + 成交额观察.
+    """MA55 突破拉回 + 成交量限制.
 
-    与纯 MA55 策略买卖逻辑完全一致，仅在买入信号的 reason 中附带成交额信息：
-      - 昨日成交额（买入当天不可知）
-      - 5日均额: 最近 5 个交易日（不含今日）成交额均值
-      - 10日均额: 最近 10 个交易日（不含今日）成交额均值
-      - 昨 / 5均 / 10均 对比百分比
+    与纯 MA55 策略买卖逻辑一致，增加量能门槛：
+      - 昨额 vs 5日均量 ≥ -10%（不萎缩超10%）
+      - 昨额 vs 10日均量 > 0%（高于10日均量）
+      - 不满足 → 量能过滤记录，不开仓
     """
 
     ma_period = 55
 
     @property
     def name(self) -> str:
-        return "MA55成交量观察战法"
+        return "MA55成交量限制战法"
 
     def _yesterday_limit_flag(self, hist: list[dict]) -> str:
         """检测昨日是否涨停（一字板 / 换手板），返回标记字符串或空.
