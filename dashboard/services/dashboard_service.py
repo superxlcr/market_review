@@ -2201,15 +2201,22 @@ class DashboardService:
                 raw_shares = trade_capital / target
                 shares = max(100, round(raw_shares / 100) * 100)
                 stop_price = round(target * (1 - space_stop_pct / 100.0), 2)
+
+                _r = '<span style="color:#e53935;font-weight:bold;">'
+                _e = '</span>'
                 return {
                     "has_signal": True,
                     "price_reachable": True,
                     "message": (
-                        f"✅ **{strategy.name}**：目标价 **{target:.2f}** "
-                        f"处设条件单，开盘追价上限 **{open_cap:.2f}**"
+                        f"✅ **{strategy.name}**：目标价 "
+                        f"{_r}{target:.2f}{_e} "
+                        f"处设条件单，开盘追价上限 "
+                        f"{_r}{open_cap:.2f}{_e}"
                         f" — {buy_sig.reason}\n\n"
-                        f"目标仓位 **{shares:,}** 股，"
-                        f"{space_stop_pct:.0f}%止损价：**{stop_price:.2f}**"
+                        f"目标仓位 "
+                        f"{_r}{shares:,}{_e} 股，"
+                        f"{space_stop_pct:.0f}%止损价："
+                        f"{_r}{stop_price:.2f}{_e}"
                     ),
                     "error": None,
                 }
