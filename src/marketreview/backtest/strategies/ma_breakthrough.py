@@ -53,24 +53,6 @@ class MABreakthroughStrategy(BaseStrategy):
 
         # 突破：昨收在MA下方，今日最高价上穿MA
         if prev_close > 0 and prev_close < ma_yest and ctx.high >= ma:
-            if ctx.open > ma:
-                if ctx.open <= ma * 1.02:
-                    # 高开≤2%：直接追高买入
-                    return BuySignal(
-                        date=ctx.date, symbol=ctx.symbol,
-                        symbol_name=ctx.symbol_name,
-                        price=ctx.open,
-                        reason=f"追高买入，突破MA{self.ma_period}",
-                    )
-                elif ctx.low <= ma:
-                    # 高开>2%但盘中跌回MA：仍可买到MA价格
-                    return BuySignal(
-                        date=ctx.date, symbol=ctx.symbol,
-                        symbol_name=ctx.symbol_name,
-                        price=ma, reason=f"突破MA{self.ma_period}",
-                    )
-                return None  # 高开>2%且全天在MA上方：放弃
-            # 低开/平开：盘中突破，可买到MA价格
             return BuySignal(
                 date=ctx.date, symbol=ctx.symbol,
                 symbol_name=ctx.symbol_name,

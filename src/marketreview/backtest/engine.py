@@ -15,6 +15,18 @@ from marketreview.log_util import get_logger
 log = get_logger(__name__)
 
 
+def get_limit_pct(code: str) -> float:
+    """根据股票代码返回涨跌停幅度."""
+    if code.startswith(("600", "601", "603", "605",
+                        "000", "001", "002", "003")):
+        return 0.10
+    if code.startswith(("300", "301", "688")):
+        return 0.20
+    if code.startswith("8"):
+        return 0.30
+    return 0.10
+
+
 class BacktestEngine:
     """Runs a backtest for one pool × one strategy."""
 
@@ -409,6 +421,15 @@ class BacktestEngine:
             dates.append(dt.strftime("%Y%m%d"))
             dt += timedelta(days=1)
         return dates
+
+    def _build_today_rows(self, date: str) -> dict[str, dict]:
+        """构建 {symbol: kline_row} 字典，供 broker 方法使用."""
+        result: dict[str, dict] = {}
+        for code, klines in self._klines.items():
+            row = self._get_day(klines, date)
+            if row is not None:
+                result[code] = row
+        return result
 
     def _get_day(self, klines: list[dict], date: str) -> dict | None:
         """Find a K-line row by date."""
