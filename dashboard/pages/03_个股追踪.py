@@ -117,14 +117,29 @@ for s in _stocks:
             ts_code=code, name=name,
             trade_date=_td, strategy_class=_strategy_class,
         )
+        msg = result["message"]
+
+        # 用 HTML callout 代替 st.success/warning/info，确保内联颜色标签生效
+        _callout_css = {
+            "success": "background:#d4edda;border-left:4px solid #28a745;color:#155724;",
+            "warning": "background:#fff3cd;border-left:4px solid #ffc107;color:#856404;",
+            "info":    "background:#d1ecf1;border-left:4px solid #17a2b8;color:#0c5460;",
+            "error":   "background:#f8d7da;border-left:4px solid #dc3545;color:#721c24;",
+        }
         if result.get("error"):
-            st.caption(f"⚠️ {result['error']}")
+            style = _callout_css["error"]
         elif result["has_signal"] and result["price_reachable"]:
-            st.success(result["message"])
+            style = _callout_css["success"]
         elif result["has_signal"] and not result["price_reachable"]:
-            st.warning(result["message"])
+            style = _callout_css["warning"]
         else:
-            st.info(result["message"])
+            style = _callout_css["info"]
+
+        st.markdown(
+            f'<div style="{style} padding:0.75rem 1rem; border-radius:0.25rem; '
+            f'margin:0.5rem 0; line-height:1.7;">{msg}</div>',
+            unsafe_allow_html=True,
+        )
 
         render_ohlcv_section(df, code, name, _service, section_type="stock")
 
