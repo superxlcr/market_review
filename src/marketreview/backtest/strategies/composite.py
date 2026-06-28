@@ -7,7 +7,7 @@
 
 用法（子类只需覆写 SUB_STRATEGIES）:
   class MyCombo(CompositeStrategy):
-      SUB_STRATEGIES = ["half_retrace", "ma55_breakthrough"]  # 优先回调一半
+      SUB_STRATEGIES = ["half_retrace", "ma60_breakthrough"]  # 优先回调一半
 """
 from ..strategy_base import (
     BaseStrategy, DayContext, BuySignal, SellSignal,
@@ -72,21 +72,6 @@ class CompositeStrategy(BaseStrategy):
 
 # ── 具名组合 ──
 
-@register_strategy("half_retrace_ma55")
-class HalfRetraceMA55Strategy(CompositeStrategy):
-    """突破回调一半 + MA55 — 优先回调一半."""
-
-    SUB_STRATEGIES = ["half_retrace", "ma55_breakthrough"]
-
-    @property
-    def name(self) -> str:
-        return "回调一半+MA55组合"
-
-    @property
-    def lookback_trading_days(self) -> int:
-        return 240  # half_retrace needs ~126 + MA55 needs 240
-
-
 @register_strategy("ma60_ma120")
 class MA60MA120Strategy(CompositeStrategy):
     """MA60 + MA120 双均线组合 — 优先 MA60."""
@@ -102,16 +87,3 @@ class MA60MA120Strategy(CompositeStrategy):
         return 480
 
 
-@register_strategy("ma55_ma144")
-class MA55MA144Strategy(CompositeStrategy):
-    """MA55 + MA144 双均线组合 — 优先 MA55."""
-
-    SUB_STRATEGIES = ["ma55_breakthrough", "ma144_breakthrough"]
-
-    @property
-    def name(self) -> str:
-        return "MA55+MA144组合"
-
-    @property
-    def lookback_trading_days(self) -> int:
-        return 480

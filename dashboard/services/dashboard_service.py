@@ -1798,7 +1798,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "3.1.2"
+    _AI_VERSION = "4.0.0"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -2036,7 +2036,7 @@ class DashboardService:
             ts_code: Stock code e.g. "002709.SZ".
             name: Display name e.g. "天赐材料".
             trade_date: YYYYMMDD trade date.
-            strategy_class: Registry key e.g. "ma55_breakthrough".
+            strategy_class: Registry key e.g. "ma60_breakthrough".
 
         Returns:
             {

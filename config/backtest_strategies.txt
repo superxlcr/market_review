@@ -12,10 +12,8 @@
 # ── 基础策略 ──
 MA55_成交量限制 ma55_volume
 MA60_成交量限制 ma60_volume
-MA55_突破拉回 ma55_breakthrough
 MA60_突破拉回 ma60_breakthrough
 MA120_突破拉回 ma120_breakthrough
-MA144_突破拉回 ma144_breakthrough
 突破回调一半 half_retrace
 突破回调一半简化 half_retrace_simple
 
@@ -24,20 +22,14 @@ MA55_成交量限制_加仓 ma55_volume
   加仓阈值%=10
 MA60_成交量限制_加仓 ma60_volume
   加仓阈值%=10
-MA55_突破拉回_加仓 ma55_breakthrough
-  加仓阈值%=10
 MA60_突破拉回_加仓 ma60_breakthrough
   加仓阈值%=10
 MA120_突破拉回_加仓 ma120_breakthrough
-  加仓阈值%=10
-MA144_突破拉回_加仓 ma144_breakthrough
   加仓阈值%=10
 突破回调一半_加仓 half_retrace
   加仓阈值%=10
 突破回调一半简化_加仓 half_retrace_simple
   加仓阈值%=10
 
-# ── 组合战法（待启用）──
-MA55+MA144 ma55_ma144
+# ── 组合战法 ──
 MA60+MA120 ma60_ma120
-回调一半+MA55 half_retrace_ma55
