@@ -113,7 +113,45 @@ with st.expander("⭐ 自选行业", expanded=False):
         if _unmatched:
             _names = "、".join(_unmatched)
             st.warning(f"⚠️ 以下 {len(_unmatched)} 个名称未匹配到 SW2021 行业：**{_names}**，请检查拼写")
-        st.caption("（后续将支持自选个股）")
+
+# ── 自选个股 ──
+with st.expander("📋 自选个股", expanded=False):
+    st.markdown("**配置文件：** `config/watchlist_stocks.txt`")
+
+    _stocks_data = _service.get_watchlist_stocks()
+    _stocks = _stocks_data["matched"]
+    _stocks_unmatched = _stocks_data["unmatched"]
+
+    if not _stocks and not _stocks_unmatched:
+        st.caption("暂无自选个股，请在 `config/watchlist_stocks.txt` 中配置")
+    else:
+        if _stocks:
+            _rows = ""
+            for _i, _s in enumerate(_stocks):
+                _rows += (
+                    f"<tr>"
+                    f"<td style='text-align:center;'>{_i + 1}</td>"
+                    f"<td style='color:#888;font-size:14px;'>{_s['ts_code']}</td>"
+                    f"<td style='font-weight:600;'>{_s['name']}</td>"
+                    f"<td style='color:#888;'>{_s['industry']}</td>"
+                    f"<td style='text-align:center;'>✅</td>"
+                    f"</tr>"
+                )
+            st.html(f"""
+            <table style="width:100%;font-size:15px;border-collapse:collapse;">
+                <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;">
+                    <th style="text-align:center;width:30px;">#</th>
+                    <th style="text-align:left;">代码</th>
+                    <th style="text-align:left;">名称</th>
+                    <th style="text-align:left;">行业</th>
+                    <th style="text-align:center;">状态</th>
+                </tr></thead>
+                <tbody>{_rows}</tbody>
+            </table>
+            """)
+        if _stocks_unmatched:
+            _names = "、".join(_stocks_unmatched)
+            st.warning(f"⚠️ 以下 {len(_stocks_unmatched)} 个名称未匹配到数据库：**{_names}**，请检查拼写")
 
 # ── Default date ──
 _default_str = st.session_state.get("trade_date")
