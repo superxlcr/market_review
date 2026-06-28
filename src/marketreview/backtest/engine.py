@@ -190,10 +190,16 @@ class BacktestEngine:
             self._enrich_positions(date)
 
             # ── ② 开盘买入 ──
+            if self.broker.pending_orders:
+                log.info("[%s] ②开盘买入 %s: %d个条件单待触发",
+                         self.strategy_cfg.name, date, len(self.broker.pending_orders))
             self.broker.process_open_orders(date, today_rows, rng)
             self._enrich_positions(date)
 
             # ── ③ 盘中买入 ──
+            if self.broker.pending_orders:
+                log.info("[%s] ③盘中买入 %s: %d个条件单待触发",
+                         self.strategy_cfg.name, date, len(self.broker.pending_orders))
             self.broker.process_intraday_orders(date, today_rows, rng)
             self._enrich_positions(date)
 
@@ -269,6 +275,14 @@ class BacktestEngine:
                             vol_filter["reason"],
                         )
                         self.strategy._last_volume_filter = None
+                        log.info("[%s] ⑤设单 %s %s 量能过滤: %s",
+                                 self.strategy_cfg.name, date, s.name,
+                                 vol_filter["reason"])
+                    else:
+                        log.debug("[%s] ⑤设单 %s %s buy_sig=None O=%.2f H=%.2f L=%.2f C=%.2f MA=%.2f MA_yest=%.2f",
+                                  self.strategy_cfg.name, date, s.name,
+                                  ctx.open, ctx.high, ctx.low, ctx.close,
+                                  ctx.ma60, ctx.ma60_yesterday)
                     continue
 
                 # 判断明天能不能到（涨跌停限制）
@@ -276,6 +290,9 @@ class BacktestEngine:
                 target = buy_sig.price
                 limit = get_limit_pct(s.code)
                 if today_close * (1 - limit) > target or target > today_close * (1 + limit):
+                    log.info("[%s] ⑤设单 %s %s 涨跌停过滤: C=%.2f target=%.2f limit=%.0f%%",
+                             self.strategy_cfg.name, date, s.name,
+                             today_close, target, limit * 100)
                     continue  # 明天到不了，不设单
 
                 # 设条件单
@@ -294,6 +311,9 @@ class BacktestEngine:
                     trade_type="设置条件单", price=target,
                     reason=f"目标价={target:.2f} 开盘上限≤{open_cap:.2f} {buy_sig.reason}",
                 ))
+                log.info("[%s] ⑤设单 %s %s 信号→条件单 target=%.2f cap=%.2f (%s)",
+                         self.strategy_cfg.name, date, s.name,
+                         target, open_cap, buy_sig.reason)
 
             # ── 日终权益快照 ──
             pos_prices_daily = {}
