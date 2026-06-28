@@ -4,6 +4,7 @@
 MA60_突破拉回_时间止损 ma60_breakthrough 20 2 5 10 999
 MA120_突破拉回_时间止损 ma120_breakthrough 20 2 5 10 999
 MA55_突破拉回_时间止损 ma55_breakthrough 20 2 5 10 999
+MA55_成交量观察_时间止损 ma55_volume 20 2 5 10 999
 MA144_突破拉回_时间止损 ma144_breakthrough 20 2 5 10 999
 突破回调一半_时间止损 half_retrace 20 2 5 10 999
 突破回调一半简化_时间止损 half_retrace_simple 20 2 5 10 999

@@ -24,7 +24,7 @@ class BacktestEngine:
         self.strategy_cfg = strategy_cfg
 
         # Create strategy instance (import strategies to ensure registration)
-        from .strategies import ma60_breakthrough, ma120_breakthrough, ma55_breakthrough, ma144_breakthrough, half_retrace, half_retrace_simple, composite  # noqa: F401
+        from .strategies import ma_breakthrough, ma60_breakthrough, ma120_breakthrough, ma55_breakthrough, ma144_breakthrough, ma55_volume, half_retrace, half_retrace_simple, composite  # noqa: F401
 
         self.strategy = create_strategy(strategy_cfg.class_name)
         if self.strategy is None:

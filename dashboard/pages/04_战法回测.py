@@ -9,6 +9,35 @@ from rendering.styles import PAGE_CSS
 st.set_page_config(page_title="战法回测", page_icon="🔬", layout="wide")
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
+
+def _render_html_table(rows: list[dict], col_widths: dict[str, str] | None = None) -> None:
+    """Render a list of dicts as an auto-wrapping HTML table."""
+    if not rows:
+        return
+    keys = list(rows[0].keys())
+    widths = col_widths or {}
+    header_html = "".join(
+        f'<th style="white-space:nowrap;padding:6px 8px;text-align:left;width:{widths.get(k, "auto")}">'
+        f'{k}</th>' for k in keys
+    )
+    body_rows = []
+    for i, row in enumerate(rows):
+        bg = "#fafafa" if i % 2 == 0 else "#fff"
+        cells = "".join(
+            f'<td style="white-space:normal;word-wrap:break-word;overflow-wrap:break-word;'
+            f'padding:4px 8px;vertical-align:top;width:{widths.get(k, "auto")}">'
+            f'{row.get(k, "")}</td>'
+            for k in keys
+        )
+        body_rows.append(f'<tr style="background:{bg}">{cells}</tr>')
+    html = (
+        f'<table style="width:100%;border-collapse:collapse;font-size:0.9em;table-layout:auto">'
+        f'<thead><tr>{header_html}</tr></thead>'
+        f'<tbody>{"".join(body_rows)}</tbody>'
+        f'</table>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
 svc = DashboardService()
 
 st.title("🔬 战法回测")
@@ -312,18 +341,10 @@ if st.session_state.get("bt_has_reports"):
                             "原因": t.reason,
                             "当前持仓": t.positions_after,
                         })
-                    st.dataframe(
-                        trade_rows, use_container_width=True, hide_index=True,
-                        column_config={
-                            "日期": st.column_config.TextColumn(width="small"),
-                            "股票": st.column_config.TextColumn(width="small"),
-                            "类型": st.column_config.TextColumn(width="small"),
-                            "价格": st.column_config.TextColumn(width="small"),
-                            "盈亏": st.column_config.TextColumn(width="small"),
-                            "原因": st.column_config.TextColumn(width="large"),
-                            "当前持仓": st.column_config.TextColumn(width="large"),
-                        },
-                    )
+                    _render_html_table(trade_rows, col_widths={
+                        "日期": "5em", "股票": "6em", "类型": "7em",
+                        "价格": "4em", "盈亏": "4em",
+                    })
 
                 # Per-stock summary
                 if report.stock_summaries:
@@ -361,4 +382,7 @@ if st.session_state.get("bt_has_reports"):
                                     "盈亏": pnl_str,
                                     "原因": t.reason,
                                 })
-                            st.dataframe(srows, use_container_width=True, hide_index=True)
+                            _render_html_table(srows, col_widths={
+                                "日期": "5em", "类型": "7em",
+                                "价格": "4em", "盈亏": "4em",
+                            })
