@@ -89,9 +89,31 @@ class MA60MA120Strategy(CompositeStrategy):
 
 @register_strategy("ma60_ma120_volume")
 class MA60MA120VolumeStrategy(CompositeStrategy):
-    """MA60成交量 + MA120成交量 组合 — 优先 MA60."""
+    """MA60成交量 + MA120成交量 组合 — 优先 MA60.
+
+    量能阈值由引擎/check_stock_signal 注入到本实例，再向下同步到子策略.
+    """
 
     SUB_STRATEGIES = ["ma60_volume", "ma120_volume"]
+
+    # 量能阈值（引擎/check_stock_signal 通过 hasattr 注入）
+    VOLUME_5D_THRESHOLD_PCT: float = -10.0
+    VOLUME_10D_THRESHOLD_PCT: float = -5.0
+
+    def _sync_volume_thresholds(self):
+        """将引擎注入的量能阈值同步到每个子策略."""
+        for _, sub in self._subs:
+            if hasattr(sub, 'VOLUME_5D_THRESHOLD_PCT'):
+                sub.VOLUME_5D_THRESHOLD_PCT = self.VOLUME_5D_THRESHOLD_PCT
+                sub.VOLUME_10D_THRESHOLD_PCT = self.VOLUME_10D_THRESHOLD_PCT
+
+    def check_buy(self, ctx: DayContext) -> BuySignal | None:
+        self._sync_volume_thresholds()
+        return super().check_buy(ctx)
+
+    def check_sell(self, ctx: DayContext) -> SellSignal | None:
+        self._sync_volume_thresholds()
+        return super().check_sell(ctx)
 
     @property
     def name(self) -> str:
