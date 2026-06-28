@@ -87,3 +87,18 @@ class MA60MA120Strategy(CompositeStrategy):
         return 480
 
 
+@register_strategy("ma60_ma120_volume")
+class MA60MA120VolumeStrategy(CompositeStrategy):
+    """MA60成交量 + MA120成交量 组合 — 优先 MA60."""
+
+    SUB_STRATEGIES = ["ma60_volume", "ma120_volume"]
+
+    @property
+    def name(self) -> str:
+        return "MA60+MA120成交量组合"
+
+    @property
+    def lookback_trading_days(self) -> int:
+        return max(60, 120)
+
+
