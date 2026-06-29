@@ -1798,7 +1798,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "4.5.6"
+    _AI_VERSION = "4.5.7"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -2065,6 +2065,7 @@ class DashboardService:
         position_pct = 20.0
         space_stop_pct = 5.0
         total_capital = 2_500_000
+        max_target_deviation_pct = 999.0   # 默认不限制
         for sc in strategies_cfg:
             if sc.class_name == strategy_class:
                 open_chase_cap_pct = sc.open_chase_cap_pct
@@ -2073,6 +2074,7 @@ class DashboardService:
                 position_pct = sc.position_pct
                 space_stop_pct = sc.space_stop_pct
                 total_capital = sc.total_capital
+                max_target_deviation_pct = sc.max_target_deviation_pct
                 break
 
         # 注入量能阈值
@@ -2179,24 +2181,27 @@ class DashboardService:
             target = buy_sig.price
             open_cap = round(target * open_chase_cap_pct / 100.0, 2)
             today_close = today["close"]
-            limit = get_limit_pct(ts_code)
-            lower = today_close * (1 - limit)
-            upper = today_close * (1 + limit)
+            exchange_limit = get_limit_pct(ts_code)
+            cfg_limit = max_target_deviation_pct / 100.0
+            effective_limit = exchange_limit if cfg_limit >= 1.0 else min(exchange_limit, cfg_limit)
+            lower = today_close * (1 - effective_limit)
+            upper = today_close * (1 + effective_limit)
 
             # 红色高亮标签（HTML callout 下生效）
             _r = '<span style="color:#e53935;font-weight:bold;">'
             _e = '</span>'
 
             if lower > target or target > upper:
+                limit_label = f"{effective_limit*100:.0f}%" if effective_limit != exchange_limit else f"{exchange_limit*100:.0f}%涨跌停"
                 return {
                     "has_signal": True,
                     "price_reachable": False,
                     "message": (
                         f"⚠️ <strong>{strategy.name}</strong>：目标价 "
                         f"{_r}{target:.2f}{_e} "
-                        f"超出{limit*100:.0f}%涨跌停限制"
-                        f"（涨停价 {_r}{upper:.2f}{_e} "
-                        f"/ 跌停价 {_r}{lower:.2f}{_e}），"
+                        f"超出{limit_label}限制"
+                        f"（上限 {_r}{upper:.2f}{_e} "
+                        f"/ 下限 {_r}{lower:.2f}{_e}），"
                         f"无法设置条件单 — {buy_sig.reason}"
                     ),
                     "error": None,
