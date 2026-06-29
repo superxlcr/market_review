@@ -10,4 +10,4 @@ from . import composite  # noqa: F401
 from . import ma20_breakthrough  # noqa: F401
 from . import ma30_breakthrough  # noqa: F401
 from . import ma60_breakthrough_optimized  # noqa: F401
-from . import ma60_breakthrough_atr  # noqa: F401
+from . import ma60_volume_optimized  # noqa: F401

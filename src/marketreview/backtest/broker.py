@@ -157,6 +157,7 @@ class Broker:
                     buy_date=date, buy_price=open_p,
                     shares=shares, cost=cost,
                     atr_stop_price=order.stop_price,
+                    target_price=order.target_price,
                 )
                 self.positions[order.symbol] = pos
                 self.trades.append(TradeRecord(
@@ -219,6 +220,8 @@ class Broker:
                 symbol=order.symbol, symbol_name=order.symbol_name,
                 buy_date=date, buy_price=price,
                 shares=shares, cost=cost,
+                atr_stop_price=order.stop_price,
+                target_price=order.target_price,
             )
             self.positions[order.symbol] = pos
             self.trades.append(TradeRecord(
@@ -329,6 +332,13 @@ class Broker:
 
     # ── 卖出阶段 ──
 
+    def _base_stop_price(self, pos) -> float:
+        """基础仓位止损价：ATR优先，否则根据target_price(条件单)/buy_price算空间止损."""
+        if pos.atr_stop_price > 0:
+            return pos.atr_stop_price
+        ref = pos.target_price if pos.target_price > 0 else pos.buy_price
+        return ref * (1 - self.space_stop_pct / 100.0)
+
     def execute_open_sells(self, date: str, today_rows: dict[str, dict]) -> None:
         """① 开盘卖出：检查所有持仓，open ≤ 止损/止盈触发价则卖出."""
         for sym in list(self.positions.keys()):
@@ -358,7 +368,7 @@ class Broker:
                 stop_price = pos.atr_stop_price
                 stop_label = f"开盘ATR止损({pos.atr_stop_price:.2f})"
             else:
-                stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+                stop_price = self._base_stop_price(pos)
                 stop_label = f"开盘止损({self.space_stop_pct:.0f}%)"
             if open_p <= stop_price:
                 self.sell(date, sym, open_p, stop_label)
@@ -416,7 +426,7 @@ class Broker:
                 stop_price = pos.atr_stop_price
                 stop_label = f"盘中ATR止损({pos.atr_stop_price:.2f})"
             else:
-                stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+                stop_price = self._base_stop_price(pos)
                 stop_label = f"盘中止损({self.space_stop_pct:.0f}%)"
             if low_p <= stop_price:
                 if open_p <= 0 or open_p > stop_price:

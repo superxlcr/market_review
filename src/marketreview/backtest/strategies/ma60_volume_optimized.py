@@ -1,15 +1,17 @@
-"""MA60 突破拉回优化版 — 去掉收盘跌破 MA60 卖出条件，仅保留时间止损 + 三级止盈."""
-from .ma_breakthrough import MABreakthroughStrategy, register_strategy
+"""MA60 成交量限制优化版 — 去掉收盘跌破 MA60 卖出条件."""
+from .ma60_volume import VolumeStrategy, register_strategy
 from ..strategy_base import DayContext, SellSignal
 
 
-@register_strategy("ma60_breakthrough_optimized")
-class MA60BreakthroughOptimizedStrategy(MABreakthroughStrategy):
+@register_strategy("ma60_volume_optimized")
+class MA60VolumeOptimizedStrategy(VolumeStrategy):
+    """MA60 成交量限制 + 去掉收盘跌破 MA60 卖出条件."""
+
     ma_period = 60
 
     @property
     def name(self) -> str:
-        return "MA60突破拉回战法(优化版)"
+        return "MA60成交量限制战法(优化版)"
 
     def check_sell(self, ctx: DayContext) -> SellSignal | None:
         """卖出逻辑：跳过战法卖出（不因跌破 MA60 卖出），ATR止损 → 时间止损 → 三级止盈."""

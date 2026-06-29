@@ -24,6 +24,7 @@ class Position:
     addon_mfp_pct: float = 0.0         # 加仓部分独立最大浮盈%
     addon_count: int = 0                # 已加仓次数（触发后自增，卖出不复位）
     atr_stop_price: float = 0.0         # ATR止损价（>0时替代全局space_stop_pct）
+    target_price: float = 0.0            # 条件单目标价（止损统一基于此价）
 
 
 @dataclass

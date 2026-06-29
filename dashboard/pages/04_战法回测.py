@@ -213,11 +213,19 @@ if st.session_state.get("bt_has_reports"):
 
         comp_rows = []
         for sname, report in reports.items():
+            if report.num_rounds > 1:
+                range_str = f"{report.min_total_return:+.1f}~{report.max_total_return:+.1f}%"
+                std_str = f"±{report.std_total_return:.1f}%"
+            else:
+                range_str = "—"
+                std_str = "—"
             comp_rows.append({
                 "策略": sname,
                 "交易笔数": f"{report.total_trades:.1f}",
                 "胜率": f"{report.win_rate:.1%}",
                 "总收益": f"{report.total_return_pct:+.2f}%",
+                "收益范围": range_str,
+                "收益σ": std_str,
                 "最大回撤": f"{report.max_drawdown_pct:.2f}%",
                 "平均持仓": f"{report.avg_hold_days:.1f}天",
                 "盈亏比": f"{report.profit_loss_ratio:.2f}",

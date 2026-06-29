@@ -39,6 +39,10 @@ class Report:
     equity_curve: list[dict] = field(default_factory=list)
     individual_equity_curves: list[list[dict]] = field(default_factory=list)
     num_rounds: int = 1
+    # 跨轮波动统计（多轮回测时填充）
+    std_total_return: float = 0.0     # 总收益标准差
+    min_total_return: float = 0.0     # 总收益最低值
+    max_total_return: float = 0.0     # 总收益最高值
 
 
 def build_report(trades: list[TradeRecord],
@@ -170,6 +174,13 @@ def merge_reports(reports: list[Report]) -> Report:
     merged.avg_win_pct = sum(r.avg_win_pct for r in reports) / n
     merged.avg_lose_pct = sum(r.avg_lose_pct for r in reports) / n
     merged.profit_loss_ratio = sum(r.profit_loss_ratio for r in reports) / n
+
+    # ── 跨轮波动统计 ──
+    returns = [r.total_return_pct for r in reports]
+    merged.min_total_return = min(returns)
+    merged.max_total_return = max(returns)
+    mean_ret = merged.total_return_pct
+    merged.std_total_return = (sum((r - mean_ret) ** 2 for r in returns) / n) ** 0.5
 
     # ── Equity curve: average by date ──
     date_map: dict[str, list[dict]] = defaultdict(list)
