@@ -297,14 +297,16 @@ class BacktestEngine:
                                   ctx.ma60, ctx.ma60_yesterday)
                     continue
 
-                # 判断明天能不能到（涨跌停限制）
+                # 判断明天能不能到（涨跌停限制 + 目标偏离上限）
                 today_close = _safe_f(today_row.get("close"))
                 target = buy_sig.price
-                limit = get_limit_pct(s.code)
-                if today_close * (1 - limit) > target or target > today_close * (1 + limit):
+                exchange_limit = get_limit_pct(s.code)
+                cfg_limit = self.strategy_cfg.max_target_deviation_pct / 100.0
+                effective_limit = exchange_limit if cfg_limit >= 1.0 else min(exchange_limit, cfg_limit)
+                if today_close * (1 - effective_limit) > target or target > today_close * (1 + effective_limit):
                     log.info("[%s] ⑤设单 %s %s 涨跌停过滤: C=%.2f target=%.2f limit=%.0f%%",
                              self.strategy_cfg.name, date, s.name,
-                             today_close, target, limit * 100)
+                             today_close, target, effective_limit * 100)
                     continue  # 明天到不了，不设单
 
                 # 设条件单

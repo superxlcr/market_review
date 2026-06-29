@@ -36,6 +36,7 @@ class StrategyConfig:
     volume_10d_threshold_pct: float = -5.0   # 量能过滤：昨额 vs 10日均量 最低%
     total_capital: float = 2_500_000         # 总仓位资金（用于个股追踪仓位计算）
     atr_stop_multiplier: float = 0.0          # ATR止损倍数，>0启用，0=关闭用space_stop_pct
+    max_target_deviation_pct: float = 999.0   # 目标偏离上限%，>0且在涨跌停内时限制条件单偏离幅度
 
 
 def load_pools(dp) -> list[PoolConfig]:
@@ -118,6 +119,7 @@ def load_strategies() -> list[StrategyConfig]:
         "量能10均阈值%": "volume_10d_threshold_pct",
         "总仓位资金": "total_capital",
         "ATR倍数": "atr_stop_multiplier",
+        "目标偏离上限%": "max_target_deviation_pct",
     }
     FIELD_TYPES = {
         "position_pct": float,
@@ -130,6 +132,7 @@ def load_strategies() -> list[StrategyConfig]:
         "volume_10d_threshold_pct": float,
         "total_capital": float,
         "atr_stop_multiplier": float,
+        "max_target_deviation_pct": float,
     }
     DEFAULTS = {
         "position_pct": 20.0,
@@ -142,6 +145,7 @@ def load_strategies() -> list[StrategyConfig]:
         "volume_10d_threshold_pct": -5.0,
         "total_capital": 2_500_000,
         "atr_stop_multiplier": 0.0,
+        "max_target_deviation_pct": 999.0,
     }
 
     global_defaults = dict(DEFAULTS)
@@ -167,6 +171,7 @@ def load_strategies() -> list[StrategyConfig]:
             volume_10d_threshold_pct=cfg["volume_10d_threshold_pct"],
             total_capital=cfg["total_capital"],
             atr_stop_multiplier=cfg["atr_stop_multiplier"],
+            max_target_deviation_pct=cfg["max_target_deviation_pct"],
         ))
         current_strategy = None
 
