@@ -15,6 +15,10 @@
 # ── 基础策略 ──
 MA60_突破拉回 ma60_breakthrough
 MA120_突破拉回 ma120_breakthrough
+# 效果很差，基本水下
+# MA20_突破拉回 ma20_breakthrough
+# 比 MA20 好点，但还是效果很差，基本水下
+# MA30_突破拉回 ma30_breakthrough
 # 成交量貌似是个负面优化
 # 猜测是：空间止损与分仓已经截断了亏损，做对一次收益非常之高
 # 加上有盘中出量的存在，所以根据成交量过滤买入信号，可能会错过某些机会
@@ -23,6 +27,8 @@ MA120_突破拉回 ma120_breakthrough
 MA60_成交量限制 ma60_volume
 突破回调一半 half_retrace
 突破回调一半简化 half_retrace_simple
+MA60_突破拉回优化版 ma60_breakthrough_optimized
+MA60_突破拉回ATR止损版 ma60_breakthrough_atr
 
 # ── 加仓策略（开仓浮盈阈值% + 加仓阈值% 覆盖全局）──
 MA60_突破拉回_加仓 ma60_breakthrough
@@ -34,6 +40,10 @@ MA60_成交量限制_加仓 ma60_volume
 突破回调一半_加仓 half_retrace
   加仓阈值%=10
 突破回调一半简化_加仓 half_retrace_simple
+  加仓阈值%=10
+MA60_突破拉回优化版_加仓 ma60_breakthrough_optimized
+  加仓阈值%=10
+MA60_突破拉回ATR止损版_加仓 ma60_breakthrough_atr
   加仓阈值%=10
 
 # ── 组合战法 ──

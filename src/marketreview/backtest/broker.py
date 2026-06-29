@@ -156,6 +156,7 @@ class Broker:
                     symbol=order.symbol, symbol_name=order.symbol_name,
                     buy_date=date, buy_price=open_p,
                     shares=shares, cost=cost,
+                    atr_stop_price=order.stop_price,
                 )
                 self.positions[order.symbol] = pos
                 self.trades.append(TradeRecord(
@@ -345,10 +346,14 @@ class Broker:
             # ── 基础仓位空间止损 ──
             if sym not in self.positions:
                 continue  # 加仓卖出不影响基础仓位
-            stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+            if pos.atr_stop_price > 0:
+                stop_price = pos.atr_stop_price
+                stop_label = f"开盘ATR止损({pos.atr_stop_price:.2f})"
+            else:
+                stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+                stop_label = f"开盘止损({self.space_stop_pct:.0f}%)"
             if open_p <= stop_price:
-                self.sell(date, sym, open_p,
-                    f"开盘止损({self.space_stop_pct:.0f}%)")
+                self.sell(date, sym, open_p, stop_label)
 
     def _check_addon_open_tp(self, date: str, sym: str, open_p: float) -> None:
         """加仓开盘止盈检查."""
@@ -396,11 +401,15 @@ class Broker:
             # ── 基础仓位空间止损 ──
             if sym not in self.positions:
                 continue
-            stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+            if pos.atr_stop_price > 0:
+                stop_price = pos.atr_stop_price
+                stop_label = f"盘中ATR止损({pos.atr_stop_price:.2f})"
+            else:
+                stop_price = pos.buy_price * (1 - self.space_stop_pct / 100.0)
+                stop_label = f"盘中止损({self.space_stop_pct:.0f}%)"
             if low_p <= stop_price:
                 if open_p <= 0 or open_p > stop_price:
-                    self.sell(date, sym, stop_price,
-                        f"盘中止损({self.space_stop_pct:.0f}%)")
+                    self.sell(date, sym, stop_price, stop_label)
 
     def _check_addon_intraday_tp(self, date: str, sym: str,
                                   open_p: float, low_p: float) -> None:

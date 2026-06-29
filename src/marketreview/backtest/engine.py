@@ -37,7 +37,7 @@ class BacktestEngine:
         self.strategy_cfg = strategy_cfg
 
         # Create strategy instance (import strategies to ensure registration)
-        from .strategies import ma_breakthrough, ma60_breakthrough, ma120_breakthrough, ma60_volume, ma120_volume, half_retrace, half_retrace_simple, composite  # noqa: F401
+        from .strategies import ma_breakthrough, ma60_breakthrough, ma120_breakthrough, ma60_volume, ma120_volume, half_retrace, half_retrace_simple, composite, ma20_breakthrough, ma30_breakthrough, ma60_breakthrough_optimized, ma60_breakthrough_atr  # noqa: F401
 
         self.strategy = create_strategy(strategy_cfg.class_name)
         if self.strategy is None:
@@ -134,8 +134,9 @@ class BacktestEngine:
             df = DataProvider.raw_to_qfq(df)
 
             # Calculate MAs
-            ma_result = calc_ma(df, [20, 55, 60, 120, 144, 240])
+            ma_result = calc_ma(df, [20, 30, 55, 60, 120, 144, 240])
             ma20_vals = ma_result.get("MA20", [])
+            ma30_vals = ma_result.get("MA30", [])
             ma55_vals = ma_result.get("MA55", [])
             ma60_vals = ma_result.get("MA60", [])
             ma120_vals = ma_result.get("MA120", [])
@@ -147,6 +148,7 @@ class BacktestEngine:
             for i, (_, row) in enumerate(df.iterrows()):
                 d = row.to_dict()
                 d["ma20"] = ma20_vals[i] if i < len(ma20_vals) else None
+                d["ma30"] = ma30_vals[i] if i < len(ma30_vals) else None
                 d["ma55"] = ma55_vals[i] if i < len(ma55_vals) else None
                 d["ma60"] = ma60_vals[i] if i < len(ma60_vals) else None
                 d["ma120"] = ma120_vals[i] if i < len(ma120_vals) else None
@@ -309,6 +311,7 @@ class BacktestEngine:
                     target_price=target,
                     open_price_cap=open_cap,
                     reason=buy_sig.reason,
+                    stop_price=buy_sig.atr_stop_price,
                 )
                 self.broker.add_order(order)
                 self.broker.trades.append(TradeRecord(
@@ -384,6 +387,7 @@ class BacktestEngine:
                 break
 
         yesterday_ma20 = 0.0
+        yesterday_ma30 = 0.0
         yesterday_ma55 = 0.0
         yesterday_ma60 = 0.0
         yesterday_ma120 = 0.0
@@ -392,6 +396,7 @@ class BacktestEngine:
         if idx is not None and idx >= 1:
             yesterday = klines[idx - 1]
             yesterday_ma20 = _safe_f(yesterday.get("ma20"))
+            yesterday_ma30 = _safe_f(yesterday.get("ma30"))
             yesterday_ma55 = _safe_f(yesterday.get("ma55"))
             yesterday_ma60 = _safe_f(yesterday.get("ma60"))
             yesterday_ma120 = _safe_f(yesterday.get("ma120"))
@@ -415,6 +420,8 @@ class BacktestEngine:
             amount=_safe_f(today_row.get("amount")),
             ma20=_safe_f(today_row.get("ma20")),
             ma20_yesterday=yesterday_ma20,
+            ma30=_safe_f(today_row.get("ma30")),
+            ma30_yesterday=yesterday_ma30,
             ma60=_safe_f(today_row.get("ma60")),
             ma60_yesterday=yesterday_ma60,
             ma120=_safe_f(today_row.get("ma120")),

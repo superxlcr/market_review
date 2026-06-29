@@ -23,6 +23,7 @@ class Position:
     addon_date: str = ""               # 加仓日期 YYYYMMDD
     addon_mfp_pct: float = 0.0         # 加仓部分独立最大浮盈%
     addon_count: int = 0                # 已加仓次数（触发后自增，卖出不复位）
+    atr_stop_price: float = 0.0         # ATR止损价（>0时替代全局space_stop_pct）
 
 
 @dataclass
@@ -39,6 +40,8 @@ class DayContext:
     amount: float
     ma20: float = 0.0              # today's MA20
     ma20_yesterday: float = 0.0    # yesterday's MA20
+    ma30: float = 0.0              # today's MA30
+    ma30_yesterday: float = 0.0    # yesterday's MA30
     ma60: float = 0.0              # today's MA60
     ma60_yesterday: float = 0.0    # yesterday's MA60
     ma120: float = 0.0             # today's MA120
@@ -64,6 +67,8 @@ class BuySignal:
     reason: str            # "突破MA60" | "拉回MA60"
     entry_ma_type: str = ""  # which MA: "MA20"/"MA60"/"MA120"/"MA240"
     strategy_tag: str = ""   # which sub-strategy generated this signal (composite use)
+    atr_stop_price: float = 0.0  # ATR止损价（>0时替代space_stop_pct）
+    atr_stop_pct: float = 0.0    # ATR止损幅度%
 
 
 @dataclass
@@ -86,6 +91,7 @@ class ConditionalOrder:
     open_price_cap: float       # 开盘追高上限
     reason: str                 # 信号原因（来自策略）
     strategy_tag: str = ""
+    stop_price: float = 0.0     # ATR止损价（>0时替代space_stop_pct）
 
 
 class BaseStrategy(ABC):
