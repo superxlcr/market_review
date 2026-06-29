@@ -289,6 +289,14 @@ class Broker:
         if pos is None:
             return None
 
+        # T+1 安全网：拒绝当日买入当日卖出
+        if pos.buy_date == date:
+            self.positions[symbol] = pos  # 放回去
+            log.warning("[%s] T+1违规阻止: %s %s 买入日=%s 试图在%s卖出",
+                        self.strategy_name, symbol, pos.symbol_name,
+                        pos.buy_date, date)
+            return None
+
         # 基础仓位
         proceeds = pos.shares * price
         self.cash += proceeds
@@ -379,6 +387,9 @@ class Broker:
             pos = self.positions.get(sym)
             if pos is None:
                 continue
+            # T+1: 今日买入的仓位不可卖出
+            if pos.buy_date == date:
+                continue
             row = today_rows.get(sym)
             if row is None:
                 continue
@@ -388,7 +399,7 @@ class Broker:
                 continue
 
             # ── 加仓部分 ──
-            if pos.addon_shares > 0:
+            if pos.addon_shares > 0 and pos.addon_date != date:  # T+1: 今日加仓不可卖出
                 addon_stop = pos.addon_price * (1 - self.space_stop_pct / 100.0)
                 if low_p <= addon_stop:
                     # 如果开盘已经触发则跳过（已在 execute_open_sells 处理）

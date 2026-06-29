@@ -107,7 +107,7 @@ class BacktestEngine:
 
         # 3. Load K-lines into memory & precompute MA60
         calendar_days = (datetime.strptime(end_date, "%Y%m%d") - buffer_dt).days
-        lookback_days = max(calendar_days, 500)
+        lookback_days = max(calendar_days, 1000)
 
         loaded_count = 0
         empty_count = 0
@@ -244,11 +244,15 @@ class BacktestEngine:
             for s in stocks_today:
                 if not s.code or s.code not in self.broker.positions:
                     continue
+                pos = self.broker.positions.get(s.code)
+                # T+1: 今日买入的仓位不可卖出
+                if pos and pos.buy_date == date:
+                    continue
                 ctx = self._build_ctx(date, s,
                     today_rows.get(s.code, {}), self._klines.get(s.code, []),
                     self._in_window(s, date))
                 if ctx.position is None:
-                    ctx.position = self.broker.positions.get(s.code)
+                    ctx.position = pos
                 sell_sig = self.strategy.check_sell(ctx)
                 if sell_sig:
                     label = "收盘卖出"
