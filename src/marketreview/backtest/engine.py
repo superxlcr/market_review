@@ -66,6 +66,7 @@ class BacktestEngine:
             strategy_name=strategy_cfg.name,
         )
         self._addon_threshold_pct = strategy_cfg.addon_threshold_pct
+        self._addon_mode = strategy_cfg.addon_mode
 
         # K-line cache: {code: list[dict]} sorted date ASC
         self._klines: dict[str, list[dict]] = {}
@@ -249,19 +250,31 @@ class BacktestEngine:
             self.broker.process_intraday_orders(date, today_rows, rng)
             self._enrich_positions(date)
 
-            # ── 浮盈加仓（④之前，因为加仓可能是盘中触发）──
+            # ── 加仓（④之前，因为加仓可能是盘中触发）──
             for sym in list(self.broker.positions.keys()):
                 pos = self.broker.positions.get(sym)
                 if pos is None or pos.addon_count >= 1:
                     continue
-                if self._addon_threshold_pct >= 999:
-                    continue
-                if pos.max_float_profit_pct < self._addon_threshold_pct:
-                    continue
                 row = today_rows.get(sym)
                 if row is None:
                     continue
-                trigger_price = pos.buy_price * (1 + self._addon_threshold_pct / 100.0)
+
+                if self._addon_mode == "波峰":
+                    # ── 波峰加仓：触发价 = 前高水平 ──
+                    peak_price = self._find_previous_peak(sym, pos.buy_date)
+                    if peak_price <= 0 or peak_price <= pos.buy_price:
+                        continue  # 无有效前高
+                    trigger_price = peak_price
+                    trigger_label = f"前高突破(波峰{peak_price:.2f})"
+                else:
+                    # ── 浮盈加仓：触发价 = 买入价 × (1+阈值%) ──
+                    if self._addon_threshold_pct >= 999:
+                        continue
+                    if pos.max_float_profit_pct < self._addon_threshold_pct:
+                        continue
+                    trigger_price = pos.buy_price * (1 + self._addon_threshold_pct / 100.0)
+                    trigger_label = f"浮盈加仓(MFP≥{pos.max_float_profit_pct:.1f}%)"
+
                 today_open = _safe_f(row.get("open"))
                 today_high = _safe_f(row.get("high"))
                 if today_open > trigger_price:
@@ -272,7 +285,8 @@ class BacktestEngine:
                     entry_price = 0.0
                 if entry_price > 0:
                     addon_shares = pos.shares // 2
-                    self.broker.addon_buy(date, sym, entry_price, addon_shares)
+                    self.broker.addon_buy(date, sym, entry_price, addon_shares,
+                                          reason=trigger_label)
                     self._enrich_positions(date)
 
             # ── ④ 盘中+收盘卖出 ──
@@ -636,6 +650,42 @@ class BacktestEngine:
         cfg = self.strategy_cfg
         return (cfg.wave33_up_max_positions > 0 or
                 cfg.wave33_down_max_positions > 0)
+
+    # ── 波峰加仓：找前高 ──
+
+    PEAK_LOOKBACK_BARS: int = 126   # ~6个月交易日
+
+    def _find_previous_peak(self, code: str, buy_date: str) -> float:
+        """在买入日之前找前高（最高HIGH），返回波峰价格。返回0.0表示找不到。"""
+        klines = self._klines.get(code, [])
+        if not klines:
+            return 0.0
+
+        # 找到买入日在K线中的位置
+        buy_idx = -1
+        for i, d in enumerate(klines):
+            if str(d.get("date", "")) == buy_date:
+                buy_idx = i
+                break
+        if buy_idx < 0:
+            # 精确日期没匹配上，找最接近的（买入日之前的最后一根K线）
+            for i in range(len(klines) - 1, -1, -1):
+                d = klines[i]
+                if str(d.get("date", "")) <= buy_date:
+                    buy_idx = i
+                    break
+        if buy_idx < 0:
+            return 0.0
+
+        # 回溯窗口
+        lookback_start = max(0, buy_idx - self.PEAK_LOOKBACK_BARS)
+        peak_high = 0.0
+        for i in range(lookback_start, buy_idx + 1):
+            h = _safe_f(klines[i].get("high"))
+            if h > peak_high:
+                peak_high = h
+
+        return round(peak_high, 2)
 
 
 def _safe_f(v) -> float:

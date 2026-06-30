@@ -6,6 +6,7 @@ __pycache__/
 .idea/
 /data/
 logs/
+backups/
 .claude/
 config/watchlist_industries.txt
 config/watchlist_stocks.txt

@@ -31,6 +31,7 @@ class StrategyConfig:
     space_stop_pct: float        # 0~100, e.g. 3 means -3% stop loss
     new_position_threshold_pct: float = 0.0  # 现有持仓浮盈达此值才可开新仓
     addon_threshold_pct: float = 999.0        # 浮盈加仓阈值%，999=不启用
+    addon_mode: str = "float_profit"          # 加仓模式: "float_profit"=浮盈触发, "peak"=波峰触发
     open_chase_cap_pct: float = 102.0        # 开盘追高上限%
     volume_5d_threshold_pct: float = -10.0   # 量能过滤：昨额 vs 5日均量 最低%
     volume_10d_threshold_pct: float = -5.0   # 量能过滤：昨额 vs 10日均量 最低%
@@ -127,6 +128,7 @@ def load_strategies() -> list[StrategyConfig]:
         "3浪3下行开仓上限": "wave33_down_max_positions",
         "3浪3上行开仓上限": "wave33_up_max_positions",
         "3浪3趋势确认天数": "wave33_trend_confirm_days",
+        "加仓模式": "addon_mode",
     }
     FIELD_TYPES = {
         "position_pct": float,
@@ -144,6 +146,7 @@ def load_strategies() -> list[StrategyConfig]:
         "wave33_up_max_positions": int,
         "wave33_flat_max_positions": int,  # deprecated
         "wave33_trend_confirm_days": int,
+        "addon_mode": str,
     }
     DEFAULTS = {
         "position_pct": 20.0,
@@ -161,6 +164,7 @@ def load_strategies() -> list[StrategyConfig]:
         "wave33_up_max_positions": 0,
         "wave33_flat_max_positions": 0,
         "wave33_trend_confirm_days": 3,
+        "addon_mode": "float_profit",
     }
 
     global_defaults = dict(DEFAULTS)
@@ -191,6 +195,7 @@ def load_strategies() -> list[StrategyConfig]:
             wave33_up_max_positions=cfg["wave33_up_max_positions"],
             wave33_flat_max_positions=cfg["wave33_flat_max_positions"],
             wave33_trend_confirm_days=cfg["wave33_trend_confirm_days"],
+            addon_mode=cfg["addon_mode"],
         ))
         current_strategy = None
 

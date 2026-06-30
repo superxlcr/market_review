@@ -470,7 +470,8 @@ class Broker:
 
     # ── 浮盈加仓 ──
 
-    def addon_buy(self, date: str, symbol: str, price: float, shares: int) -> bool:
+    def addon_buy(self, date: str, symbol: str, price: float, shares: int,
+                  reason: str = "") -> bool:
         """Execute add-on buy at trigger price. Bypasses position limit.
         Once triggered, never re-triggers even if addon is later sold.
         Returns True if successful, False if insufficient cash."""
@@ -486,14 +487,16 @@ class Broker:
         pos.addon_cost = cost
         pos.addon_date = date
         pos.addon_count += 1         # 不可逆，卖出后不复位
+        if not reason:
+            reason = f"浮盈加仓(MFP≥{pos.max_float_profit_pct:.1f}%)"
         self.trades.append(TradeRecord(
             date=date, symbol=symbol, symbol_name=pos.symbol_name,
             trade_type="加仓买入", price=price, shares=shares,
-            reason=f"浮盈加仓(MFP≥{pos.max_float_profit_pct:.1f}%)",
+            reason=reason,
         ))
-        log.info("[%s] 加仓买入 %s %s @ %.2f × %d股 成本%.0f (MFP≥%.1f%%)",
+        log.info("[%s] 加仓买入 %s %s @ %.2f × %d股 成本%.0f (%s)",
                  self.strategy_name, date, pos.symbol_name, price, shares, cost,
-                 pos.max_float_profit_pct)
+                 reason)
         return True
 
     def sell_addon(self, date: str, symbol: str, price: float, reason: str) -> bool:
