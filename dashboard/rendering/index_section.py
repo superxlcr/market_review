@@ -660,6 +660,8 @@ def render_ohlcv_section(
         return
 
     # ── 权重贡献 (index only) ──
+    if section_type != "index":
+        return
 
     st.divider()
     st.markdown("**权重贡献**")
