@@ -1285,6 +1285,14 @@ class DataProvider:
                  "in %.1fs wall-clock (total %.1fs)",
                  completed, total, failed, t_chunks, elapsed)
 
+        # Warn if target date still has no data (API may not have published yet)
+        _td_count = self.cache.count_industry_daily_date(end_date)
+        if _td_count == 0 and completed > 0:
+            log.warning("_ensure_industry_daily: API returned 0 rows for target date %s "
+                        "(%d industries fetched but no data for this date — "
+                        "industry indices may not be published yet)",
+                        end_date, completed)
+
         return classify_count, completed
 
     def _ensure_stock_industries(self, progress_cb=None) -> int:

@@ -78,7 +78,12 @@ else:
     _watchlist_codes = set()
 
 if not _ranking:
-    st.warning("⚠️ 暂无行业数据，请先在「控制台」加载今日数据")
+    _latest_industry = _service._dp.cache.count_industry_daily_date(_trade_date)
+    if _latest_industry == 0:
+        st.warning("⚠️ 今日（{}）行业指数数据尚未发布，通常在收盘后（~17:00）可获取。"
+                   "请稍后再试。".format(_trade_date))
+    else:
+        st.warning("⚠️ 暂无行业数据，请先在「控制台」加载今日数据")
     st.stop()
 
 # ═══════════════════════════════════════════════════════════
