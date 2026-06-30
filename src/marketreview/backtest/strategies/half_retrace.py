@@ -21,7 +21,7 @@ class HalfRetraceStrategy(BaseStrategy):
     """突破回调一半战法."""
 
     # ── 参数 ──
-    PEAK_LOOKBACK_DAYS: int = 126   # 波峰回溯 ~6个月(交易日)
+    PEAK_LOOKBACK_DAYS: int = 300   # 波峰回溯 ~14个月(交易日)
     PULLBACK_MIN_DAYS: int = 13     # 回调最小交易日数
 
     @property

@@ -128,5 +128,5 @@ MA60_突破拉回 ma60_breakthrough
 
 # 很疑惑的策略，理论上效果不错，但实测验证效果不好，完全踏错了节奏……
 # 而且多次回测，净值曲线居然没什么波动
-# 突破回调一半 half_retrace
-# 突破回调一半简化 half_retrace_simple
+突破回调一半 half_retrace
+突破回调一半简化 half_retrace_simple
