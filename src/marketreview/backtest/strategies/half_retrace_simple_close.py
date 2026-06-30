@@ -1,20 +1,20 @@
-"""突破回调一半战法 — 纯价格形态，与均线无关.
+"""突破回调一半战法(简化+收盘价版) — 固定V=P/2.33，用收盘价代替最高/最低价.
 
 买入逻辑:
-  1. 找到波段新高 P（近半年内最高 high）
-  2. 从 P 往前找前一波谷低点 V（P 之前所有 K 线的最低 low）
-  3. V 必须满足: 50%位×1.1 < 62.5%位（等价于 V/P < 3/7 ≈ 0.4286）
-  4. 股价从 P 回调，必须先跌破 62.5% 线，才开始监控
-  5. 跌破后，找 P 至今的最低 low L，半分位 = (P+L)/2
+  1. 找到波段收盘新高 P（近半年内最高 close）
+  2. V = P / 2.33（固定倍数，不查历史数据）
+  3. 62.5% 线 = V + 0.625×(P−V)
+  4. 收盘价从 P 回调，必须先跌破 62.5% 线，才开始监控
+  5. 跌破后，找 P 至今的最低收盘价 L，半分位 = (P+L)/2
   6. 上穿触发: 昨日收盘 < 半分位 且 今日最高 ≥ 半分位 → 以半分位买入
 
 卖出逻辑: 空间止损(引擎) → 收盘跌破突破价 → 时间止损 → 三级止盈
 
 ===========================================================================
 回测结论 (51轮 × 20250201~20260630, 白大与nga池-仅主板):
-  12.0笔/轮  胜率16.7%  总收益-2.78%  持仓6.8天  盈亏比2.61
+  26.0笔/轮  胜率23.1%  总收益-5.92%  持仓10.3天  盈亏比1.84
 
-  卖出分布: 战法卖出(收盘跌破突破价) 75.0% | 止盈 16.7% | 盘中止损 8.3%
+  卖出分布: 战法卖出(收盘跌破突破价) 75.0% | 止盈 23.1% | 盘中止损 8.3%
 
   失败原因:
   - 半分位是下降趋势中的数学中点(P+L)/2，无实际支撑意义
@@ -35,17 +35,18 @@ from ..strategy_base import (
 )
 
 
-@register_strategy("half_retrace")
-class HalfRetraceStrategy(BaseStrategy):
-    """突破回调一半战法."""
+@register_strategy("half_retrace_simple_close")
+class HalfRetraceSimpleCloseStrategy(BaseStrategy):
+    """突破回调一半战法(简化版+收盘价版 — V=P/2.33，收盘价过滤日内毛刺)."""
 
     # ── 参数 ──
     PEAK_LOOKBACK_DAYS: int = 300   # 波峰回溯 ~14个月(交易日)
     PULLBACK_MIN_DAYS: int = 13     # 回调最小交易日数
+    V_DIVISOR: float = 2.33         # P / V_DIVISOR = 前低 V
 
     @property
     def name(self) -> str:
-        return "突破回调一半战法"
+        return "突破回调一半战法(简化+收盘价版)"
 
     # ── 买入 ──
     def check_buy(self, ctx: DayContext) -> BuySignal | None:
@@ -55,57 +56,46 @@ class HalfRetraceStrategy(BaseStrategy):
 
         today_idx = len(history) - 1
 
-        # ── 1. 找波段新高 P ──
+        # ── 1. 找波段收盘新高 P（最高收盘价）──
         lookback_start = max(0, today_idx - self.PEAK_LOOKBACK_DAYS)
-        peak_high = 0.0
+        peak_close = 0.0
         peak_idx = -1
 
         for i in range(lookback_start, today_idx + 1):
-            h = safe_float(history[i].get("high"))
-            if h > peak_high:
-                peak_high = h
+            c = safe_float(history[i].get("close"))
+            if c > peak_close:
+                peak_close = c
                 peak_idx = i
 
         # P 必须距今 ≥ 13 天
         if today_idx - peak_idx < self.PULLBACK_MIN_DAYS:
             return None
 
-        # ── 2. 从 P 往前找前波谷低点 V ──
-        valley_low = float('inf')
-        for i in range(0, peak_idx):
-            l = safe_float(history[i].get("low"))
-            if l < valley_low:
-                valley_low = l
+        # ── 2. 固定 V = P / 2.33 ──
+        valley_low = peak_close / self.V_DIVISOR
 
-        if valley_low >= peak_high or valley_low <= 0:
-            return None
+        # ── 3. 算 62.5% 线 ──
+        line_625 = valley_low + 0.625 * (peak_close - valley_low)
 
-        # ── 3. V 资格校验: 50%×1.1 < 62.5% ──
-        midpoint_pv = (peak_high + valley_low) / 2.0
-        line_625 = valley_low + 0.625 * (peak_high - valley_low)
-
-        if midpoint_pv * 1.1 >= line_625:
-            return None  # V 不成立，回调幅度不够深
-
-        # ── 4. 股价必须已跌破过 62.5% 线 ──
+        # ── 4. 收盘价必须已跌破过 62.5% 线 ──
         has_broken_625 = False
         for i in range(peak_idx, today_idx + 1):
-            l = safe_float(history[i].get("low"))
-            if l <= line_625:
+            c = safe_float(history[i].get("close"))
+            if c <= line_625:
                 has_broken_625 = True
                 break
 
         if not has_broken_625:
-            return None  # 还没跌破 62.5%，不监控
+            return None  # 收盘价还没跌破 62.5%，不监控
 
-        # ── 5. 找 P 至今的最低 low L，算半分位 ──
-        lowest_low = float('inf')
+        # ── 5. 找 P 至今的最低收盘价 L，算半分位 ──
+        lowest_close = float('inf')
         for i in range(peak_idx, today_idx + 1):
-            l = safe_float(history[i].get("low"))
-            if l < lowest_low:
-                lowest_low = l
+            c = safe_float(history[i].get("close"))
+            if c < lowest_close:
+                lowest_close = c
 
-        midpoint = (peak_high + lowest_low) / 2.0
+        midpoint = (peak_close + lowest_close) / 2.0
 
         # ── 6. 预判上穿（条件单：收盘在半分位下方，明天可能突破）──
         yesterday = history[today_idx - 1]
@@ -119,8 +109,8 @@ class HalfRetraceStrategy(BaseStrategy):
                 symbol_name=ctx.symbol_name,
                 price=round(midpoint, 2),
                 reason=(
-                    f"回调半分位{round(midpoint,2)} "
-                    f"(波峰{peak_date} {peak_high:.2f}→最低{lowest_low:.2f})"
+                    f"简化+收盘版回调半分位{round(midpoint,2)} "
+                    f"(P_close={peak_close:.2f} V=P_close/{self.V_DIVISOR}={valley_low:.2f} L_close={lowest_close:.2f})"
                 ),
             )
 
@@ -133,49 +123,41 @@ class HalfRetraceStrategy(BaseStrategy):
 
         today_idx = len(history) - 1
 
-        # 1. 找波峰 P
+        # 1. 找波段收盘新高 P
         lookback_start = max(0, today_idx - self.PEAK_LOOKBACK_DAYS)
-        peak_high, peak_idx = 0.0, -1
+        peak_close, peak_idx = 0.0, -1
         for i in range(lookback_start, today_idx + 1):
-            h = safe_float(history[i].get("high"))
-            if h > peak_high:
-                peak_high, peak_idx = h, i
+            c = safe_float(history[i].get("close"))
+            if c > peak_close:
+                peak_close, peak_idx = c, i
 
         if peak_idx < 0:
-            return "近半年内未找到有效波峰"
+            return "近半年内未找到有效收盘波峰"
 
         days_since = today_idx - peak_idx
         if days_since < self.PULLBACK_MIN_DAYS:
             peak_date = str(history[peak_idx].get("date", "?"))
-            return (f"波峰（{peak_date} {peak_high:.2f}）距今仅{days_since}日，"
+            return (f"收盘波峰（{peak_date} {peak_close:.2f}）距今仅{days_since}日，"
                     f"需≥{self.PULLBACK_MIN_DAYS}日")
 
-        # 2. 找波谷 V
-        valley_low = min(
-            (safe_float(history[i].get("low")) for i in range(0, peak_idx)),
-            default=float('inf'))
-        if valley_low >= peak_high or valley_low <= 0:
-            return "波峰前未找到有效波谷"
+        # 2. 固定 V = P / 2.33
+        valley_low = peak_close / self.V_DIVISOR
 
-        # 3. V 资格校验
-        midpoint_pv = (peak_high + valley_low) / 2.0
-        line_625 = valley_low + 0.625 * (peak_high - valley_low)
-        if midpoint_pv * 1.1 >= line_625:
-            return (f"前低V（{valley_low:.2f}）回调幅度不足"
-                    f"（50%位×1.1 ≥ 62.5%位，V资格不成立）")
+        # 3. 算 62.5% 线
+        line_625 = valley_low + 0.625 * (peak_close - valley_low)
 
-        # 4. 跌破 62.5% 线？
+        # 4. 收盘价跌破 62.5% 线？
         has_broken = any(
-            safe_float(history[i].get("low")) <= line_625
+            safe_float(history[i].get("close")) <= line_625
             for i in range(peak_idx, today_idx + 1))
         if not has_broken:
-            return f"尚未跌破62.5%回调线（{line_625:.2f}），不触发监控"
+            return f"收盘价尚未跌破62.5%回调线（{line_625:.2f}），不触发监控"
 
-        # 5. 最低低点 L → 半分位
-        lowest_low = min(
-            (safe_float(history[i].get("low")) for i in range(peak_idx, today_idx + 1)),
+        # 5. 最低收盘价 L → 半分位
+        lowest_close = min(
+            (safe_float(history[i].get("close")) for i in range(peak_idx, today_idx + 1)),
             default=float('inf'))
-        midpoint = (peak_high + lowest_low) / 2.0
+        midpoint = (peak_close + lowest_close) / 2.0
 
         # 6. 触发条件
         yesterday_close = safe_float(history[today_idx - 1].get("close"))

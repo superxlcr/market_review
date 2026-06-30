@@ -42,6 +42,7 @@ class StrategyConfig:
     wave33_up_max_positions: int = 0          # 3浪3上行确认时的开仓上限，0=使用默认
     wave33_flat_max_positions: int = 0        # [已废弃] 3浪3盘整中时的开仓上限，0=使用默认
     wave33_trend_confirm_days: int = 3        # 3浪3趋势确认天数（连续N天反向 → 翻转方向）
+    tier2_protect_ratio: float = 1.05         # 二级止盈保护倍率（买入价×此值=保护价，1.05=+5%）
 
 
 def load_pools(dp) -> list[PoolConfig]:
@@ -129,6 +130,7 @@ def load_strategies() -> list[StrategyConfig]:
         "3浪3上行开仓上限": "wave33_up_max_positions",
         "3浪3趋势确认天数": "wave33_trend_confirm_days",
         "加仓模式": "addon_mode",
+        "二级保护": "tier2_protect_ratio",
     }
     FIELD_TYPES = {
         "position_pct": float,
@@ -147,6 +149,7 @@ def load_strategies() -> list[StrategyConfig]:
         "wave33_flat_max_positions": int,  # deprecated
         "wave33_trend_confirm_days": int,
         "addon_mode": str,
+        "tier2_protect_ratio": float,
     }
     DEFAULTS = {
         "position_pct": 20.0,
@@ -165,6 +168,7 @@ def load_strategies() -> list[StrategyConfig]:
         "wave33_flat_max_positions": 0,
         "wave33_trend_confirm_days": 3,
         "addon_mode": "float_profit",
+        "tier2_protect_ratio": 1.05,
     }
 
     global_defaults = dict(DEFAULTS)
@@ -196,6 +200,7 @@ def load_strategies() -> list[StrategyConfig]:
             wave33_flat_max_positions=cfg["wave33_flat_max_positions"],
             wave33_trend_confirm_days=cfg["wave33_trend_confirm_days"],
             addon_mode=cfg["addon_mode"],
+            tier2_protect_ratio=cfg["tier2_protect_ratio"],
         ))
         current_strategy = None
 

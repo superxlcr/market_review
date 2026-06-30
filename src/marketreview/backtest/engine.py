@@ -38,7 +38,7 @@ class BacktestEngine:
         self.strategy_cfg = strategy_cfg
 
         # Create strategy instance (import strategies to ensure registration)
-        from .strategies import ma_breakthrough, ma60_breakthrough, ma120_breakthrough, ma60_volume, ma120_volume, half_retrace, half_retrace_simple, composite, ma20_breakthrough, ma30_breakthrough, ma60_breakthrough_optimized, ma60_volume_optimized  # noqa: F401
+        from .strategies import ma_breakthrough, ma60_breakthrough, ma120_breakthrough, ma60_volume, ma120_volume, half_retrace, half_retrace_simple, half_retrace_simple_close, composite, ma20_breakthrough, ma30_breakthrough, ma60_breakthrough_optimized, ma60_volume_optimized  # noqa: F401
 
         self.strategy = create_strategy(strategy_cfg.class_name)
         if self.strategy is None:
@@ -53,6 +53,11 @@ class BacktestEngine:
             self.strategy.VOLUME_5D_THRESHOLD_PCT = strategy_cfg.volume_5d_threshold_pct
             self.strategy.VOLUME_10D_THRESHOLD_PCT = strategy_cfg.volume_10d_threshold_pct
         self.strategy.atr_stop_multiplier = strategy_cfg.atr_stop_multiplier
+        self.strategy.TP_TIER2_PROTECT_PRICE_RATIO = strategy_cfg.tier2_protect_ratio
+        log.info("[%s] 策略=%s 二级保护倍率=%.3f (cfg=%.3f)",
+                 strategy_cfg.name, self.strategy.name,
+                 self.strategy.TP_TIER2_PROTECT_PRICE_RATIO,
+                 strategy_cfg.tier2_protect_ratio)
 
         self.broker = Broker(
             position_pct=strategy_cfg.position_pct,
