@@ -232,6 +232,20 @@ if st.session_state.get("bt_has_reports"):
             })
         st.dataframe(comp_rows, use_container_width=True, hide_index=True)
 
+        # ── 同时输出到日志（方便直接查看，无需导出CSV）──
+        import logging as _logging
+        _log = _logging.getLogger("marketreview.backtest.engine")
+        _log.info("=" * 80)
+        _log.info("📊 策略对比汇总（%d轮均值）", rounds_used)
+        _log.info("%-30s %6s %6s %8s %14s %6s %7s %6s %5s",
+                  "策略", "交易", "胜率", "总收益", "收益范围", "收益σ", "最大回撤", "持仓", "盈亏比")
+        for row in comp_rows:
+            _log.info("%-30s %6s %6s %8s %14s %6s %7s %6s %5s",
+                      row["策略"], row["交易笔数"], row["胜率"], row["总收益"],
+                      row["收益范围"], row["收益σ"], row["最大回撤"],
+                      row["平均持仓"], row["盈亏比"])
+        _log.info("=" * 80)
+
         # ── 净值曲线叠加图 ──
         st.subheader("📈 净值曲线对比")
         fig = go.Figure()
