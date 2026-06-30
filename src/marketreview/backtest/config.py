@@ -37,6 +37,9 @@ class StrategyConfig:
     total_capital: float = 2_500_000         # 总仓位资金（用于个股追踪仓位计算）
     atr_stop_multiplier: float = 0.0          # ATR止损倍数，>0启用，0=关闭用space_stop_pct
     max_target_deviation_pct: float = 999.0   # 目标偏离上限%，>0且在涨跌停内时限制条件单偏离幅度
+    wave33_down_max_positions: int = 0        # 3浪3下行确认时的开仓上限，0=使用默认
+    wave33_up_max_positions: int = 0          # 3浪3上行确认时的开仓上限，0=使用默认
+    wave33_flat_max_positions: int = 0        # 3浪3盘整中时的开仓上限，0=使用默认
 
 
 def load_pools(dp) -> list[PoolConfig]:
@@ -120,6 +123,9 @@ def load_strategies() -> list[StrategyConfig]:
         "总仓位资金": "total_capital",
         "ATR倍数": "atr_stop_multiplier",
         "目标偏离上限%": "max_target_deviation_pct",
+        "3浪3下行开仓上限": "wave33_down_max_positions",
+        "3浪3上行开仓上限": "wave33_up_max_positions",
+        "3浪3盘整开仓上限": "wave33_flat_max_positions",
     }
     FIELD_TYPES = {
         "position_pct": float,
@@ -133,6 +139,9 @@ def load_strategies() -> list[StrategyConfig]:
         "total_capital": float,
         "atr_stop_multiplier": float,
         "max_target_deviation_pct": float,
+        "wave33_down_max_positions": int,
+        "wave33_up_max_positions": int,
+        "wave33_flat_max_positions": int,
     }
     DEFAULTS = {
         "position_pct": 20.0,
@@ -146,6 +155,9 @@ def load_strategies() -> list[StrategyConfig]:
         "total_capital": 2_500_000,
         "atr_stop_multiplier": 0.0,
         "max_target_deviation_pct": 999.0,
+        "wave33_down_max_positions": 0,
+        "wave33_up_max_positions": 0,
+        "wave33_flat_max_positions": 0,
     }
 
     global_defaults = dict(DEFAULTS)
@@ -172,6 +184,9 @@ def load_strategies() -> list[StrategyConfig]:
             total_capital=cfg["total_capital"],
             atr_stop_multiplier=cfg["atr_stop_multiplier"],
             max_target_deviation_pct=cfg["max_target_deviation_pct"],
+            wave33_down_max_positions=cfg["wave33_down_max_positions"],
+            wave33_up_max_positions=cfg["wave33_up_max_positions"],
+            wave33_flat_max_positions=cfg["wave33_flat_max_positions"],
         ))
         current_strategy = None
 

@@ -54,6 +54,10 @@ class Broker:
     def position_count(self) -> int:
         return len(self.positions)
 
+    def set_max_positions(self, n: int):
+        """动态调整开仓上限（3浪3趋势变化时调用）."""
+        self.max_positions = n
+
     @property
     def equity(self) -> float:
         """Total equity = cash + book value (成本) of all positions + addons."""

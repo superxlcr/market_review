@@ -376,7 +376,7 @@ if st.session_state.get("bt_has_reports"):
                             "当前持仓": t.positions_after,
                         })
                     _render_html_table(trade_rows, col_widths={
-                        "日期": "5em", "股票": "6em", "类型": "7em",
+                        "日期": "5em", "股票": "6em", "类型": "8em",
                         "价格": "4em", "盈亏": "4em",
                     })
 
@@ -417,6 +417,6 @@ if st.session_state.get("bt_has_reports"):
                                     "原因": t.reason,
                                 })
                             _render_html_table(srows, col_widths={
-                                "日期": "5em", "类型": "7em",
+                                "日期": "5em", "类型": "8em",
                                 "价格": "4em", "盈亏": "4em",
                             })

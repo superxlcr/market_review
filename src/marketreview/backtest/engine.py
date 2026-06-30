@@ -1,5 +1,6 @@
 """Backtest engine — daily loop over stocks, orchestrate buy/sell."""
 from datetime import datetime, timedelta
+import json
 import random
 import pandas as pd
 from .strategy_base import (
@@ -165,7 +166,22 @@ class BacktestEngine:
 
         log.info("K线加载完成: %d只有数据, %d只无数据", loaded_count, empty_count)
 
-        # 4. Get all trading dates in range
+        # 4. Load wave33 cumulative data for dynamic position control
+        wave33_trends: dict[str, str] = {}
+        if self._is_wave33_enabled():
+            cum_counts = self._load_wave33_cumulative_counts(end_date)
+            if cum_counts:
+                wave33_trends = self._compute_wave33_trends(cum_counts)
+                log.info("[%s] 3浪3趋势状态机: %d个日期已计算",
+                         self.strategy_cfg.name, len(wave33_trends))
+            else:
+                log.warning("[%s] 3浪3数据缺失，回退到默认开仓上限=%d",
+                           self.strategy_cfg.name, self.strategy_cfg.max_positions)
+        else:
+            log.info("[%s] 3浪3动态仓位未配置，使用固定开仓上限=%d",
+                     self.strategy_cfg.name, self.strategy_cfg.max_positions)
+
+        # 5. Get all trading dates in range
         trade_dates = self._trading_day_range(start_date, end_date)
         if not trade_dates:
             log.warning("无交易日期, 使用日历日期回退: %s~%s", start_date, end_date)
@@ -174,12 +190,12 @@ class BacktestEngine:
                  trade_dates[0] if trade_dates else "?",
                  trade_dates[-1] if trade_dates else "?")
 
-        # 5. Daily loop — 5 步模型
+        # 6. Daily loop — 5 步模型
         #  ① 开盘卖出 → ② 开盘买入 → ③ 盘中买入
         #  → ④ 盘中+收盘卖出 → ⑤ 条件单设置
         equity_curve = []
 
-        for date in trade_dates:
+        for day_idx, date in enumerate(trade_dates):
             stocks_today = list(self.pool.stocks)
 
             # 构建今日行情快照
@@ -196,6 +212,29 @@ class BacktestEngine:
                         self.broker.update_addon_mfp(sym, _safe_f(row.get("high")))
             self.broker.execute_open_sells(date, today_rows)
             self._enrich_positions(date)
+
+            # ── 3浪3动态仓位调整（依据昨日趋势，次日生效）──
+            if wave33_trends:
+                yesterday_date = (
+                    trade_dates[day_idx - 1] if day_idx > 0 else None
+                )
+                if yesterday_date and yesterday_date in wave33_trends:
+                    trend = wave33_trends[yesterday_date]
+                    new_max = self._get_wave33_max_positions(trend)
+                    if new_max > 0 and new_max != self.broker.max_positions:
+                        old_max = self.broker.max_positions
+                        self.broker.set_max_positions(new_max)
+                        trend_label = {"up": "上行确认", "down": "下行确认",
+                                       "flat": "盘整中"}.get(trend, trend)
+                        self.broker.trades.append(TradeRecord(
+                            date=date, symbol="", symbol_name="",
+                            trade_type="仓位上限调整",
+                            price=0,
+                            reason=f"3浪3{trend_label}，开仓上限 {old_max}→{new_max}",
+                        ))
+                        log.info("[%s] 仓位上限调整 %s: 3浪3趋势=%s %d→%d",
+                                 self.strategy_cfg.name, date, trend_label,
+                                 old_max, new_max)
 
             # ── ② 开盘买入 ──
             if self.broker.pending_orders:
@@ -343,7 +382,7 @@ class BacktestEngine:
                 "return_pct": (market_eq / self.broker.init_capital - 1) * 100.0,
             })
 
-        # 5.5 回测结束 — 强制清仓所有持仓
+        # 6.5 回测结束 — 强制清仓所有持仓
         if self.broker.positions:
             last_date = trade_dates[-1] if trade_dates else end_date
             for pcode in list(self.broker.positions.keys()):
@@ -363,7 +402,7 @@ class BacktestEngine:
                     "return_pct": (self.broker.equity / self.broker.init_capital - 1) * 100.0,
                 }
 
-        # 6. Build report
+        # 7. Build report
         report = build_report(self.broker.trades, equity_curve)
         log.info(
             "回测完成: 总交易=%d笔 赢=%d 亏=%d 胜率=%.1f%% 总收益=%+.2f%% 最大回撤=%.2f%%",
@@ -491,6 +530,141 @@ class BacktestEngine:
             if rd == date:
                 return r
         return None
+
+
+    # ── 3浪3动态仓位控制 ──
+
+    def _load_wave33_cumulative_counts(self, end_date: str) -> dict[str, int]:
+        """Load wave33 21-day rolling cumulative counts for trend computation.
+
+        Returns {trade_date: cumulative_count} sorted chronologically.
+        Returns empty dict if no wave33 data available.
+        """
+        rows = self.dp.cache.get_wave33_range(limit=2000, end_date=end_date)
+        if not rows:
+            log.warning("[%s] 无3浪3数据，动态仓位控制不可用",
+                       self.strategy_cfg.name)
+            return {}
+
+        # Build date → daily all-stocks set
+        day_sets: dict[str, set] = {}
+        for r in rows:
+            try:
+                data = json.loads(r["stock_codes"]) if r["stock_codes"] else {}
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+            day_sets[r["trade_date"]] = set(data.get("all", []))
+
+        # Sort dates chronologically
+        all_dates = sorted(day_sets.keys())
+
+        # 21-trading-day rolling cumulative union count (same as display)
+        rolling_days = 21
+        result: dict[str, int] = {}
+        for i, date in enumerate(all_dates):
+            window_start = max(0, i - rolling_days + 1)
+            cum_set: set = set()
+            for j in range(window_start, i + 1):
+                cum_set |= day_sets[all_dates[j]]
+            result[date] = len(cum_set)
+
+        log.info("[%s] 3浪3累计数据加载完成: %d个日期, 范围=%s~%s",
+                 self.strategy_cfg.name, len(result),
+                 all_dates[0] if all_dates else "?",
+                 all_dates[-1] if all_dates else "?")
+        return result
+
+    def _compute_wave33_trends(self, cum_counts: dict[str, int]) -> dict[str, str]:
+        """State machine: compute wave33 trend state per date.
+
+        States: "up" (default), "down", "flat"
+        - UP: 3 consecutive opposite moves → FLAT
+        - FLAT: 1 move back → restore; cumulative 5 opposite → flip
+        - DOWN: mirror of UP
+        - Equal values: no change to state or streaks.
+
+        Returns {trade_date: "up"|"down"|"flat"}.
+        """
+        dates = sorted(cum_counts.keys())
+        if len(dates) < 2:
+            return {d: "up" for d in dates}
+
+        state = "up"           # default
+        opp_streak = 0         # consecutive moves opposite to original state
+        last_move = None       # "up" or "down"
+        from_state = None      # state before entering FLAT
+
+        result: dict[str, str] = {dates[0]: state}
+
+        for i in range(1, len(dates)):
+            prev = cum_counts[dates[i - 1]]
+            curr = cum_counts[dates[i]]
+
+            if curr > prev:
+                move = "up"
+            elif curr < prev:
+                move = "down"
+            else:
+                result[dates[i]] = state
+                continue
+
+            if state == "flat":
+                opposite_of_original = (
+                    (from_state == "up" and move == "down") or
+                    (from_state == "down" and move == "up")
+                )
+                if opposite_of_original:
+                    if move == last_move:
+                        opp_streak += 1
+                    else:
+                        opp_streak += 1
+                    last_move = move
+                    if opp_streak >= 5:
+                        state = "down" if from_state == "up" else "up"
+                        opp_streak = 0
+                        from_state = None
+                else:
+                    # 1 day back to original → restore
+                    state = from_state
+                    opp_streak = 0
+                    last_move = move
+                    from_state = None
+            else:
+                opposite = ((state == "up" and move == "down") or
+                           (state == "down" and move == "up"))
+                if opposite:
+                    if move == last_move:
+                        opp_streak += 1
+                    else:
+                        opp_streak = 1
+                    last_move = move
+                    if opp_streak >= 3:
+                        from_state = state
+                        state = "flat"
+                else:
+                    opp_streak = 0
+                    last_move = move
+
+            result[dates[i]] = state
+
+        return result
+
+    def _get_wave33_max_positions(self, trend: str) -> int:
+        """Map trend state to configured max_positions. Returns 0 if disabled."""
+        cfg = self.strategy_cfg
+        if trend == "up":
+            return cfg.wave33_up_max_positions
+        elif trend == "down":
+            return cfg.wave33_down_max_positions
+        else:
+            return cfg.wave33_flat_max_positions
+
+    def _is_wave33_enabled(self) -> bool:
+        """Check if any wave33 dynamic position control is configured."""
+        cfg = self.strategy_cfg
+        return (cfg.wave33_up_max_positions > 0 or
+                cfg.wave33_down_max_positions > 0 or
+                cfg.wave33_flat_max_positions > 0)
 
 
 def _safe_f(v) -> float:
