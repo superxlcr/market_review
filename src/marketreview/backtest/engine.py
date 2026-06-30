@@ -224,8 +224,7 @@ class BacktestEngine:
                     if new_max > 0 and new_max != self.broker.max_positions:
                         old_max = self.broker.max_positions
                         self.broker.set_max_positions(new_max)
-                        trend_label = {"up": "上行确认", "down": "下行确认",
-                                       "flat": "盘整中"}.get(trend, trend)
+                        trend_label = {"up": "上行确认", "down": "下行确认"}.get(trend, trend)
                         self.broker.trades.append(TradeRecord(
                             date=date, symbol="", symbol_name="",
                             trade_type="仓位上限调整",
@@ -575,24 +574,25 @@ class BacktestEngine:
         return result
 
     def _compute_wave33_trends(self, cum_counts: dict[str, int]) -> dict[str, str]:
-        """State machine: compute wave33 trend state per date.
+        """State machine: compute wave33 trend state per date (2-state: UP/DOWN).
 
-        States: "up" (default), "down", "flat"
-        - UP: 3 consecutive opposite moves → FLAT
-        - FLAT: 1 move back → restore; cumulative 5 opposite → flip
-        - DOWN: mirror of UP
-        - Equal values: no change to state or streaks.
+        - Default: UP
+        - N consecutive opposite moves → flip direction directly
+        - Equal values: no change to streaks or state
+        - N = wave33_trend_confirm_days (configurable)
 
-        Returns {trade_date: "up"|"down"|"flat"}.
+        Returns {trade_date: "up"|"down"}.
         """
         dates = sorted(cum_counts.keys())
         if len(dates) < 2:
             return {d: "up" for d in dates}
 
-        state = "up"           # default
-        opp_streak = 0         # consecutive moves opposite to original state
-        last_move = None       # "up" or "down"
-        from_state = None      # state before entering FLAT
+        n_days = self.strategy_cfg.wave33_trend_confirm_days
+        if n_days < 1:
+            n_days = 1
+
+        state = "up"
+        opp_streak = 0     # consecutive moves opposite to current state
 
         result: dict[str, str] = {dates[0]: state}
 
@@ -608,42 +608,16 @@ class BacktestEngine:
                 result[dates[i]] = state
                 continue
 
-            if state == "flat":
-                opposite_of_original = (
-                    (from_state == "up" and move == "down") or
-                    (from_state == "down" and move == "up")
-                )
-                if opposite_of_original:
-                    if move == last_move:
-                        opp_streak += 1
-                    else:
-                        opp_streak += 1
-                    last_move = move
-                    if opp_streak >= 5:
-                        state = "down" if from_state == "up" else "up"
-                        opp_streak = 0
-                        from_state = None
-                else:
-                    # 1 day back to original → restore
-                    state = from_state
+            opposite = ((state == "up" and move == "down") or
+                       (state == "down" and move == "up"))
+
+            if opposite:
+                opp_streak += 1
+                if opp_streak >= n_days:
+                    state = "down" if state == "up" else "up"
                     opp_streak = 0
-                    last_move = move
-                    from_state = None
             else:
-                opposite = ((state == "up" and move == "down") or
-                           (state == "down" and move == "up"))
-                if opposite:
-                    if move == last_move:
-                        opp_streak += 1
-                    else:
-                        opp_streak = 1
-                    last_move = move
-                    if opp_streak >= 3:
-                        from_state = state
-                        state = "flat"
-                else:
-                    opp_streak = 0
-                    last_move = move
+                opp_streak = 0
 
             result[dates[i]] = state
 
@@ -654,17 +628,14 @@ class BacktestEngine:
         cfg = self.strategy_cfg
         if trend == "up":
             return cfg.wave33_up_max_positions
-        elif trend == "down":
-            return cfg.wave33_down_max_positions
         else:
-            return cfg.wave33_flat_max_positions
+            return cfg.wave33_down_max_positions
 
     def _is_wave33_enabled(self) -> bool:
         """Check if any wave33 dynamic position control is configured."""
         cfg = self.strategy_cfg
         return (cfg.wave33_up_max_positions > 0 or
-                cfg.wave33_down_max_positions > 0 or
-                cfg.wave33_flat_max_positions > 0)
+                cfg.wave33_down_max_positions > 0)
 
 
 def _safe_f(v) -> float:
