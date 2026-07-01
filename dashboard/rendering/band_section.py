@@ -9,9 +9,12 @@ from rendering.charts import plot_kline_with_ma
 
 
 def plot_band_chart(df: pd.DataFrame, band: BandResult,
-                    display_tail: int = 200) -> go.Figure:
+                    display_tail: int = 200,
+                    ma_periods: list[int] | None = None) -> go.Figure:
     """K线图叠加波段趋势线 + 回调一半点位."""
-    fig = plot_kline_with_ma(df, display_days=display_tail, ma_periods=[])
+    if ma_periods is None:
+        ma_periods = []
+    fig = plot_kline_with_ma(df, display_days=display_tail, ma_periods=ma_periods)
 
     if band.p_price <= 0:
         return fig
