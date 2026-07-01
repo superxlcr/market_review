@@ -27,8 +27,8 @@ pg = st.navigation([
     st.Page("pages/01_市场全景.py", title="市场全景", icon="📊"),
     st.Page("pages/02_板块分析.py", title="板块分析", icon="🏭"),
     st.Page("pages/03_个股追踪.py", title="个股追踪", icon="📋"),
-    st.Page("pages/04_战法回测.py", title="战法回测", icon="🔬"),
-    st.Page("pages/05_回调一半测试.py", title="回调测试", icon="🔍"),
+    st.Page("pages/04_波段分析.py", title="波段分析", icon="📐"),
+    st.Page("pages/05_战法回测.py", title="战法回测", icon="🔬"),
 ])
 
 pg.run()
