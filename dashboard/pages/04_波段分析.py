@@ -6,7 +6,6 @@
 import datetime as _dt
 import logging
 import streamlit as st
-import plotly.graph_objects as go
 import pandas as pd
 import sys
 import os
@@ -17,19 +16,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from services.dashboard_service import DashboardService
 from marketreview.tools.band_analysis import analyze_band, BandResult
-from rendering.charts import plot_kline_with_ma
 from rendering.styles import PAGE_CSS
+from rendering.band_section import render_band_structure, plot_band_chart
 
 st.set_page_config(page_title="波段分析", page_icon="📐", layout="wide")
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
-
-# 全局缩小 metric 数值（默认 ~2.5rem → 1.5rem），当前价/回调一半用 st.html 单独做大
-_SMALL_METRIC_CSS = """
-<style>
-    [data-testid="stMetricValue"] { font-size: 1.5rem !important; }
-</style>
-"""
-st.markdown(_SMALL_METRIC_CSS, unsafe_allow_html=True)
 
 svc = DashboardService()
 
@@ -37,81 +28,7 @@ st.title("📐 波段分析")
 st.caption(f"P→V 波段趋势线 · K线叠加 ｜ AI v{DashboardService._AI_VERSION}")
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Chart helper — mirrors plot_kline_with_ma from rendering/charts.py
-# ═══════════════════════════════════════════════════════════════════
 
-def _plot_kline_with_band(df: pd.DataFrame, band: BandResult,
-                          display_tail: int = 200) -> go.Figure:
-    """Reuse plot_kline_with_ma (no MA), then add band lines + lock y-axis."""
-    fig = plot_kline_with_ma(df, display_days=display_tail, ma_periods=[])
-
-    if band.p_price <= 0:
-        return fig
-
-    # Add band horizontal lines to Row 1
-    fig.add_hline(y=band.p_price, line=dict(color="#e53935", width=1.5, dash="dot"),
-                  annotation_text=f"P {band.p_price:.2f}", annotation_position="top left",
-                  annotation_font=dict(color="#e53935", size=13), row=1, col=1)
-    fig.add_hline(y=band.line_75, line=dict(color="#9c27b0", width=1, dash="dash"),
-                  annotation_text=f"75% {band.line_75:.2f}", annotation_position="top left",
-                  annotation_font=dict(color="#9c27b0", size=12), row=1, col=1)
-    fig.add_hline(y=band.line_625, line=dict(color="#ff9800", width=1.2, dash="dash"),
-                  annotation_text=f"62.5% {band.line_625:.2f}", annotation_position="top left",
-                  annotation_font=dict(color="#ff9800", size=12), row=1, col=1)
-    fig.add_hline(y=band.line_50, line=dict(color="#1976d2", width=2, dash="dash"),
-                  annotation_text=f"50% {band.line_50:.2f}",
-                  annotation_position="bottom left",
-                  annotation_font=dict(color="#1976d2", size=13), row=1, col=1)
-
-    # 回调半分位 — 跌破62.5%后每个交易日一个点
-    if band.half_retrace_series and band.trigger_625_date:
-        plot_df = df.tail(display_tail)
-        hr_map = {p["date"]: p["price"] for p in band.half_retrace_series
-                  if p["date"] >= band.trigger_625_date}
-        # x 范围对齐 K 线，trigger 前填 None（日期统一转 str 防类型不匹配）
-        x_full = [str(d) for d in plot_df["date"]]
-        y_full = [hr_map.get(d, None) for d in x_full]
-        if any(v is not None for v in y_full):
-            fig.add_trace(go.Scatter(
-                x=x_full, y=y_full, mode="markers",
-                marker=dict(color="#00acc1", size=4, symbol="circle"),
-                name="回调一半点位",
-                connectgaps=False,
-                hoverinfo="skip",
-            ), row=1, col=1)
-
-    fig.add_hline(y=band.v_price, line=dict(color="#43a047", width=1.5, dash="dot"),
-                  annotation_text=f"V {band.v_price:.2f}", annotation_position="bottom left",
-                  annotation_font=dict(color="#43a047", size=13), row=1, col=1)
-
-    # # Draw all local valleys as markers (暂时注释，后续发现问题再调出)
-    # if band.valleys:
-    #     valley_dates = [v.date for v in band.valleys]
-    #     valley_prices = [v.price for v in band.valleys]
-    #     valley_labels = [f"{v.date}<br>V谷底: {v.price:.2f}" for v in band.valleys]
-    #     fig.add_trace(go.Scatter(
-    #         x=valley_dates, y=valley_prices,
-    #         mode="markers",
-    #         marker=dict(color="#00897b", size=10, symbol="triangle-down"),
-    #         name="局部谷底",
-    #         text=valley_labels,
-    #         hoverinfo="text",
-    #     ), row=1, col=1)
-
-    # Lock y-axis to visible K-line range
-    plot_df = df.tail(display_tail)
-    y_min = plot_df["low"].min()
-    y_max = plot_df["high"].max()
-    y_pad = (y_max - y_min) * 0.1
-    fig.update_yaxes(range=[y_min - y_pad, y_max + y_pad], row=1, col=1)
-
-    return fig
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Page UI
-# ═══════════════════════════════════════════════════════════════════
 
 # ── Stock selection ──
 stocks_data = svc.get_watchlist_stocks()
@@ -190,74 +107,12 @@ if st.session_state.get("band_result"):
         st.stop()
 
     # ── Key metrics ──
-    st.divider()
-    st.subheader("📊 波段结构")
-
-    # ── Big metric card（当前价 / 回调一半用大字号）──
-    def _big_metric(label: str, value: str, delta: str = "") -> str:
-        delta_html = f'<div style="font-size:0.85rem;color:#555;margin-top:0.35rem;">{delta}</div>' if delta else ""
-        return f"""
-        <div style="border:1px solid #e0e0e0;border-radius:0.5rem;padding:0.75rem 1rem;">
-            <div style="font-size:0.75rem;color:#888;margin-bottom:0.25rem;">{label}</div>
-            <div style="font-size:2.2rem;font-weight:700;line-height:1.2;">{value}</div>
-            {delta_html}
-        </div>
-        """
-
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    with mc1:
-        st.metric("P（波峰）", f"{band.p_price:.2f}", delta=f"📅 {band.p_date}")
-    with mc2:
-        st.metric("V（前波谷）", f"{band.v_price:.2f}", delta=f"📅 {band.v_date}")
-    with mc3:
-        val_50x11 = band.line_50 * 1.1
-        cmp_str = f"{val_50x11:.2f} vs {band.line_625:.2f}"
-        cmp_delta = "✅ 趋势波段幅度成立" if band.v_qualified else "⚠️ 趋势波段幅度过小"
-        st.metric("50%×1.1 vs 62.5%", cmp_str, delta=cmp_delta)
-    with mc4:
-        st.html(_big_metric("当前价", f"{band.current_price:.2f}", f"📅 {band.current_date}"))
-
-    pullback_days = band.rows_count - 1 - band.p_idx  # 从P至今的交易日数
-
-    tc1, tc2, tc3, tc4 = st.columns(4)
-    with tc1:
-        if pullback_days > 13:
-            st.metric("75% 回调线", f"{band.line_75:.2f}",
-                      delta=f"⚠️ 回调{pullback_days}天，已超13天（支撑时效已过）")
-        else:
-            st.metric("75% 回调线", f"{band.line_75:.2f}",
-                      delta=f"回调{pullback_days}天（13天内有效支撑）")
-    with tc2:
-        if pullback_days > 21:
-            st.metric("62.5% 回调线", f"{band.line_625:.2f}",
-                      delta=f"⚠️ 回调{pullback_days}天，已超21天（支撑时效已过）")
-        else:
-            st.metric("62.5% 回调线", f"{band.line_625:.2f}",
-                      delta=f"回调{pullback_days}天（21天内有效支撑）")
-    with tc3:
-        st.metric("50% 趋势线", f"{band.line_50:.2f}",
-                  delta="← 生命线，跌破则趋势可疑")
-    with tc4:
-        if band.trigger_625_date:  # 只有跌破62.5%后才激活回调一半
-            hr_latest = band.half_retrace_series[-1]["price"] if band.half_retrace_series else 0
-            if pullback_days >= 13:
-                delta_str = (f"📅 跌破62.5%@{band.trigger_625_date} ｜ "
-                             f"📌 回调{pullback_days}天 ≥ 13天，关注突破")
-            else:
-                delta_str = (f"📅 跌破62.5%@{band.trigger_625_date} ｜ "
-                             f"回调{pullback_days}天 < 13天")
-            st.html(_big_metric("回调一半", f"{hr_latest:.2f}", delta_str))
-        else:
-            st.html(_big_metric("回调一半", "—", "尚未跌破62.5%"))
-
-    st.caption(f"💡 L（峰后最低）= {band.l_price:.2f} @ {band.l_date} | "
-               f"K线总数: {band.rows_count} | 波峰距今: {pullback_days} 日 | "
-               f"局部谷底: {len(band.valleys)} 个")
+    render_band_structure(band)
 
     # ── Chart ──
     st.divider()
     st.subheader(f"📈 {code} — 波段趋势线")
 
-    fig = _plot_kline_with_band(df, band, display_tail=display_tail)
+    fig = plot_band_chart(df, band, display_tail=display_tail)
     if fig:
         st.plotly_chart(fig, use_container_width=True)

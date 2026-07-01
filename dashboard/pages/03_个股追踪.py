@@ -2,6 +2,7 @@
 Agent 3 — 个股追踪页面
 展示自选个股的技术分析，每只个股以 expander 形式展示。
 """
+import datetime as _dt
 import streamlit as st
 import sys
 import os
@@ -60,6 +61,8 @@ if not _stocks:
 
 # ── 逐只渲染 ──
 from marketreview.tools.technical import calc_atr
+from marketreview.tools.band_analysis import analyze_band
+from rendering.band_section import render_band_structure, plot_band_chart
 
 for s in _stocks:
     code = s["ts_code"]
@@ -142,6 +145,29 @@ for s in _stocks:
         )
 
         render_ohlcv_section(df, code, name, _service, section_type="stock")
+
+    # ── 波段分析（独立 expander）──
+    with st.expander(f"📐 {name} — 波段结构", expanded=False):
+        band_lookback = 300
+        fetch_days = band_lookback + 500
+        buff_dt = _dt.datetime.strptime(_td, "%Y%m%d") - _dt.timedelta(days=fetch_days)
+        start_date = buff_dt.strftime("%Y%m%d")
+        try:
+            _service._dp.ensure_data_loaded_for_codes([code], start_date, _td)
+        except Exception:
+            pass
+        band_df = _service.get_index_data(code, lookback=fetch_days, end_date=_td)
+        if band_df.empty:
+            st.warning("暂无足量K线数据")
+        else:
+            rows_asc = band_df.to_dict("records")
+            band = analyze_band(rows_asc, peak_lookback=band_lookback)
+            render_band_structure(band)
+            st.divider()
+            st.caption(f"📈 {name} — 波段趋势线")
+            band_fig = plot_band_chart(band_df, band, display_tail=200)
+            if band_fig:
+                st.plotly_chart(band_fig, use_container_width=True)
 
 st.divider()
 st.caption("编辑自选个股：修改 `config/watchlist_stocks.txt` 后刷新页面")
