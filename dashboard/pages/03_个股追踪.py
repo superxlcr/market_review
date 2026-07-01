@@ -62,7 +62,8 @@ if not _stocks:
 # ── 逐只渲染 ──
 from marketreview.tools.technical import calc_atr
 from marketreview.tools.band_analysis import analyze_band
-from rendering.band_section import render_band_structure, plot_band_chart
+from marketreview.tools.buy_points import find_all_buy_points, load_buy_point_config
+from rendering.band_section import render_band_structure, plot_band_chart, render_buy_point_table
 
 for s in _stocks:
     code = s["ts_code"]
@@ -168,6 +169,13 @@ for s in _stocks:
                                         ma_periods=[20, 60, 120, 240])
             if band_fig:
                 st.plotly_chart(band_fig, use_container_width=True)
+
+            # ── 买点提示 ──
+            bp_config = load_buy_point_config()
+            position_capital = bp_config.get("单个仓位资金", 0.0)
+            buy_points = find_all_buy_points(band_df, band,
+                                              position_capital=position_capital)
+            render_buy_point_table(buy_points)
 
 st.divider()
 st.caption("编辑自选个股：修改 `config/watchlist_stocks.txt` 后刷新页面")

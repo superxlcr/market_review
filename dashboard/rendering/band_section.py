@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import pandas as pd
 
 from marketreview.tools.band_analysis import BandResult
+from marketreview.tools.buy_points import BuyPoint
 from rendering.charts import plot_kline_with_ma
 
 
@@ -146,3 +147,48 @@ def render_band_structure(band: BandResult) -> None:
     st.caption(f"💡 L（峰后最低）= {band.l_price:.2f} @ {band.l_date} | "
                f"K线总数: {band.rows_count} | 波峰距今: {pullback_days} 日 | "
                f"局部谷底: {len(band.valleys)} 个")
+
+
+def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
+    """渲染买点提示表格 — 类型/位置/价格/距离/仓位/原因."""
+    if not buy_points:
+        st.caption("暂无符合条件的买点")
+        return
+
+    st.markdown("**🎯 买点提示**")
+
+    rows_html = ""
+    for bp in buy_points:
+        dist_sign = "+" if bp.distance_pct >= 0 else ""
+        dist_color = "#e53935" if bp.distance_pct >= 0 else "#43a047"
+
+        # 类型标签颜色
+        if bp.type == "突破":
+            type_color = "#e53935"
+        elif bp.type == "重新突破":
+            type_color = "#ef6c00"
+        else:
+            type_color = "#1976d2"
+
+        rows_html += f"""<tr>
+            <td style="color:{type_color};font-weight:bold;text-align:center;">{bp.type}</td>
+            <td style="font-weight:600;text-align:center;">{bp.position}</td>
+            <td style="text-align:right;font-weight:bold;">{bp.price:.2f}</td>
+            <td style="color:{dist_color};font-weight:bold;text-align:right;">{dist_sign}{bp.distance_pct}%</td>
+            <td style="text-align:center;color:#888;">{bp.position_size}</td>
+            <td style="color:#555;font-size:14px;">{bp.reason}</td>
+        </tr>"""
+
+    st.html(f"""
+    <table style="width:100%;font-size:16px;border-collapse:collapse;">
+        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:14px;">
+            <th style="text-align:center;width:10%;">类型</th>
+            <th style="text-align:center;width:12%;">位置</th>
+            <th style="text-align:right;width:12%;">价格</th>
+            <th style="text-align:right;width:10%;">距离</th>
+            <th style="text-align:center;width:8%;">仓位</th>
+            <th style="text-align:left;">原因</th>
+        </tr></thead>
+        <tbody>{rows_html}</tbody>
+    </table>
+    """)
