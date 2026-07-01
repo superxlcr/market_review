@@ -138,6 +138,6 @@ MA60_突破拉回 ma60_breakthrough
 #   核心问题: 半分位是静态数学线，无实际支撑意义；进场偏晚，趋势股跑不远
 #           Tier3止盈均+10.1% vs MA60的+25.5%；时间止损从未触发(活不到8天)
 #   对比MA60_突破拉回: 51.0笔 28.3%胜率 +12.07%收益 → 差距在信号端不在卖出端
-# 突破回调一半 half_retrace
-# 突破回调一半简化 half_retrace_simple
-# 突破回调一半简化收盘 half_retrace_simple_close
+突破回调一半 half_retrace
+突破回调一半简化 half_retrace_simple
+突破回调一半简化收盘 half_retrace_simple_close
