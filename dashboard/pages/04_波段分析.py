@@ -23,6 +23,14 @@ from rendering.styles import PAGE_CSS
 st.set_page_config(page_title="波段分析", page_icon="📐", layout="wide")
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
+# 全局缩小 metric 数值（默认 ~2.5rem → 1.5rem），当前价/回调一半用 st.html 单独做大
+_SMALL_METRIC_CSS = """
+<style>
+    [data-testid="stMetricValue"] { font-size: 1.5rem !important; }
+</style>
+"""
+st.markdown(_SMALL_METRIC_CSS, unsafe_allow_html=True)
+
 svc = DashboardService()
 
 st.title("📐 波段分析")
@@ -185,6 +193,17 @@ if st.session_state.get("band_result"):
     st.divider()
     st.subheader("📊 波段结构")
 
+    # ── Big metric card（当前价 / 回调一半用大字号）──
+    def _big_metric(label: str, value: str, delta: str = "") -> str:
+        delta_html = f'<div style="font-size:0.85rem;color:#555;margin-top:0.35rem;">{delta}</div>' if delta else ""
+        return f"""
+        <div style="border:1px solid #e0e0e0;border-radius:0.5rem;padding:0.75rem 1rem;">
+            <div style="font-size:0.75rem;color:#888;margin-bottom:0.25rem;">{label}</div>
+            <div style="font-size:2.2rem;font-weight:700;line-height:1.2;">{value}</div>
+            {delta_html}
+        </div>
+        """
+
     mc1, mc2, mc3, mc4 = st.columns(4)
     with mc1:
         st.metric("P（波峰）", f"{band.p_price:.2f}", delta=f"📅 {band.p_date}")
@@ -196,24 +215,43 @@ if st.session_state.get("band_result"):
         cmp_delta = "✅ 趋势波段幅度成立" if band.v_qualified else "⚠️ 趋势波段幅度过小"
         st.metric("50%×1.1 vs 62.5%", cmp_str, delta=cmp_delta)
     with mc4:
-        st.metric("当前价", f"{band.current_price:.2f}", delta=f"📅 {band.current_date}")
+        st.html(_big_metric("当前价", f"{band.current_price:.2f}", f"📅 {band.current_date}"))
 
-    tc1, tc2, tc3 = st.columns(3)
+    pullback_days = band.rows_count - 1 - band.p_idx  # 从P至今的交易日数
+
+    tc1, tc2, tc3, tc4 = st.columns(4)
     with tc1:
-        st.metric("75% 回调线", f"{band.line_75:.2f}")
+        if pullback_days > 13:
+            st.metric("75% 回调线", f"{band.line_75:.2f}",
+                      delta=f"⚠️ 回调{pullback_days}天，已超13天（支撑时效已过）")
+        else:
+            st.metric("75% 回调线", f"{band.line_75:.2f}",
+                      delta=f"回调{pullback_days}天（13天内有效支撑）")
     with tc2:
-        st.metric("62.5% 回调线", f"{band.line_625:.2f}")
+        if pullback_days > 21:
+            st.metric("62.5% 回调线", f"{band.line_625:.2f}",
+                      delta=f"⚠️ 回调{pullback_days}天，已超21天（支撑时效已过）")
+        else:
+            st.metric("62.5% 回调线", f"{band.line_625:.2f}",
+                      delta=f"回调{pullback_days}天（21天内有效支撑）")
     with tc3:
         st.metric("50% 趋势线", f"{band.line_50:.2f}",
                   delta="← 生命线，跌破则趋势可疑")
+    with tc4:
+        if band.trigger_625_date:  # 只有跌破62.5%后才激活回调一半
+            hr_latest = band.half_retrace_series[-1]["price"] if band.half_retrace_series else 0
+            if pullback_days >= 13:
+                delta_str = (f"📅 跌破62.5%@{band.trigger_625_date} ｜ "
+                             f"📌 回调{pullback_days}天 ≥ 13天，关注突破")
+            else:
+                delta_str = (f"📅 跌破62.5%@{band.trigger_625_date} ｜ "
+                             f"回调{pullback_days}天 < 13天")
+            st.html(_big_metric("回调一半", f"{hr_latest:.2f}", delta_str))
+        else:
+            st.html(_big_metric("回调一半", "—", "尚未跌破62.5%"))
 
-    hr_info = ""
-    if band.half_retrace_series:
-        hr_latest = band.half_retrace_series[-1]["price"]
-        hr_info = f" | 回调半分位: {hr_latest:.2f}（跌破62.5%@{band.trigger_625_date}）"
-
-    st.caption(f"💡 L（峰后最低）= {band.l_price:.2f} @ {band.l_date}{hr_info} | "
-               f"K线总数: {band.rows_count} | 波峰距今: {band.rows_count - 1 - band.p_idx} 日 | "
+    st.caption(f"💡 L（峰后最低）= {band.l_price:.2f} @ {band.l_date} | "
+               f"K线总数: {band.rows_count} | 波峰距今: {pullback_days} 日 | "
                f"局部谷底: {len(band.valleys)} 个")
 
     # ── Chart ──
