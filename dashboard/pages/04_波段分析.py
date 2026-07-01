@@ -56,6 +56,20 @@ def _plot_kline_with_band(df: pd.DataFrame, band: BandResult,
                   annotation_text=f"V {band.v_price:.2f}", annotation_position="bottom left",
                   annotation_font=dict(color="#43a047", size=13), row=1, col=1)
 
+    # # Draw all local valleys as markers (暂时注释，后续发现问题再调出)
+    # if band.valleys:
+    #     valley_dates = [v.date for v in band.valleys]
+    #     valley_prices = [v.price for v in band.valleys]
+    #     valley_labels = [f"{v.date}<br>V谷底: {v.price:.2f}" for v in band.valleys]
+    #     fig.add_trace(go.Scatter(
+    #         x=valley_dates, y=valley_prices,
+    #         mode="markers",
+    #         marker=dict(color="#00897b", size=10, symbol="triangle-down"),
+    #         name="局部谷底",
+    #         text=valley_labels,
+    #         hoverinfo="text",
+    #     ), row=1, col=1)
+
     # Lock y-axis to visible K-line range
     plot_df = df.tail(display_tail)
     y_min = plot_df["low"].min()
@@ -150,20 +164,17 @@ if st.session_state.get("band_result"):
     st.divider()
     st.subheader("📊 波段结构")
 
-    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    mc1, mc2, mc3, mc4 = st.columns(4)
     with mc1:
         st.metric("P（波峰）", f"{band.p_price:.2f}", delta=f"📅 {band.p_date}")
     with mc2:
         st.metric("V（前波谷）", f"{band.v_price:.2f}", delta=f"📅 {band.v_date}")
     with mc3:
-        vp_str = f"V/P={band.vp_ratio:.3f}"
-        vp_delta = "✅ 有效波段" if band.v_qualified else "⚠️ 波段不足"
-        st.metric("V/P 比值", vp_str, delta=vp_delta)
+        val_50x11 = band.line_50 * 1.1
+        cmp_str = f"{val_50x11:.2f} vs {band.line_625:.2f}"
+        cmp_delta = "✅ 趋势波段幅度成立" if band.v_qualified else "⚠️ 趋势波段幅度过小"
+        st.metric("50%×1.1 vs 62.5%", cmp_str, delta=cmp_delta)
     with mc4:
-        vs_pct = band.current_vs_50 * 100
-        trend_state = "✅ 趋势线上" if vs_pct >= 0 else "⚠️ 跌破趋势线"
-        st.metric("当前 vs 50%线", f"{vs_pct:+.1f}%", delta=trend_state)
-    with mc5:
         st.metric("当前价", f"{band.current_price:.2f}", delta=f"📅 {band.current_date}")
 
     tc1, tc2, tc3 = st.columns(3)
@@ -176,7 +187,8 @@ if st.session_state.get("band_result"):
                   delta="← 生命线，跌破则趋势可疑")
 
     st.caption(f"💡 L（峰后最低）= {band.l_price:.2f} @ {band.l_date} | "
-               f"K线总数: {band.rows_count} | 波峰距今: {band.rows_count - 1 - band.p_idx} 日")
+               f"K线总数: {band.rows_count} | 波峰距今: {band.rows_count - 1 - band.p_idx} 日 | "
+               f"局部谷底: {len(band.valleys)} 个")
 
     # ── Chart ──
     st.divider()

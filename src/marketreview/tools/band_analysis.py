@@ -17,6 +17,57 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class ValleyPoint:
+    """局部谷底."""
+    price: float = 0.0
+    date: str = ""
+    idx: int = -1
+
+
+def find_valleys(
+    rows_asc: list[dict],
+    start_idx: int,
+    end_idx: int,
+    neighborhood: int = 10,
+) -> list[ValleyPoint]:
+    """在 [start_idx, end_idx] 范围内找局部谷底.
+
+    局部谷底: 该 K 线的 low 比左右各 neighborhood 天内的 low 都低.
+    """
+    valleys: list[ValleyPoint] = []
+    n = len(rows_asc)
+
+    for i in range(start_idx, end_idx + 1):
+        cur_low = _safe_float(rows_asc[i].get("low"))
+        if cur_low <= 0:
+            continue
+
+        # 检查左边 neighborhood 天
+        left_start = max(0, i - neighborhood)
+        left_ok = all(
+            cur_low < _safe_float(rows_asc[j].get("low"))
+            for j in range(left_start, i)
+        )
+
+        # 检查右边 neighborhood 天
+        right_end = min(n - 1, i + neighborhood)
+        right_ok = all(
+            cur_low < _safe_float(rows_asc[j].get("low"))
+            for j in range(i + 1, right_end + 1)
+        )
+
+        if left_ok and right_ok:
+            valleys.append(ValleyPoint(
+                price=cur_low,
+                date=str(rows_asc[i].get("date", "")),
+                idx=i,
+            ))
+
+    return valleys
+
+
+
+@dataclass
 class BandResult:
     """波段分析结果."""
     # P — 波峰
@@ -28,6 +79,9 @@ class BandResult:
     v_price: float = 0.0
     v_date: str = ""
     v_idx: int = -1
+
+    # 局部谷底列表
+    valleys: list = field(default_factory=list)
 
     # 资格
     v_qualified: bool = False   # V/P < 3/7 ?
@@ -68,14 +122,12 @@ def _safe_float(v) -> float:
 def analyze_band(
     rows_asc: list[dict],
     peak_lookback: int = 300,
-    pullback_min_days: int = 13,
 ) -> BandResult:
     """分析一个标的的波段结构.
 
     Args:
         rows_asc: K线数据，date ASC（已前复权），每行含 open/high/low/close/date
         peak_lookback: 波峰回溯窗口（交易日），默认 300（~14个月）
-        pullback_min_days: P 必须距今 ≥ N 个交易日
 
     Returns:
         BandResult with P, V, trend lines, and qualification status.
@@ -83,8 +135,8 @@ def analyze_band(
     result = BandResult(peak_lookback=peak_lookback)
     result.rows_count = len(rows_asc)
 
-    if len(rows_asc) < pullback_min_days + 2:
-        result.block_reason = f"K线不足（需≥{pullback_min_days + 2}日，当前{len(rows_asc)}日）"
+    if len(rows_asc) < 2:
+        result.block_reason = f"K线不足（当前{len(rows_asc)}日）"
         return result
 
     today_idx = len(rows_asc) - 1
@@ -104,45 +156,36 @@ def analyze_band(
         result.block_reason = f"近{peak_lookback}日内未找到有效波峰"
         return result
 
-    # P 必须距今 ≥ pullback_min_days
-    if today_idx - peak_idx < pullback_min_days:
-        result.block_reason = (
-            f"P={peak_high:.2f}（{rows_asc[peak_idx].get('date', '?')}）"
-            f"距今仅{today_idx - peak_idx}日，需≥{pullback_min_days}日"
-        )
-        return result
-
     result.p_price = peak_high
     result.p_date = str(rows_asc[peak_idx].get("date", ""))
     result.p_idx = peak_idx
 
-    # ── 2. 找前波谷 V（P 之前所有 K 线的最低 low）──
-    valley_low = float("inf")
-    valley_idx = -1
-    for i in range(0, peak_idx):
-        l = _safe_float(rows_asc[i].get("low"))
-        if l < valley_low:
-            valley_low = l
-            valley_idx = i
+    # ── 1.5 找 P 之前 lookback 窗口内的所有局部谷底 ──
+    valley_search_start = max(0, peak_idx - peak_lookback)
+    result.valleys = find_valleys(rows_asc, valley_search_start, peak_idx, neighborhood=5)
+    log.info("Found %d local valleys in [%d, %d] (lookback=%d, P@%d)",
+             len(result.valleys), valley_search_start, peak_idx, peak_lookback, peak_idx)
 
-    if valley_low >= peak_high or valley_low <= 0:
+    # ── 2. 选 V — 局部谷底中最高且满足 V/P < 3/7 ──
+    qualified = [v for v in result.valleys if v.price / peak_high < (3.0 / 7.0)]
+    if not qualified:
         result.block_reason = (
-            f"P={peak_high:.2f}（{result.p_date}），波峰前未找到有效波谷"
+            f"P={peak_high:.2f}（{result.p_date}），"
+            f"{len(result.valleys)} 个局部谷底中无满足 V/P < 3/7 者"
         )
         return result
 
-    result.v_price = valley_low
-    result.v_date = str(rows_asc[valley_idx].get("date", ""))
-    result.v_idx = valley_idx
-
-    # ── 3. V 资格校验: V/P < 3/7 ──
-    result.vp_ratio = valley_low / peak_high
-    result.v_qualified = result.vp_ratio < (3.0 / 7.0)
+    best_v = max(qualified, key=lambda v: v.price)
+    result.v_price = best_v.price
+    result.v_date = best_v.date
+    result.v_idx = best_v.idx
+    result.v_qualified = True
+    result.vp_ratio = best_v.price / peak_high
 
     # ── 4. 计算三条趋势线 ──
-    result.line_75 = valley_low + 0.75 * (peak_high - valley_low)
-    result.line_625 = valley_low + 0.625 * (peak_high - valley_low)
-    result.line_50 = (peak_high + valley_low) / 2.0
+    result.line_75 = result.v_price + 0.75 * (result.p_price - result.v_price)
+    result.line_625 = result.v_price + 0.625 * (result.p_price - result.v_price)
+    result.line_50 = (result.p_price + result.v_price) / 2.0
 
     # ── 5. 找 L（P 之后最低 low，供参考）──
     lowest_low = float("inf")
