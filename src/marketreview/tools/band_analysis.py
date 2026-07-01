@@ -101,6 +101,10 @@ class BandResult:
     l_price: float = 0.0
     l_date: str = ""
 
+    # 回调半分位序列 — 跌破62.5%后，每个交易日一点: [(date, half_retrace_price), ...]
+    half_retrace_series: list = field(default_factory=list)
+    trigger_625_date: str = ""   # 首次跌破62.5%的日期
+
     # 阻断原因
     block_reason: str = ""
     peak_lookback: int = 300
@@ -198,6 +202,20 @@ def analyze_band(
 
     result.l_price = lowest_low
     result.l_date = str(rows_asc[lowest_idx].get("date", "")) if lowest_idx >= 0 else ""
+
+    # ── 5.5 回调半分位序列（从 P 起每交易日一点，随 L 下移而下降）──
+    running_low = float("inf")
+    for i in range(peak_idx, today_idx + 1):
+        l = _safe_float(rows_asc[i].get("low"))
+        if l < running_low:
+            running_low = l
+        if running_low < result.line_625 and not result.trigger_625_date:
+            result.trigger_625_date = str(rows_asc[i].get("date", ""))
+        half = (result.p_price + running_low) / 2.0
+        result.half_retrace_series.append({
+            "date": str(rows_asc[i].get("date", "")),
+            "price": round(half, 2),
+        })
 
     # ── 6. 当前价格 vs 50% 趋势线 ──
     result.current_price = _safe_float(rows_asc[today_idx].get("close"))

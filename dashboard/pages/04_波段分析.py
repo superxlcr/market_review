@@ -4,11 +4,14 @@
      波段62.5%线、75%线 = 回调深浅参考
 """
 import datetime as _dt
+import logging
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import sys
 import os
+
+log = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
@@ -52,6 +55,24 @@ def _plot_kline_with_band(df: pd.DataFrame, band: BandResult,
                   annotation_text=f"50% {band.line_50:.2f}",
                   annotation_position="bottom left",
                   annotation_font=dict(color="#1976d2", size=13), row=1, col=1)
+
+    # 回调半分位 — 跌破62.5%后每个交易日一个点
+    if band.half_retrace_series and band.trigger_625_date:
+        plot_df = df.tail(display_tail)
+        hr_map = {p["date"]: p["price"] for p in band.half_retrace_series
+                  if p["date"] >= band.trigger_625_date}
+        # x 范围对齐 K 线，trigger 前填 None（日期统一转 str 防类型不匹配）
+        x_full = [str(d) for d in plot_df["date"]]
+        y_full = [hr_map.get(d, None) for d in x_full]
+        if any(v is not None for v in y_full):
+            fig.add_trace(go.Scatter(
+                x=x_full, y=y_full, mode="markers",
+                marker=dict(color="#00acc1", size=4, symbol="circle"),
+                name="回调一半点位",
+                connectgaps=False,
+                hoverinfo="skip",
+            ), row=1, col=1)
+
     fig.add_hline(y=band.v_price, line=dict(color="#43a047", width=1.5, dash="dot"),
                   annotation_text=f"V {band.v_price:.2f}", annotation_position="bottom left",
                   annotation_font=dict(color="#43a047", size=13), row=1, col=1)
@@ -186,7 +207,12 @@ if st.session_state.get("band_result"):
         st.metric("50% 趋势线", f"{band.line_50:.2f}",
                   delta="← 生命线，跌破则趋势可疑")
 
-    st.caption(f"💡 L（峰后最低）= {band.l_price:.2f} @ {band.l_date} | "
+    hr_info = ""
+    if band.half_retrace_series:
+        hr_latest = band.half_retrace_series[-1]["price"]
+        hr_info = f" | 回调半分位: {hr_latest:.2f}（跌破62.5%@{band.trigger_625_date}）"
+
+    st.caption(f"💡 L（峰后最低）= {band.l_price:.2f} @ {band.l_date}{hr_info} | "
                f"K线总数: {band.rows_count} | 波峰距今: {band.rows_count - 1 - band.p_idx} 日 | "
                f"局部谷底: {len(band.valleys)} 个")
 
