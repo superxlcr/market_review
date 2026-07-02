@@ -100,11 +100,11 @@ def _calc_stop_losses(bp: BuyPoint, atr_pct: float | None,
     else:
         # 回调一半 / 波段50%
         if atr_pct is not None and atr_pct > 0:
-            pct = min(atr_pct, atr_cap)
+            pct = min(atr_pct * 2, atr_cap)
             if pct >= atr_cap:
                 bp.intraday_stop_reason = f"{atr_cap:.0f}%上限"
             else:
-                bp.intraday_stop_reason = f"ATR {atr_pct:.1f}%"
+                bp.intraday_stop_reason = f"2×ATR {atr_pct*2:.1f}%"
         else:
             pct = atr_cap
             bp.intraday_stop_reason = f"{atr_cap:.0f}%上限"
