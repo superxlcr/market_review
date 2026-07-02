@@ -63,7 +63,7 @@ def plot_band_chart(df: pd.DataFrame, band: BandResult,
     fig.update_yaxes(range=[y_min - y_pad, y_max + y_pad], row=1, col=1)
 
     # ── 扣抵日标记（三角形，放在 K 线下方）──
-    _OFFSET_COLORS = {60: "#ff9800", 120: "#9c27b0", 240: "#4caf50"}
+    _OFFSET_COLORS = {20: "#2196f3", 60: "#ff9800", 120: "#9c27b0", 240: "#4caf50"}
     n_total = len(df)
     for period, color in _OFFSET_COLORS.items():
         idx = n_total - 1 - period
