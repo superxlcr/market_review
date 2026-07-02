@@ -70,10 +70,14 @@ def plot_band_chart(df: pd.DataFrame, band: BandResult,
         if idx >= 0 and idx >= n_total - display_tail:
             offset_date = str(df["date"].iloc[idx])
             offset_low = float(df["low"].iloc[idx])
+            offset_y = offset_low - (y_max - y_min) * 0.03
             fig.add_trace(go.Scatter(
-                x=[offset_date], y=[offset_low],
+                x=[offset_date], y=[offset_y],
                 mode="markers",
-                marker=dict(color=color, size=10, symbol="triangle-down"),
+                marker=dict(
+                    color=color, size=14, symbol="triangle-down",
+                    line=dict(color="white", width=1),
+                ),
                 name=f"扣抵MA{period}",
                 hovertemplate=f"扣抵日 MA{period}<br>%{{x}}<extra></extra>",
             ), row=1, col=1)
