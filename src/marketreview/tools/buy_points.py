@@ -160,7 +160,8 @@ def compute_ma_episodes(df, band, periods: list[int] | None = None):
                     in_episode = True
                     ep_start_idx = i
                     ep_max_pen = round((ma_val - low) / ma_val * 100, 1)
-            else:
+
+            if in_episode:
                 if low < ma_val:
                     pen = round((ma_val - low) / ma_val * 100, 1)
                     if pen > ep_max_pen:
