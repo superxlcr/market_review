@@ -66,8 +66,8 @@ _trend_direction = _w33.get("trend", {}).get("direction", "flat")
 # ── 逐只渲染 ──
 from marketreview.tools.technical import calc_atr
 from marketreview.tools.band_analysis import analyze_band
-from marketreview.tools.buy_points import find_all_buy_points, load_buy_point_config, compute_ma_episodes
-from rendering.band_section import render_band_structure, plot_band_chart, render_buy_point_table, render_ma_episodes
+from marketreview.tools.buy_points import find_all_buy_points, load_buy_point_config, compute_ma_probes
+from rendering.band_section import render_band_structure, plot_band_chart, render_buy_point_table, render_ma_probes
 
 for s in _stocks:
     code = s["ts_code"]
@@ -183,9 +183,9 @@ for s in _stocks:
                                               trend_direction=_trend_direction,
                                               position_capital=position_capital)
             render_buy_point_table(buy_points)
-            # ── MA 跌破记录 ──
-            ma_episodes = compute_ma_episodes(band_df, band)
-            render_ma_episodes(ma_episodes)
+            # ── MA 探底记录 ──
+            ma_probes = compute_ma_probes(band_df, band)
+            render_ma_probes(ma_probes)
 
 st.divider()
 st.caption("编辑自选个股：修改 `config/watchlist_stocks.txt` 后刷新页面")

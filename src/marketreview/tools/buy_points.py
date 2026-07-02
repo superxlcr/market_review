@@ -118,11 +118,10 @@ def _calc_stop_losses(bp: BuyPoint, atr_pct: float | None,
 
 # ── MA 跌破 Episode 统计 ──────────────────────────────────────
 
-def compute_ma_episodes(df, band, periods: list[int] | None = None):
-    """从 P 到今日，逐日重算均线，统计跌破 episode.
+def compute_ma_probes(df, band, periods: list[int] | None = None):
+    """从 P 到今日，统计开盘在MA上方但盘中跌破MA的探底日.
 
-    Episode: low < MA 开始 → close >= MA 结束.
-    返回: {60: [{start, end, days, max_penetration}, ...], ...}
+    返回: {60: [{date, max_penetration, offset_vs_pct, avg_vs_pct, ma_dir}, ...], ...}
     """
     if periods is None:
         periods = [60, 120, 240]
@@ -136,60 +135,60 @@ def compute_ma_episodes(df, band, periods: list[int] | None = None):
     for p in periods:
         ma_key = f"MA{p}"
         ma_full = mas[ma_key]
-        ma_slice = ma_full[p_idx:]
+        probes: list[dict] = []
 
-        episodes: list[dict] = []
-        in_episode = False
-        ep_start_idx = -1
-        ep_max_pen = 0.0
-
-        for i in range(len(ma_slice)):
-            row_idx = p_idx + i
-            if row_idx >= len(df):
-                break
-            low = float(df["low"].iloc[row_idx])
-            close = float(df["close"].iloc[row_idx])
-            ma_val = ma_slice[i]
-            date = str(df["date"].iloc[row_idx])
+        for i in range(p_idx, len(df)):
+            open_p = float(df["open"].iloc[i])
+            low = float(df["low"].iloc[i])
+            ma_val = ma_full[i]
+            date = str(df["date"].iloc[i])
 
             if np.isnan(ma_val):
                 continue
+            if ma_val <= 0:
+                continue
 
-            if not in_episode:
-                if low < ma_val:
-                    in_episode = True
-                    ep_start_idx = i
-                    ep_max_pen = round((ma_val - low) / ma_val * 100, 1)
+            # 开盘在 MA 上方 且 盘中跌破 MA
+            if open_p > ma_val and low < ma_val:
+                penetration = round((ma_val - low) / ma_val * 100, 1)
+                close = float(df["close"].iloc[i])
+                recovered = close >= ma_val
 
-            if in_episode:
-                if low < ma_val:
-                    pen = round((ma_val - low) / ma_val * 100, 1)
-                    if pen > ep_max_pen:
-                        ep_max_pen = pen
+                # 量能上下文
+                ctx = _probe_context(df, i, p)
+                probes.append({
+                    "date": date,
+                    "ma_dir": ctx["ma_dir"],
+                    "offset_vs_pct": ctx["offset_vs_pct"],
+                    "avg_vs_pct": ctx["avg_vs_pct"],
+                    "recovered": recovered,
+                    "max_penetration": penetration,
+                })
 
-                if close >= ma_val:
-                    ep_start_date = str(df["date"].iloc[p_idx + ep_start_idx])
-                    episodes.append({
-                        "start": ep_start_date,
-                        "end": date,
-                        "days": i - ep_start_idx + 1,
-                        "max_penetration": ep_max_pen,
-                    })
-                    in_episode = False
-                    ep_max_pen = 0.0
-
-        if in_episode:
-            ep_start_date = str(df["date"].iloc[p_idx + ep_start_idx])
-            episodes.append({
-                "start": ep_start_date,
-                "end": "至今",
-                "days": len(ma_slice) - ep_start_idx,
-                "max_penetration": ep_max_pen,
-            })
-
-        result[p] = episodes
+        result[p] = probes
 
     return result
+
+
+def _probe_context(df, row_idx: int, period: int) -> dict:
+    """为探底日计算量能对比和均线方向."""
+    ctx: dict = {
+        "offset_vs_pct": None,
+        "avg_vs_pct": None,
+        "ma_dir": "",
+    }
+    try:
+        df_slice = df.iloc[:row_idx + 1]
+        if len(df_slice) < period + 1:
+            return ctx
+        off = get_offset_info(df_slice, period)
+        ctx["offset_vs_pct"] = off.get("vs_today_pct")
+        ctx["avg_vs_pct"] = off.get("avg_vs_today_pct")
+        mas = calc_ma(df_slice, [period])
+        ctx["ma_dir"] = ma_direction(mas[f"MA{period}"])
+    except Exception:
+        pass
+    return ctx
 
 
 class BaseBuyPointChecker(ABC):
@@ -294,7 +293,7 @@ class MAChecker(BaseBuyPointChecker):
     """
 
     MA_PERIODS = [60, 120, 240]
-    VOL_THRESHOLD = 1.1   # 今日成交额需超过扣抵量/后续均量的倍数
+    VOL_THRESHOLD = 1.0   # 今日量 > 扣抵量/后续均量即可
 
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         if df.empty:

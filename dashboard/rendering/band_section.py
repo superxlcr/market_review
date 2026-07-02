@@ -184,24 +184,12 @@ def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
                 f'</span>'
             )
 
-        # 收盘止损单元格
-        close_cell = "—"
-        if bp.close_stop > 0:
-            close_pct_str = f"-{bp.close_stop_pct:.1f}%" if bp.close_stop_pct > 0 else ""
-            close_cell = (
-                f'{bp.close_stop:.2f}'
-                f'<span style="font-size:12px;color:#888;">'
-                f' {close_pct_str} | {bp.close_stop_reason}'
-                f'</span>'
-            )
-
         rows_html += f"""<tr>
             <td style="color:{type_color};font-weight:bold;text-align:center;">{bp.type}</td>
             <td style="font-weight:600;text-align:center;">{bp.position}</td>
             <td style="text-align:right;font-weight:bold;">{bp.price:.2f}</td>
             <td style="color:{dist_color};font-weight:bold;text-align:right;">{dist_sign}{bp.distance_pct}%</td>
             <td style="text-align:right;font-size:14px;">{intra_cell}</td>
-            <td style="text-align:right;font-size:14px;">{close_cell}</td>
             <td style="text-align:center;color:#888;">{bp.position_size}</td>
             <td style="color:#555;font-size:13px;">{bp.reason}</td>
         </tr>"""
@@ -213,8 +201,7 @@ def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
             <th style="text-align:center;width:10%;">位置</th>
             <th style="text-align:right;width:9%;">价格</th>
             <th style="text-align:right;width:7%;">距离</th>
-            <th style="text-align:right;width:17%;">盘中止损</th>
-            <th style="text-align:right;width:17%;">收盘止损</th>
+            <th style="text-align:right;width:22%;">盘中止损</th>
             <th style="text-align:center;width:6%;">仓位</th>
             <th style="text-align:left;">原因</th>
         </tr></thead>
@@ -223,36 +210,61 @@ def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
     """)
 
 
-def render_ma_episodes(episodes: dict[int, list[dict]]) -> None:
-    """渲染均线跌破 episode 统计区块."""
-    if not episodes or all(len(v) == 0 for v in episodes.values()):
+def render_ma_probes(probes: dict[int, list[dict]]) -> None:
+    """渲染 MA 探底记录 — 开盘在MA上方、盘中跌破MA的日期."""
+    if not probes or all(len(v) == 0 for v in probes.values()):
         return
 
     st.caption("")  # spacer
-    st.markdown("**📊 均线跌破记录（P → 至今）**")
+    st.markdown("**📊 MA 探底记录（P → 至今）**")
+    st.caption("开盘在 MA 上方，盘中最低价跌破 MA 的交易日")
 
     for period in [60, 120, 240]:
-        ep_list = episodes.get(period, [])
-        if not ep_list:
+        probe_list = probes.get(period, [])
+        if not probe_list:
             continue
         rows = ""
-        for ep in ep_list:
+        for pr in probe_list:
+            ma_dir = pr.get("ma_dir", "")
+            dir_color = "#e53935" if ma_dir == "↑" else ("#43a047" if ma_dir == "↓" else "#888")
+            # 量能对比
+            off_pct = pr.get("offset_vs_pct")
+            avg_pct = pr.get("avg_vs_pct")
+            if off_pct is not None and avg_pct is not None:
+                off_sign = "+" if off_pct >= 0 else ""
+                avg_sign = "+" if avg_pct >= 0 else ""
+                off_color = "#e53935" if off_pct >= 0 else "#43a047"
+                avg_color = "#e53935" if avg_pct >= 0 else "#43a047"
+                vol_cell = (
+                    f'<span style="color:{off_color};">扣抵 {off_sign}{off_pct}%</span>'
+                    f' &nbsp;'
+                    f'<span style="color:{avg_color};">均量 {avg_sign}{avg_pct}%</span>'
+                )
+            else:
+                vol_cell = '<span style="color:#888;">—</span>'
+            # 收盘站回
+            recovered_icon = "✅" if pr.get("recovered") else "❌"
+
             rows += (
                 f'<tr>'
-                f'<td style="text-align:center;">{ep["start"]} ~ {ep["end"]}</td>'
-                f'<td style="text-align:center;">{ep["days"]}天</td>'
-                f'<td style="text-align:right;font-weight:bold;">{ep["max_penetration"]}%</td>'
+                f'<td style="text-align:center;">{pr["date"]}</td>'
+                f'<td style="text-align:center;color:{dir_color};font-weight:bold;">{ma_dir}</td>'
+                f'<td style="text-align:center;font-size:13px;">{vol_cell}</td>'
+                f'<td style="text-align:center;font-size:16px;">{recovered_icon}</td>'
+                f'<td style="text-align:right;font-weight:bold;">{pr["max_penetration"]}%</td>'
                 f'</tr>'
             )
         st.html(f"""
         <div style="margin-bottom:8px;">
         <span style="font-weight:600;">MA{period}</span>
-        <span style="color:#888;font-size:13px;"> — {len(ep_list)} 次跌破</span>
+        <span style="color:#888;font-size:13px;"> — {len(probe_list)} 次探底</span>
         <table style="width:100%;font-size:14px;border-collapse:collapse;margin-top:4px;">
             <thead><tr style="border-bottom:1px solid #e0e0e0;color:#888;font-size:12px;">
-                <th style="text-align:center;width:50%;">区间</th>
-                <th style="text-align:center;width:25%;">持续</th>
-                <th style="text-align:right;width:25%;">最大穿透</th>
+                <th style="text-align:center;width:20%;">日期</th>
+                <th style="text-align:center;width:8%;">方向</th>
+                <th style="text-align:center;width:42%;">当日量能对比</th>
+                <th style="text-align:center;width:12%;">收盘站回</th>
+                <th style="text-align:right;width:18%;">最大穿透</th>
             </tr></thead>
             <tbody>{rows}</tbody>
         </table>
