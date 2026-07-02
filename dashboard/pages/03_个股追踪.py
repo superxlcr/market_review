@@ -59,11 +59,15 @@ if not _stocks:
     st.info("暂无自选个股，请在 `config/watchlist_stocks.txt` 中配置")
     st.stop()
 
+# ── 3浪3 趋势方向（市场整体）──
+_w33 = _service.get_wave33_data(chart_days=15, rolling_days=21, end_date=_td)
+_trend_direction = _w33.get("trend", {}).get("direction", "flat")
+
 # ── 逐只渲染 ──
 from marketreview.tools.technical import calc_atr
 from marketreview.tools.band_analysis import analyze_band
-from marketreview.tools.buy_points import find_all_buy_points, load_buy_point_config
-from rendering.band_section import render_band_structure, plot_band_chart, render_buy_point_table
+from marketreview.tools.buy_points import find_all_buy_points, load_buy_point_config, compute_ma_episodes
+from rendering.band_section import render_band_structure, plot_band_chart, render_buy_point_table, render_ma_episodes
 
 for s in _stocks:
     code = s["ts_code"]
@@ -174,8 +178,14 @@ for s in _stocks:
             bp_config = load_buy_point_config()
             position_capital = bp_config.get("单个仓位资金", 0.0)
             buy_points = find_all_buy_points(band_df, band,
+                                              ts_code=code,
+                                              atr=atr,
+                                              trend_direction=_trend_direction,
                                               position_capital=position_capital)
             render_buy_point_table(buy_points)
+            # ── MA 跌破记录 ──
+            ma_episodes = compute_ma_episodes(band_df, band)
+            render_ma_episodes(ma_episodes)
 
 st.divider()
 st.caption("编辑自选个股：修改 `config/watchlist_stocks.txt` 后刷新页面")

@@ -47,11 +47,148 @@ def load_buy_point_config() -> dict[str, float]:
 class BuyPoint:
     """单个买点."""
     type: str           # "突破" | "重新突破" | "均线支撑"
-    position: str       # "回调一半" | "MA60" | "MA120" | "MA240"
+    position: str       # "回调一半" | "波段50%" | "MA60" | "MA120" | "MA240"
     price: float        # 买点价格
     distance_pct: float  # (买点价 / 当前价 - 1) × 100，正=买点高于现价
     position_size: str = "—"   # 仓位，待定
     reason: str = ""
+    # 止损
+    intraday_stop: float = 0.0          # 盘中止损价
+    intraday_stop_pct: float = 0.0      # 盘中止损跌幅%
+    intraday_stop_reason: str = ""      # "ATR 2.3%" | "10%上限" | "5%固定"
+    close_stop: float = 0.0             # 收盘止损价
+    close_stop_pct: float = 0.0         # 收盘止损跌幅%
+    close_stop_reason: str = ""         # "跌破买入价" | "跌破MA3%" | "跌破MA"
+
+
+# ── 板块阈值 ──────────────────────────────────────────────────
+
+def _get_board_threshold(ts_code: str) -> float:
+    """根据 ts_code 返回 2×涨跌幅过滤阈值（%）."""
+    if not ts_code:
+        return 20.0
+    code = ts_code.split(".")[0]
+    if code.startswith("30") or code.startswith("68"):
+        return 40.0
+    return 20.0
+
+
+# ── 止损计算 ──────────────────────────────────────────────────
+
+def _calc_stop_losses(bp: BuyPoint, atr_pct: float | None,
+                       trend: str, config: dict, ma_val: float = 0.0) -> None:
+    """为单个 BuyPoint 计算盘中和收盘止损价."""
+    atr_cap = config.get("ATR盘中止损上限", 10.0)
+    ma_intraday_pct = config.get("均线盘中止损", 5.0)
+    bp_price = bp.price
+
+    if bp.type == "均线支撑":
+        # 盘中：固定百分比
+        bp.intraday_stop_pct = ma_intraday_pct
+        bp.intraday_stop = round(bp_price * (1 - ma_intraday_pct / 100), 2)
+        bp.intraday_stop_reason = f"{ma_intraday_pct:.0f}%固定"
+        # 收盘
+        if trend == "up":
+            close_stop_price = round(ma_val * 0.97, 2)
+            bp.close_stop = close_stop_price
+            bp.close_stop_pct = round((ma_val - close_stop_price) / ma_val * 100, 1)
+            bp.close_stop_reason = "跌破MA3%（up≤3天）"
+        else:
+            bp.close_stop = ma_val
+            bp.close_stop_pct = 0.0
+            bp.close_stop_reason = "跌破MA"
+    else:
+        # 回调一半 / 波段50%
+        if atr_pct is not None and atr_pct > 0:
+            pct = min(atr_pct, atr_cap)
+            if pct >= atr_cap:
+                bp.intraday_stop_reason = f"{atr_cap:.0f}%上限"
+            else:
+                bp.intraday_stop_reason = f"ATR {atr_pct:.1f}%"
+        else:
+            pct = atr_cap
+            bp.intraday_stop_reason = f"{atr_cap:.0f}%上限"
+        bp.intraday_stop_pct = round(pct, 1)
+        bp.intraday_stop = round(bp_price * (1 - pct / 100), 2)
+        # 收盘：跌破买入价
+        bp.close_stop = bp_price
+        bp.close_stop_pct = 0.0
+        bp.close_stop_reason = "跌破买入价"
+
+
+# ── MA 跌破 Episode 统计 ──────────────────────────────────────
+
+def compute_ma_episodes(df, band, periods: list[int] | None = None):
+    """从 P 到今日，逐日重算均线，统计跌破 episode.
+
+    Episode: low < MA 开始 → close >= MA 结束.
+    返回: {60: [{start, end, days, max_penetration}, ...], ...}
+    """
+    if periods is None:
+        periods = [60, 120, 240]
+    if band.p_idx < 0 or len(df) <= 1:
+        return {}
+
+    p_idx = band.p_idx
+    mas = calc_ma(df, periods)
+    result: dict[int, list[dict]] = {}
+
+    for p in periods:
+        ma_key = f"MA{p}"
+        ma_full = mas[ma_key]
+        ma_slice = ma_full[p_idx:]
+
+        episodes: list[dict] = []
+        in_episode = False
+        ep_start_idx = -1
+        ep_max_pen = 0.0
+
+        for i in range(len(ma_slice)):
+            row_idx = p_idx + i
+            if row_idx >= len(df):
+                break
+            low = float(df["low"].iloc[row_idx])
+            close = float(df["close"].iloc[row_idx])
+            ma_val = ma_slice[i]
+            date = str(df["date"].iloc[row_idx])
+
+            if np.isnan(ma_val):
+                continue
+
+            if not in_episode:
+                if low < ma_val:
+                    in_episode = True
+                    ep_start_idx = i
+                    ep_max_pen = round((ma_val - low) / ma_val * 100, 1)
+            else:
+                if low < ma_val:
+                    pen = round((ma_val - low) / ma_val * 100, 1)
+                    if pen > ep_max_pen:
+                        ep_max_pen = pen
+
+                if close >= ma_val:
+                    ep_start_date = str(df["date"].iloc[p_idx + ep_start_idx])
+                    episodes.append({
+                        "start": ep_start_date,
+                        "end": date,
+                        "days": i - ep_start_idx + 1,
+                        "max_penetration": ep_max_pen,
+                    })
+                    in_episode = False
+                    ep_max_pen = 0.0
+
+        if in_episode:
+            ep_start_date = str(df["date"].iloc[p_idx + ep_start_idx])
+            episodes.append({
+                "start": ep_start_date,
+                "end": "至今",
+                "days": len(ma_slice) - ep_start_idx,
+                "max_penetration": ep_max_pen,
+            })
+
+        result[p] = episodes
+
+    return result
 
 
 class BaseBuyPointChecker(ABC):
@@ -238,14 +375,21 @@ def _calc_shares(price: float, capital: float) -> str:
 
 
 def find_all_buy_points(df, band: BandResult,
+                        ts_code: str = "",
+                        atr: float | None = None,
+                        trend_direction: str = "flat",
                         position_capital: float = 0.0) -> list[BuyPoint]:
-    """收集所有买点类型，按价格从高到低排序.
+    """收集所有买点类型，过滤后按价格从高到低排序.
 
     Args:
         df: K线 DataFrame
         band: 波段分析结果
+        ts_code: 股票代码（用于板块过滤）
+        atr: 最新 ATR 绝对值（None=不计算盘中止损）
+        trend_direction: 3浪3趋势方向 "up" | "down" | "flat"
         position_capital: 单个仓位资金（0=不计算仓位）
     """
+    config = load_buy_point_config()
     checkers: list[BaseBuyPointChecker] = [
         HalfRetraceChecker(),
         Band50Checker(),
@@ -254,6 +398,33 @@ def find_all_buy_points(df, band: BandResult,
     all_points: list[BuyPoint] = []
     for c in checkers:
         all_points.extend(c.check(df, band))
+
+    # ── 涨幅过滤 ──
+    threshold = _get_board_threshold(ts_code)
+    all_points = [bp for bp in all_points if bp.distance_pct <= threshold]
+
+    # ── ATR% ──
+    atr_pct: float | None = None
+    if atr is not None and atr > 0 and band.current_price > 0:
+        atr_pct = round(atr / band.current_price * 100, 1)
+
+    # ── 计算止损 ──
+    for bp in all_points:
+        # 均线买点需要 MA 值
+        ma_val = 0.0
+        if bp.type == "均线支撑":
+            # 从 position 字段提取 period
+            try:
+                ma_period = int(bp.position.replace("MA", ""))
+                mas = calc_ma(df, [ma_period])
+                ma_vals = mas[f"MA{ma_period}"]
+                for v in reversed(ma_vals):
+                    if not np.isnan(v):
+                        ma_val = float(v)
+                        break
+            except (ValueError, KeyError):
+                pass
+        _calc_stop_losses(bp, atr_pct, trend_direction, config, ma_val)
 
     # 计算仓位
     if position_capital > 0:

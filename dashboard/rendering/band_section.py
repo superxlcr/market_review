@@ -150,12 +150,16 @@ def render_band_structure(band: BandResult) -> None:
 
 
 def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
-    """渲染买点提示表格 — 类型/位置/价格/距离/仓位/原因."""
+    """渲染买点提示表格 — 类型/位置/价格/距离/盘中止损/收盘止损/仓位/原因."""
     if not buy_points:
         st.caption("暂无符合条件的买点")
         return
 
-    st.markdown("**🎯 买点提示**")
+    st.markdown(
+        "**🎯 买点提示** "
+        "<span style='font-size:13px;color:#888;'>已过滤涨幅超2倍涨跌幅的买点</span>",
+        unsafe_allow_html=True,
+    )
 
     rows_html = ""
     for bp in buy_points:
@@ -170,25 +174,87 @@ def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
         else:
             type_color = "#1976d2"
 
+        # 盘中止损单元格
+        intra_cell = "—"
+        if bp.intraday_stop > 0:
+            intra_cell = (
+                f'{bp.intraday_stop:.2f}'
+                f'<span style="font-size:12px;color:#888;">'
+                f' (-{bp.intraday_stop_pct:.1f}% | {bp.intraday_stop_reason})'
+                f'</span>'
+            )
+
+        # 收盘止损单元格
+        close_cell = "—"
+        if bp.close_stop > 0:
+            close_pct_str = f"-{bp.close_stop_pct:.1f}%" if bp.close_stop_pct > 0 else ""
+            close_cell = (
+                f'{bp.close_stop:.2f}'
+                f'<span style="font-size:12px;color:#888;">'
+                f' {close_pct_str} | {bp.close_stop_reason}'
+                f'</span>'
+            )
+
         rows_html += f"""<tr>
             <td style="color:{type_color};font-weight:bold;text-align:center;">{bp.type}</td>
             <td style="font-weight:600;text-align:center;">{bp.position}</td>
             <td style="text-align:right;font-weight:bold;">{bp.price:.2f}</td>
             <td style="color:{dist_color};font-weight:bold;text-align:right;">{dist_sign}{bp.distance_pct}%</td>
+            <td style="text-align:right;font-size:14px;">{intra_cell}</td>
+            <td style="text-align:right;font-size:14px;">{close_cell}</td>
             <td style="text-align:center;color:#888;">{bp.position_size}</td>
-            <td style="color:#555;font-size:14px;">{bp.reason}</td>
+            <td style="color:#555;font-size:13px;">{bp.reason}</td>
         </tr>"""
 
     st.html(f"""
     <table style="width:100%;font-size:16px;border-collapse:collapse;">
-        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:14px;">
-            <th style="text-align:center;width:10%;">类型</th>
-            <th style="text-align:center;width:12%;">位置</th>
-            <th style="text-align:right;width:12%;">价格</th>
-            <th style="text-align:right;width:10%;">距离</th>
-            <th style="text-align:center;width:8%;">仓位</th>
+        <thead><tr style="border-bottom:2px solid #e0e0e0;color:#888;font-size:13px;">
+            <th style="text-align:center;width:8%;">类型</th>
+            <th style="text-align:center;width:10%;">位置</th>
+            <th style="text-align:right;width:9%;">价格</th>
+            <th style="text-align:right;width:7%;">距离</th>
+            <th style="text-align:right;width:17%;">盘中止损</th>
+            <th style="text-align:right;width:17%;">收盘止损</th>
+            <th style="text-align:center;width:6%;">仓位</th>
             <th style="text-align:left;">原因</th>
         </tr></thead>
         <tbody>{rows_html}</tbody>
     </table>
     """)
+
+
+def render_ma_episodes(episodes: dict[int, list[dict]]) -> None:
+    """渲染均线跌破 episode 统计区块."""
+    if not episodes or all(len(v) == 0 for v in episodes.values()):
+        return
+
+    st.caption("")  # spacer
+    st.markdown("**📊 均线跌破记录（P → 至今）**")
+
+    for period in [60, 120, 240]:
+        ep_list = episodes.get(period, [])
+        if not ep_list:
+            continue
+        rows = ""
+        for ep in ep_list:
+            rows += (
+                f'<tr>'
+                f'<td style="text-align:center;">{ep["start"]} ~ {ep["end"]}</td>'
+                f'<td style="text-align:center;">{ep["days"]}天</td>'
+                f'<td style="text-align:right;font-weight:bold;">{ep["max_penetration"]}%</td>'
+                f'</tr>'
+            )
+        st.html(f"""
+        <div style="margin-bottom:8px;">
+        <span style="font-weight:600;">MA{period}</span>
+        <span style="color:#888;font-size:13px;"> — {len(ep_list)} 次跌破</span>
+        <table style="width:100%;font-size:14px;border-collapse:collapse;margin-top:4px;">
+            <thead><tr style="border-bottom:1px solid #e0e0e0;color:#888;font-size:12px;">
+                <th style="text-align:center;width:50%;">区间</th>
+                <th style="text-align:center;width:25%;">持续</th>
+                <th style="text-align:right;width:25%;">最大穿透</th>
+            </tr></thead>
+            <tbody>{rows}</tbody>
+        </table>
+        </div>
+        """)
