@@ -103,6 +103,47 @@ class HalfRetraceChecker(BaseBuyPointChecker):
         )]
 
 
+# ── 波段50%买点 ─────────────────────────────────────────────
+
+class Band50Checker(BaseBuyPointChecker):
+    """波段50%位置买点.
+
+    条件: 已跌破62.5%（trigger_625_date 非空）+ 波段幅度成立 + 回调≥13天.
+    价格: band.line_50（趋势生命线，静态 = (P+V)/2）
+    """
+
+    def check(self, df, band: BandResult) -> list[BuyPoint]:
+        if not band.trigger_625_date:
+            return []
+        if not band.v_qualified:
+            return []
+        pullback_days = band.rows_count - 1 - band.p_idx
+        if pullback_days < 13:
+            return []
+
+        line_50 = band.line_50
+        if line_50 <= 0:
+            return []
+
+        cur = band.current_price
+        dist = round((line_50 / cur - 1) * 100, 1)
+
+        if cur < line_50:
+            bp_type = "突破"
+        else:
+            bp_type = "重新突破"
+
+        reason = f"回调{pullback_days}天 ≥ 13天，且跌破过{band.line_625:.2f}"
+
+        return [BuyPoint(
+            type=bp_type,
+            position="波段50%",
+            price=line_50,
+            distance_pct=dist,
+            reason=reason,
+        )]
+
+
 # ── 均线买点 ──────────────────────────────────────────────────
 
 class MAChecker(BaseBuyPointChecker):
@@ -207,6 +248,7 @@ def find_all_buy_points(df, band: BandResult,
     """
     checkers: list[BaseBuyPointChecker] = [
         HalfRetraceChecker(),
+        Band50Checker(),
         MAChecker(),
     ]
     all_points: list[BuyPoint] = []
