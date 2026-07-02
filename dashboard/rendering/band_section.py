@@ -62,6 +62,22 @@ def plot_band_chart(df: pd.DataFrame, band: BandResult,
     y_pad = (y_max - y_min) * 0.1
     fig.update_yaxes(range=[y_min - y_pad, y_max + y_pad], row=1, col=1)
 
+    # ── 扣抵日标记（三角形，放在 K 线下方）──
+    _OFFSET_COLORS = {60: "#ff9800", 120: "#9c27b0", 240: "#4caf50"}
+    n_total = len(df)
+    for period, color in _OFFSET_COLORS.items():
+        idx = n_total - 1 - period
+        if idx >= 0 and idx >= n_total - display_tail:
+            offset_date = str(df["date"].iloc[idx])
+            offset_low = float(df["low"].iloc[idx])
+            fig.add_trace(go.Scatter(
+                x=[offset_date], y=[offset_low],
+                mode="markers",
+                marker=dict(color=color, size=10, symbol="triangle-down"),
+                name=f"扣抵MA{period}",
+                hovertemplate=f"扣抵日 MA{period}<br>%{{x}}<extra></extra>",
+            ), row=1, col=1)
+
     return fig
 
 
