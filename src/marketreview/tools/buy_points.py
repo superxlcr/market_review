@@ -158,6 +158,7 @@ def compute_ma_probes(df, band, periods: list[int] | None = None):
                 ctx = _probe_context(df, i, p)
                 probes.append({
                     "date": date,
+                    "ma_price": round(ma_val, 2),
                     "ma_dir": ctx["ma_dir"],
                     "offset_vs_pct": ctx["offset_vs_pct"],
                     "avg_vs_pct": ctx["avg_vs_pct"],

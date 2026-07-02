@@ -248,6 +248,7 @@ def render_ma_probes(probes: dict[int, list[dict]]) -> None:
             rows += (
                 f'<tr>'
                 f'<td style="text-align:center;">{pr["date"]}</td>'
+                f'<td style="text-align:right;">{pr.get("ma_price", "—")}</td>'
                 f'<td style="text-align:center;color:{dir_color};font-weight:bold;">{ma_dir}</td>'
                 f'<td style="text-align:center;font-size:13px;">{vol_cell}</td>'
                 f'<td style="text-align:center;font-size:16px;">{recovered_icon}</td>'
@@ -260,9 +261,10 @@ def render_ma_probes(probes: dict[int, list[dict]]) -> None:
         <span style="color:#888;font-size:13px;"> — {len(probe_list)} 次探底</span>
         <table style="width:100%;font-size:14px;border-collapse:collapse;margin-top:4px;">
             <thead><tr style="border-bottom:1px solid #e0e0e0;color:#888;font-size:12px;">
-                <th style="text-align:center;width:20%;">日期</th>
+                <th style="text-align:center;width:16%;">日期</th>
+                <th style="text-align:right;width:12%;">MA价格</th>
                 <th style="text-align:center;width:8%;">方向</th>
-                <th style="text-align:center;width:42%;">当日量能对比</th>
+                <th style="text-align:center;width:34%;">当日量能对比</th>
                 <th style="text-align:center;width:12%;">收盘站回</th>
                 <th style="text-align:right;width:18%;">最大穿透</th>
             </tr></thead>
