@@ -169,7 +169,7 @@ for s in _stocks:
             render_band_structure(band)
             st.divider()
             st.caption(f"📈 {name} — 波段趋势线")
-            band_fig = plot_band_chart(band_df, band, display_tail=250,
+            band_fig = plot_band_chart(band_df, band, display_tail=150,
                                         ma_periods=[20, 60, 120, 240])
             if band_fig:
                 st.plotly_chart(band_fig, use_container_width=True)

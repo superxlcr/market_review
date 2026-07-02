@@ -24,13 +24,13 @@ def plot_band_chart(df: pd.DataFrame, band: BandResult,
     fig.add_hline(y=band.p_price, line=dict(color="#e53935", width=1.5, dash="dot"),
                   annotation_text=f"P {band.p_price:.2f}", annotation_position="top left",
                   annotation_font=dict(color="#e53935", size=13), row=1, col=1)
-    fig.add_hline(y=band.line_75, line=dict(color="rgba(156,39,176,0.35)", width=1, dash="dash"),
+    fig.add_hline(y=band.line_75, line=dict(color="rgba(156,39,176,0.5)", width=1, dash="dash"),
                   annotation_text=f"75% {band.line_75:.2f}", annotation_position="top left",
                   annotation_font=dict(color="#9c27b0", size=12), row=1, col=1)
-    fig.add_hline(y=band.line_625, line=dict(color="rgba(255,152,0,0.35)", width=1.2, dash="dash"),
+    fig.add_hline(y=band.line_625, line=dict(color="rgba(255,152,0,0.5)", width=1.2, dash="dash"),
                   annotation_text=f"62.5% {band.line_625:.2f}", annotation_position="top left",
                   annotation_font=dict(color="#ff9800", size=12), row=1, col=1)
-    fig.add_hline(y=band.line_50, line=dict(color="rgba(25,118,210,0.35)", width=2, dash="dash"),
+    fig.add_hline(y=band.line_50, line=dict(color="rgba(25,118,210,0.5)", width=2, dash="dash"),
                   annotation_text=f"50% {band.line_50:.2f}",
                   annotation_position="bottom left",
                   annotation_font=dict(color="#1976d2", size=13), row=1, col=1)

@@ -402,7 +402,12 @@ def find_all_buy_points(df, band: BandResult,
 
     # ── 涨幅过滤 ──
     threshold = _get_board_threshold(ts_code)
-    all_points = [bp for bp in all_points if bp.distance_pct <= threshold]
+    filtered_out = [bp for bp in all_points if abs(bp.distance_pct) > threshold]
+    if filtered_out:
+        log.info("涨幅过滤: ts_code=%s threshold=%.0f%% 过滤 %d 条: %s",
+                 ts_code, threshold, len(filtered_out),
+                 [(bp.position, f"{bp.distance_pct:.1f}%") for bp in filtered_out])
+    all_points = [bp for bp in all_points if abs(bp.distance_pct) <= threshold]
 
     # ── ATR% ──
     atr_pct: float | None = None
