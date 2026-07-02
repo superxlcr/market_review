@@ -75,7 +75,7 @@ def plot_band_chart(df: pd.DataFrame, band: BandResult,
                 x=[offset_date], y=[offset_y],
                 mode="markers",
                 marker=dict(
-                    color=color, size=14, symbol="triangle-down",
+                    color=color, size=14, symbol="triangle-up",
                     line=dict(color="white", width=1),
                 ),
                 name=f"扣抵MA{period}",
