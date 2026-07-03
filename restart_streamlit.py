@@ -1,7 +1,10 @@
 """
 restart_streamlit.py — Kill, clear pycache, restart Streamlit on port 8501.
 
-Usage: .venv/Scripts/python restart_streamlit.py
+Usage:
+    .venv/Scripts/python restart_streamlit.py                # default: 0.0.0.0:8501
+    .venv/Scripts/python restart_streamlit.py --bind 127.0.0.1  # workaround CLOSE_WAIT on 192.168.0.223
+    .venv/Scripts/python restart_streamlit.py --port 8502 --bind 0.0.0.0
 """
 
 import subprocess
@@ -9,9 +12,11 @@ import os
 import shutil
 import sys
 import time
+import argparse
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 PORT = 8501
+BIND = "0.0.0.0"
 
 
 def kill_on_port(port: int):
@@ -48,7 +53,7 @@ def clear_pycache():
     return removed
 
 
-def start_streamlit():
+def start_streamlit(bind: str = "0.0.0.0"):
     """Start Streamlit in background, wait for it to come up."""
     log_path = os.path.join(PROJECT_ROOT, "logs", "streamlit_restart.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -56,13 +61,15 @@ def start_streamlit():
         subprocess.Popen(
             [
                 sys.executable, "-m", "streamlit", "run",
-                "dashboard/app.py", "--server.port", str(PORT),
+                "dashboard/app.py",
+                "--server.port", str(PORT),
+                "--server.address", bind,
             ],
             cwd=PROJECT_ROOT,
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-    print(f"  Starting Streamlit on port {PORT}...")
+    print(f"  Starting Streamlit on {bind}:{PORT}...")
     time.sleep(5)
 
     # Check for startup errors
@@ -84,15 +91,23 @@ def start_streamlit():
 
 
 def main():
-    print("=== Restart Streamlit ===")
-    print("[1/3] Kill processes on port 8501...")
-    kill_on_port(PORT)
+    parser = argparse.ArgumentParser(description="Kill, clear pycache, restart Streamlit")
+    parser.add_argument("--port", "-p", type=int, default=PORT, help=f"Port (default: {PORT})")
+    parser.add_argument("--bind", "-b", default=BIND, help=f"Bind address (default: {BIND})")
+    args = parser.parse_args()
+
+    port = args.port
+    bind = args.bind
+
+    print(f"=== Restart Streamlit ({bind}:{port}) ===")
+    print(f"[1/3] Kill processes on port {port}...")
+    kill_on_port(port)
 
     print("[2/3] Clear pycache...")
     clear_pycache()
 
     print("[3/3] Start Streamlit...")
-    start_streamlit()
+    start_streamlit(bind)
 
     print("Done.")
 

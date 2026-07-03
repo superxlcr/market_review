@@ -25,8 +25,8 @@ class ValleyPoint:
 
 
 @dataclass
-class PeakPoint:
-    """局部波峰."""
+class ClosePeak:
+    """局部收盘波峰（收盘价局部高点，用于21日收盘高点买点）."""
     price: float = 0.0
     date: str = ""
     idx: int = -1
@@ -74,42 +74,42 @@ def find_valleys(
     return valleys
 
 
-def find_peaks(
+def find_close_peaks(
     rows_asc: list[dict],
     start_idx: int,
     end_idx: int,
     neighborhood: int = 10,
-) -> list[PeakPoint]:
-    """在 [start_idx, end_idx] 范围内找局部波峰.
+) -> list[ClosePeak]:
+    """在 [start_idx, end_idx] 范围内找局部收盘波峰.
 
-    局部波峰: 该 K 线的 high 比左右各 neighborhood 天内的 high 都高.
-    逻辑与 find_valleys 对称，反过来而已.
+    局部收盘波峰: 该 K 线的 close 比左右各 neighborhood 天内的 close 都高.
+    逻辑与 find_valleys 对称，反过来而已，但用收盘价而非最高价.
     """
-    peaks: list[PeakPoint] = []
+    peaks: list[ClosePeak] = []
     n = len(rows_asc)
 
     for i in range(start_idx, end_idx + 1):
-        cur_high = _safe_float(rows_asc[i].get("high"))
-        if cur_high <= 0:
+        cur_close = _safe_float(rows_asc[i].get("close"))
+        if cur_close <= 0:
             continue
 
         # 检查左边 neighborhood 天
         left_start = max(0, i - neighborhood)
         left_ok = all(
-            cur_high > _safe_float(rows_asc[j].get("high"))
+            cur_close > _safe_float(rows_asc[j].get("close"))
             for j in range(left_start, i)
         )
 
         # 检查右边 neighborhood 天
         right_end = min(n - 1, i + neighborhood)
         right_ok = all(
-            cur_high > _safe_float(rows_asc[j].get("high"))
+            cur_close > _safe_float(rows_asc[j].get("close"))
             for j in range(i + 1, right_end + 1)
         )
 
         if left_ok and right_ok:
-            peaks.append(PeakPoint(
-                price=cur_high,
+            peaks.append(ClosePeak(
+                price=cur_close,
                 date=str(rows_asc[i].get("date", "")),
                 idx=i,
             ))
@@ -134,8 +134,8 @@ class BandResult:
     # 局部谷底列表
     valleys: list = field(default_factory=list)
 
-    # 局部波峰列表（P→今日）
-    peaks: list = field(default_factory=list)
+    # 局部收盘波峰列表（P→今日，用于21日收盘高点买点）
+    close_peaks: list = field(default_factory=list)
 
     # 资格
     v_qualified: bool = False   # V/P < 3/7 ?
@@ -224,9 +224,9 @@ def analyze_band(
     log.info("Found %d local valleys in [%d, %d] (lookback=%d, P@%d)",
              len(result.valleys), valley_search_start, peak_idx, peak_lookback, peak_idx)
 
-    # ── 1.6 找 P→今日 的局部波峰（用于 21日高点 买点）──
-    result.peaks = find_peaks(rows_asc, peak_idx, today_idx, neighborhood=10)
-    log.info("Found %d local peaks in [%d, %d]", len(result.peaks), peak_idx, today_idx)
+    # ── 1.6 找 P→今日 的局部收盘波峰（用于 21日收盘高点 买点）──
+    result.close_peaks = find_close_peaks(rows_asc, peak_idx, today_idx, neighborhood=10)
+    log.info("Found %d close peaks in [%d, %d]", len(result.close_peaks), peak_idx, today_idx)
 
     # ── 2. 选 V — 局部谷底中最高且满足 V/P < 3/7 ──
     qualified = [v for v in result.valleys if v.price / peak_high < (3.0 / 7.0)]

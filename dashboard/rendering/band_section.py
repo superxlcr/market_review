@@ -270,17 +270,17 @@ def render_ma_probes(probes: dict[int, list[dict]]) -> None:
                 f'<td style="text-align:center;">{pr["date"]}</td>'
                 f'<td style="text-align:right;">{pr.get("ma_price", "—")}</td>'
                 f'<td style="text-align:center;color:{dir_color};font-weight:bold;">{ma_dir}</td>'
-                f'<td style="text-align:center;font-size:13px;">{vol_cell}</td>'
+                f'<td style="text-align:center;font-size:14px;">{vol_cell}</td>'
                 f'<td style="text-align:center;font-size:16px;">{recovered_icon}</td>'
                 f'<td style="text-align:right;font-weight:bold;">{pr["max_penetration"]}%</td>'
                 f'</tr>'
             )
         st.html(f"""
         <div style="margin-bottom:8px;">
-        <span style="font-weight:600;">MA{period}</span>
-        <span style="color:#888;font-size:13px;"> — {len(probe_list)} 次探底</span>
-        <table style="width:100%;font-size:14px;border-collapse:collapse;margin-top:4px;">
-            <thead><tr style="border-bottom:1px solid #e0e0e0;color:#888;font-size:12px;">
+        <span style="font-weight:600;font-size:16px;">MA{period}</span>
+        <span style="color:#888;font-size:14px;"> — {len(probe_list)} 次探底</span>
+        <table style="width:100%;font-size:16px;border-collapse:collapse;margin-top:4px;">
+            <thead><tr style="border-bottom:1px solid #e0e0e0;color:#888;font-size:14px;">
                 <th style="text-align:center;width:16%;">日期</th>
                 <th style="text-align:right;width:12%;">MA价格</th>
                 <th style="text-align:center;width:8%;">方向</th>
