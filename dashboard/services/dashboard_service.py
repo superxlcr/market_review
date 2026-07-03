@@ -486,7 +486,8 @@ class DashboardService:
                     return prev_date
         return None
 
-    def get_industry_analysis_set(self, trade_date: str) -> list[dict]:
+    def get_industry_analysis_set(self, trade_date: str,
+                                   ranking: list[dict] | None = None) -> list[dict]:
         """
         Select industries for detailed analysis on the sector page.
 
@@ -498,7 +499,8 @@ class DashboardService:
         Returns list of dicts with keys: code, name, level, pct_change, close,
         amount, reasons (list of label strings).
         """
-        ranking = self.get_industry_ranking(trade_date)
+        if ranking is None:
+            ranking = self.get_industry_ranking(trade_date)
         if not ranking:
             return []
 
@@ -1565,8 +1567,15 @@ class DashboardService:
         }
         market_data_json = _json.dumps(market_data, ensure_ascii=False)
 
-        # ── 2. Prepare industry tasks ──
-        candidates = self.get_industry_analysis_set(trade_date)
+        # ── 2. Guard: industry data must exist for today ──
+        ranking = self.get_industry_ranking(trade_date)
+        if not ranking:
+            log.warning("generate_ai_sector_analysis: no industry data for %s — abort",
+                       trade_date)
+            return {"error": f"今日（{trade_date}）行业指数数据尚未发布，AI 行业分析暂不生成"}
+
+        # ── 3. Prepare industry tasks ──
+        candidates = self.get_industry_analysis_set(trade_date, ranking)
 
         # Merge watchlist industries (dedup by code)
         watchlist = self.get_watchlist_industries()["matched"]
@@ -1798,7 +1807,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "8.3.0"
+    _AI_VERSION = "8.4.1"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """

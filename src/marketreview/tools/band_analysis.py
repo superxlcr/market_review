@@ -24,6 +24,14 @@ class ValleyPoint:
     idx: int = -1
 
 
+@dataclass
+class PeakPoint:
+    """局部波峰."""
+    price: float = 0.0
+    date: str = ""
+    idx: int = -1
+
+
 def find_valleys(
     rows_asc: list[dict],
     start_idx: int,
@@ -66,6 +74,49 @@ def find_valleys(
     return valleys
 
 
+def find_peaks(
+    rows_asc: list[dict],
+    start_idx: int,
+    end_idx: int,
+    neighborhood: int = 10,
+) -> list[PeakPoint]:
+    """在 [start_idx, end_idx] 范围内找局部波峰.
+
+    局部波峰: 该 K 线的 high 比左右各 neighborhood 天内的 high 都高.
+    逻辑与 find_valleys 对称，反过来而已.
+    """
+    peaks: list[PeakPoint] = []
+    n = len(rows_asc)
+
+    for i in range(start_idx, end_idx + 1):
+        cur_high = _safe_float(rows_asc[i].get("high"))
+        if cur_high <= 0:
+            continue
+
+        # 检查左边 neighborhood 天
+        left_start = max(0, i - neighborhood)
+        left_ok = all(
+            cur_high > _safe_float(rows_asc[j].get("high"))
+            for j in range(left_start, i)
+        )
+
+        # 检查右边 neighborhood 天
+        right_end = min(n - 1, i + neighborhood)
+        right_ok = all(
+            cur_high > _safe_float(rows_asc[j].get("high"))
+            for j in range(i + 1, right_end + 1)
+        )
+
+        if left_ok and right_ok:
+            peaks.append(PeakPoint(
+                price=cur_high,
+                date=str(rows_asc[i].get("date", "")),
+                idx=i,
+            ))
+
+    return peaks
+
+
 
 @dataclass
 class BandResult:
@@ -82,6 +133,9 @@ class BandResult:
 
     # 局部谷底列表
     valleys: list = field(default_factory=list)
+
+    # 局部波峰列表（P→今日）
+    peaks: list = field(default_factory=list)
 
     # 资格
     v_qualified: bool = False   # V/P < 3/7 ?
@@ -169,6 +223,10 @@ def analyze_band(
     result.valleys = find_valleys(rows_asc, valley_search_start, peak_idx, neighborhood=5)
     log.info("Found %d local valleys in [%d, %d] (lookback=%d, P@%d)",
              len(result.valleys), valley_search_start, peak_idx, peak_lookback, peak_idx)
+
+    # ── 1.6 找 P→今日 的局部波峰（用于 21日高点 买点）──
+    result.peaks = find_peaks(rows_asc, peak_idx, today_idx, neighborhood=10)
+    log.info("Found %d local peaks in [%d, %d]", len(result.peaks), peak_idx, today_idx)
 
     # ── 2. 选 V — 局部谷底中最高且满足 V/P < 3/7 ──
     qualified = [v for v in result.valleys if v.price / peak_high < (3.0 / 7.0)]

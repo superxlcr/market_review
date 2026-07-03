@@ -47,11 +47,12 @@ def load_buy_point_config() -> dict[str, float]:
 class BuyPoint:
     """单个买点."""
     type: str           # "突破" | "重新突破" | "均线支撑"
-    position: str       # "回调一半" | "波段50%" | "MA60" | "MA120" | "MA240"
+    position: str       # "回调一半" | "波段50%" | "MA60" | "MA120" | "MA240" | "21日高点"
     price: float        # 买点价格
     distance_pct: float  # (买点价 / 当前价 - 1) × 100，正=买点高于现价
     position_size: str = "—"   # 仓位，待定
     reason: str = ""
+    capital_multiplier: float = 1.0  # 仓位资金乘数（1.0=标准仓，0.5=半仓）
     # 止损
     intraday_stop: float = 0.0          # 盘中止损价
     intraday_stop_pct: float = 0.0      # 盘中止损跌幅%
@@ -282,6 +283,63 @@ class Band50Checker(BaseBuyPointChecker):
         )]
 
 
+# ── 21日高点买点 ─────────────────────────────────────────────
+
+class High21Checker(BaseBuyPointChecker):
+    """21日高点买点.
+
+    从 P 到今日找局部波峰，波峰距今 ≥ 21天 且价格在回调一半上方。
+    风险较高，仓位减半（capital_multiplier=0.5）。
+    """
+
+    def check(self, df, band: BandResult) -> list[BuyPoint]:
+        if not band.v_qualified:
+            return []
+        if not band.trigger_625_date:
+            return []
+
+        # 回调一半价格
+        hr_latest = band.half_retrace_series[-1]["price"] if band.half_retrace_series else 0.0
+        if hr_latest <= 0:
+            return []
+
+        cur = band.current_price
+        today_idx = len(df) - 1
+        pullback_days = band.rows_count - 1 - band.p_idx
+        results: list[BuyPoint] = []
+
+        for peak in band.peaks:
+            days_ago = today_idx - peak.idx
+            if days_ago < 21:
+                continue
+            if peak.price <= hr_latest:
+                continue
+
+            dist = round((peak.price / cur - 1) * 100, 1)
+
+            if cur < peak.price:
+                bp_type = "突破"
+            else:
+                bp_type = "重新突破"
+
+            reason = (
+                f"回调{pullback_days}天，波峰{peak.price:.2f}（{peak.date}），"
+                f"距今{days_ago}天 ≥ 21天，价格高于回调一半{hr_latest:.2f}"
+                f" ｜ ⚠️风险较高，仓位减半"
+            )
+
+            results.append(BuyPoint(
+                type=bp_type,
+                position="21日高点",
+                price=peak.price,
+                distance_pct=dist,
+                reason=reason,
+                capital_multiplier=0.5,
+            ))
+
+        return results
+
+
 # ── 均线买点 ──────────────────────────────────────────────────
 
 class MAChecker(BaseBuyPointChecker):
@@ -394,6 +452,7 @@ def find_all_buy_points(df, band: BandResult,
     checkers: list[BaseBuyPointChecker] = [
         HalfRetraceChecker(),
         Band50Checker(),
+        High21Checker(),
         MAChecker(),
     ]
     all_points: list[BuyPoint] = []
@@ -432,10 +491,11 @@ def find_all_buy_points(df, band: BandResult,
                 pass
         _calc_stop_losses(bp, atr_pct, trend_direction, config, ma_val)
 
-    # 计算仓位
+    # 计算仓位（应用 capital_multiplier，如 21日高点 半仓）
     if position_capital > 0:
         for bp in all_points:
-            bp.position_size = _calc_shares(bp.price, position_capital)
+            capital = position_capital * bp.capital_multiplier
+            bp.position_size = _calc_shares(bp.price, capital)
 
     all_points.sort(key=lambda bp: bp.price, reverse=True)
     return all_points
