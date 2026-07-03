@@ -231,7 +231,7 @@ class HalfRetraceChecker(BaseBuyPointChecker):
         else:
             bp_type = "重新突破"
 
-        reason = f"回调{pullback_days}天 ≥ 13天，且跌破过{band.line_625:.2f}"
+        reason = f"回调{pullback_days}天 ≥ 13天，且跌破过波段 62.5% {band.line_625:.2f}"
 
         return [BuyPoint(
             type=bp_type,
@@ -272,7 +272,7 @@ class Band50Checker(BaseBuyPointChecker):
         else:
             bp_type = "重新突破"
 
-        reason = f"回调{pullback_days}天 ≥ 13天，且跌破过{band.line_625:.2f}"
+        reason = f"回调{pullback_days}天 ≥ 13天，且跌破过波段 62.5% {band.line_625:.2f}"
 
         return [BuyPoint(
             type=bp_type,

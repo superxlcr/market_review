@@ -199,7 +199,7 @@ def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
         if bp.intraday_stop > 0:
             intra_cell = (
                 f'{bp.intraday_stop:.2f}'
-                f'<span style="font-size:12px;color:#888;">'
+                f'<span style="font-size:14px;color:#888;">'
                 f' (-{bp.intraday_stop_pct:.1f}% | {bp.intraday_stop_reason})'
                 f'</span>'
             )
@@ -209,9 +209,9 @@ def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
             <td style="font-weight:600;text-align:center;">{bp.position}</td>
             <td style="text-align:right;font-weight:bold;">{bp.price:.2f}</td>
             <td style="color:{dist_color};font-weight:bold;text-align:right;">{dist_sign}{bp.distance_pct}%</td>
-            <td style="text-align:right;font-size:14px;">{intra_cell}</td>
-            <td style="text-align:center;color:#888;">{bp.position_size}</td>
-            <td style="color:#555;font-size:13px;">{bp.reason}</td>
+            <td style="text-align:right;font-size:17px;">{intra_cell}</td>
+            <td style="text-align:center;color:#888;font-size:19px;padding:0 10px;">{bp.position_size}</td>
+            <td style="color:#555;font-size:16px;">{bp.reason}</td>
         </tr>"""
 
     st.html(f"""
@@ -270,17 +270,17 @@ def render_ma_probes(probes: dict[int, list[dict]]) -> None:
                 f'<td style="text-align:center;">{pr["date"]}</td>'
                 f'<td style="text-align:right;">{pr.get("ma_price", "—")}</td>'
                 f'<td style="text-align:center;color:{dir_color};font-weight:bold;">{ma_dir}</td>'
-                f'<td style="text-align:center;font-size:14px;">{vol_cell}</td>'
-                f'<td style="text-align:center;font-size:16px;">{recovered_icon}</td>'
+                f'<td style="text-align:center;font-size:17px;">{vol_cell}</td>'
+                f'<td style="text-align:center;font-size:19px;">{recovered_icon}</td>'
                 f'<td style="text-align:right;font-weight:bold;">{pr["max_penetration"]}%</td>'
                 f'</tr>'
             )
         st.html(f"""
         <div style="margin-bottom:8px;">
-        <span style="font-weight:600;font-size:16px;">MA{period}</span>
-        <span style="color:#888;font-size:14px;"> — {len(probe_list)} 次探底</span>
-        <table style="width:100%;font-size:16px;border-collapse:collapse;margin-top:4px;">
-            <thead><tr style="border-bottom:1px solid #e0e0e0;color:#888;font-size:14px;">
+        <span style="font-weight:600;font-size:19px;">MA{period}</span>
+        <span style="color:#888;font-size:17px;"> — {len(probe_list)} 次探底</span>
+        <table style="width:100%;font-size:19px;border-collapse:collapse;margin-top:4px;">
+            <thead><tr style="border-bottom:1px solid #e0e0e0;color:#888;font-size:17px;">
                 <th style="text-align:center;width:16%;">日期</th>
                 <th style="text-align:right;width:12%;">MA价格</th>
                 <th style="text-align:center;width:8%;">方向</th>
