@@ -24,21 +24,12 @@ if not _td:
     st.warning("⚠️ 尚未选择日期，请前往「控制台」设置")
     st.stop()
 
-# ── Strategy guard ──
-_strategy_class = st.session_state.get("selected_strategy_class")
-_strategy_name = st.session_state.get("selected_strategy_name", "")
-if not _strategy_class:
-    st.warning("⚠️ 尚未选择战法策略，请前往「控制台」设置")
-    st.stop()
-
 st.title("📋 个股追踪")
 st.caption("Agent 3 — 个股技术分析")
 
 st.markdown(
     f"📅 当前日期：<span style='color:#e53935;font-weight:bold;'>"
-    f"{_td[:4]}-{_td[4:6]}-{_td[6:8]}</span>"
-    f" &nbsp;|&nbsp; 📊 战法：<span style='color:#1976d2;font-weight:bold;'>"
-    f"{_strategy_name}</span>",
+    f"{_td[:4]}-{_td[4:6]}-{_td[6:8]}</span>",
     unsafe_allow_html=True,
 )
 
