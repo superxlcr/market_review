@@ -230,18 +230,22 @@ def analyze_band(
 
     # ── 2. 选 V — 局部谷底中最高且满足 V/P < 3/7 ──
     qualified = [v for v in result.valleys if v.price / peak_high < (3.0 / 7.0)]
-    if not qualified:
+    if qualified:
+        best_v = max(qualified, key=lambda v: v.price)
+        result.v_qualified = True
+    elif result.valleys:
+        # 无合格谷底 → 兜底：选 V/P 比值最低的（最接近阈值）
+        best_v = min(result.valleys, key=lambda v: v.price / peak_high)
+        result.v_qualified = False
+    else:
         result.block_reason = (
-            f"P={peak_high:.2f}（{result.p_date}），"
-            f"{len(result.valleys)} 个局部谷底中无满足 V/P < 3/7 者"
+            f"P={peak_high:.2f}（{result.p_date}），未找到任何局部谷底"
         )
         return result
 
-    best_v = max(qualified, key=lambda v: v.price)
     result.v_price = best_v.price
     result.v_date = best_v.date
     result.v_idx = best_v.idx
-    result.v_qualified = True
     result.vp_ratio = best_v.price / peak_high
 
     # ── 4. 计算三条趋势线 ──
