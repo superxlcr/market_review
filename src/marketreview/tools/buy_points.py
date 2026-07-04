@@ -120,9 +120,10 @@ def _calc_stop_losses(bp: BuyPoint, atr_pct: float | None,
 # ── MA 跌破 Episode 统计 ──────────────────────────────────────
 
 def compute_ma_probes(df, band, periods: list[int] | None = None):
-    """从 P 到今日，统计开盘在MA上方但盘中跌破MA的探底日.
+    """从 P 到今日，统计前日收在MA上方、当日最低跌破MA的探底日.
 
-    返回: {60: [{date, max_penetration, offset_vs_pct, avg_vs_pct, ma_dir}, ...], ...}
+    条件: 昨日收盘 > 昨日MA 且 今日最低 < 今日MA
+    返回: {60: [{date, max_penetration, offset_vs_pct, avg_vs_pct, ma_dir, recovered}, ...], ...}
     """
     if periods is None:
         periods = [60, 120, 240]
@@ -138,8 +139,7 @@ def compute_ma_probes(df, band, periods: list[int] | None = None):
         ma_full = mas[ma_key]
         probes: list[dict] = []
 
-        for i in range(p_idx, len(df)):
-            open_p = float(df["open"].iloc[i])
+        for i in range(max(p_idx, 1), len(df)):
             low = float(df["low"].iloc[i])
             ma_val = ma_full[i]
             date = str(df["date"].iloc[i])
@@ -149,8 +149,16 @@ def compute_ma_probes(df, band, periods: list[int] | None = None):
             if ma_val <= 0:
                 continue
 
-            # 开盘在 MA 上方 且 盘中跌破 MA
-            if open_p > ma_val and low < ma_val:
+            # 前日收盘是否在 MA 上方
+            prev_ma = ma_full[i - 1]
+            if np.isnan(prev_ma) or prev_ma <= 0:
+                continue
+            prev_close = float(df["close"].iloc[i - 1])
+            if prev_close <= prev_ma:
+                continue
+
+            # 今日最低跌破 MA
+            if low < ma_val:
                 penetration = round((ma_val - low) / ma_val * 100, 1)
                 close = float(df["close"].iloc[i])
                 recovered = close >= ma_val

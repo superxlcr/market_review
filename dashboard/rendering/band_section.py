@@ -237,7 +237,7 @@ def render_ma_probes(probes: dict[int, list[dict]]) -> None:
 
     st.caption("")  # spacer
     st.markdown("**📊 MA 探底记录（P → 至今）**")
-    st.caption("开盘在 MA 上方，盘中最低价跌破 MA 的交易日")
+    st.caption("前日收盘站上 MA，当日最低跌破 MA，看收盘能否站稳")
 
     for period in [60, 120, 240]:
         probe_list = probes.get(period, [])
