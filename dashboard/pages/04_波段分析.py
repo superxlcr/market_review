@@ -35,7 +35,7 @@ st.caption(f"P→V 波段趋势线 · K线叠加 ｜ AI v{DashboardService._AI_V
 
 # ── Trade date (pre-compute for stock filtering) ──
 latest_date = svc.get_latest_trade_date()
-recent_dates = svc.get_recent_trading_dates(latest_date, count=60)
+recent_dates = svc.get_recent_trading_dates(latest_date, count=120)
 date_labels = [f"{d[:4]}-{d[4:6]}-{d[6:]}" for d in recent_dates]
 
 # ── Stock selection: watchlist first, then all A-share ──

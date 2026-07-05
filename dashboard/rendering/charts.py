@@ -50,6 +50,7 @@ def plot_kline_with_ma(df: pd.DataFrame, display_days: int = 60,
             fig.add_trace(go.Scatter(
                 x=plot_df["date"], y=ma_slice, mode="lines",
                 line=dict(color=_ma_palette[i % len(_ma_palette)], width=1.2), name=name,
+                hoverinfo="skip",
             ), row=1, col=1)
 
     # --- Row 2: Amount bars ---
