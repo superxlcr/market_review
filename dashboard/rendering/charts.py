@@ -34,11 +34,25 @@ def plot_kline_with_ma(df: pd.DataFrame, display_days: int = 60,
         subplot_titles=("", ""),
     )
 
+    # Compute daily change % (relative to previous close)
+    prev_close = df["close"].shift(1)
+    chg_pct = ((df["close"] - prev_close) / prev_close * 100).round(2)
+    chg_tail = chg_pct.tail(display_days).to_numpy()
+
     # --- Row 1: Candlestick + MA ---
     fig.add_trace(go.Candlestick(
         x=plot_df["date"], open=plot_df["open"], high=plot_df["high"],
         low=plot_df["low"], close=plot_df["close"], name="K线",
         increasing_line_color="#e53935", decreasing_line_color="#43a047",
+        customdata=chg_tail,
+        hovertemplate=(
+            "日期: %{x}<br>"
+            "开盘: %{open:.2f}<br>"
+            "最高: %{high:.2f}<br>"
+            "最低: %{low:.2f}<br>"
+            "收盘: %{close:.2f}<br>"
+            "涨跌幅: %{customdata:+.2f}%<extra></extra>"
+        ),
     ), row=1, col=1)
 
     _ma_palette = ["#2196f3", "#ff9800", "#9c27b0", "#4caf50", "#ff5722", "#795548",
