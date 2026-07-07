@@ -83,8 +83,8 @@ def _calc_stop_losses(bp: BuyPoint, atr_pct: float | None,
     ma_intraday_pct = config.get("均线盘中止损", 5.0)
     bp_price = bp.price
 
-    if bp.type == "均线支撑":
-        # 盘中：固定百分比
+    if bp.position.startswith("MA"):
+        # 均线买点：盘中固定百分比
         bp.intraday_stop_pct = ma_intraday_pct
         bp.intraday_stop = round(bp_price * (1 - ma_intraday_pct / 100), 2)
         bp.intraday_stop_reason = f"{ma_intraday_pct:.0f}%固定"
@@ -366,16 +366,16 @@ class High21Checker(BaseBuyPointChecker):
 # ── 均线买点 ──────────────────────────────────────────────────
 
 class MAChecker(BaseBuyPointChecker):
-    """均线支撑买点.
+    """均线买点（双向）.
 
     对 MA60/MA120/MA240 逐一检查：
-    1. 均线向上（↑）
-    2. 均线在现价下方（支撑）
-    3. 扣抵量 且 后续均量 都 > 今日成交额 × 1.1
+    1. 均线向上（↑）—— 起拖拽作用
+    2. 均线在现价下方 → 均线支撑；均线在现价上方 → 突破
+    3. 今日成交额 > 扣抵量 & 后续均量
     """
 
     MA_PERIODS = [60, 120, 240]
-    VOL_THRESHOLD = 1.0   # 今日量 > 扣抵量/后续均量即可
+    VOL_THRESHOLD = 1.0   # 5日均量 > 扣抵量/后续均量即可
 
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         if df.empty:
@@ -383,7 +383,9 @@ class MAChecker(BaseBuyPointChecker):
             return []
 
         cur = band.current_price
-        today_amount = float(df["amount"].iloc[-1]) / 1e5  # 千元 → 亿
+        # 5日均量（亿），比单日量更稳定
+        avg_days = min(5, len(df))
+        avg5_amount = float(df["amount"].iloc[-avg_days:].mean()) / 1e5  # 千元 → 亿
 
         mas = calc_ma(df, self.MA_PERIODS)
         results: list[BuyPoint] = []
@@ -392,24 +394,23 @@ class MAChecker(BaseBuyPointChecker):
             ma_key = f"MA{p}"
             ma_vals = mas[ma_key]
 
-            # 条件1: 均线方向向上
+            # 条件1: 均线方向向上（拖拽作用）
             direction = ma_direction(ma_vals)
             if direction != "↑":
                 log.info("MAChecker MA%d: dir=%s, skip (not ↑)", p, direction)
                 continue
 
-            # 条件2: 均线在当前价下方
+            # 条件2: 均线有值
             ma_val = None
             for v in reversed(ma_vals):
                 if not np.isnan(v):
                     ma_val = float(v)
                     break
-            if ma_val is None or ma_val >= cur:
-                log.info("MAChecker MA%d: val=%s cur=%.2f, skip (N/A or >=cur)",
-                         p, f"{ma_val:.2f}" if ma_val else "N/A", cur)
+            if ma_val is None:
+                log.info("MAChecker MA%d: val=N/A, skip", p)
                 continue
 
-            # 条件3: 扣抵量 & 后续均量 都 > 今日×阈值
+            # 条件3: 5日均量 > 扣抵量 & 后续均量
             off = get_offset_info(df, p)
             offset_amt = off.get("offset_amount_yi")
             avg_amt = off.get("avg_offset_amount_yi")
@@ -418,24 +419,29 @@ class MAChecker(BaseBuyPointChecker):
                 log.info("MAChecker MA%d: offset_amt=%s avg_amt=%s, skip (N/A)",
                          p, offset_amt, avg_amt)
                 continue
-            if today_amount <= offset_amt * self.VOL_THRESHOLD:
-                log.info("MAChecker MA%d: 今日量 %.2f <= 扣抵量%.2f×%.1f=%.2f, skip",
-                         p, today_amount, offset_amt, self.VOL_THRESHOLD, offset_amt * self.VOL_THRESHOLD)
+            if avg5_amount <= offset_amt * self.VOL_THRESHOLD:
+                log.info("MAChecker MA%d: 5日均量 %.2f <= 扣抵量%.2f×%.1f=%.2f, skip",
+                         p, avg5_amount, offset_amt, self.VOL_THRESHOLD, offset_amt * self.VOL_THRESHOLD)
                 continue
-            if today_amount <= avg_amt * self.VOL_THRESHOLD:
-                log.info("MAChecker MA%d: 今日量 %.2f <= 后续均量%.2f×%.1f=%.2f, skip",
-                         p, today_amount, avg_amt, self.VOL_THRESHOLD, avg_amt * self.VOL_THRESHOLD)
-                continue
+            if avg5_amount <= avg_amt * self.VOL_THRESHOLD:
+                log.info("MAChecker MA%d: 5日均量 %.2f <= 后续均量%.2f×%.1f=%.2f, skip",
+                         p, avg5_amount, avg_amt, self.VOL_THRESHOLD, avg_amt * self.VOL_THRESHOLD)
                 continue
 
             # 通过所有条件 → 产出买点
             dist = round((ma_val / cur - 1) * 100, 1)
-            off_pct = round((today_amount / offset_amt - 1) * 100, 1)
-            avg_pct = round((today_amount / avg_amt - 1) * 100, 1)
-            reason = f"MA{p}↑支撑，今日量>扣抵量+{off_pct}%，今日量>后续均量+{avg_pct}%"
+            off_pct = round((avg5_amount / offset_amt - 1) * 100, 1)
+            avg_pct = round((avg5_amount / avg_amt - 1) * 100, 1)
+
+            if ma_val < cur:
+                bp_type = "均线支撑"
+                reason = f"MA{p}↑支撑，5日均量>扣抵量+{off_pct}%，5日均量>后续均量+{avg_pct}%"
+            else:
+                bp_type = "突破"
+                reason = f"MA{p}↑突破，5日均量>扣抵量+{off_pct}%，5日均量>后续均量+{avg_pct}%"
 
             results.append(BuyPoint(
-                type="均线支撑",
+                type=bp_type,
                 position=f"MA{p}",
                 price=round(ma_val, 2),
                 distance_pct=dist,
@@ -500,7 +506,7 @@ def find_all_buy_points(df, band: BandResult,
     for bp in all_points:
         # 均线买点需要 MA 值
         ma_val = 0.0
-        if bp.type == "均线支撑":
+        if bp.position.startswith("MA"):
             # 从 position 字段提取 period
             try:
                 ma_period = int(bp.position.replace("MA", ""))

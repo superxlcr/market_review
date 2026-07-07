@@ -284,7 +284,7 @@ def render_ma_probes(probes: dict[int, list[dict]]) -> None:
                 <th style="text-align:center;width:16%;">日期</th>
                 <th style="text-align:right;width:12%;">MA价格</th>
                 <th style="text-align:center;width:8%;">方向</th>
-                <th style="text-align:center;width:34%;">当日量能对比</th>
+                <th style="text-align:center;width:34%;">5日均量对比</th>
                 <th style="text-align:center;width:12%;">收盘站回</th>
                 <th style="text-align:right;width:18%;">最大穿透</th>
             </tr></thead>
