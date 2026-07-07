@@ -226,7 +226,11 @@ def compute_trend_series(counts: List[int]) -> List[str]:
     if n == 0:
         return []
     dirs: List[str] = []
-    current_dir = "up"
+    # 从实际数据判断初始方向（而不是硬编码 "up"）
+    if n >= 2 and counts[1] < counts[0]:
+        current_dir = "down"
+    else:
+        current_dir = "up"
     opposite_streak = 0
     for i in range(n):
         if i == 0:
@@ -297,7 +301,11 @@ def compute_trend(counts: List[int]) -> dict:
     # ── 2. Hysteresis direction (process chronologically) ──
     # counts is most-recent-first; reverse for chronological order.
     chronological = list(reversed(counts))
-    hysteresis_dir = "up"
+    # 从实际数据判断初始方向（而不是硬编码 "up"）
+    if len(chronological) >= 2 and chronological[1] < chronological[0]:
+        hysteresis_dir = "down"
+    else:
+        hysteresis_dir = "up"
     opposite_streak = 0
     for i in range(1, len(chronological)):
         if chronological[i] > chronological[i - 1]:

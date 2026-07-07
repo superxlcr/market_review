@@ -1807,7 +1807,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "8.5.10"
+    _AI_VERSION = "8.5.11"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
