@@ -75,6 +75,14 @@ class DashboardService:
 
     # ---- index K-line ----
 
+    # tushare index_daily 对成指（399006等）返回的是自由流通股本调整后的
+    # 成交额/量，约为原始加总值的 ~46%。通达信/东方财富显示的是原始加总值。
+    # 399102（创业板综）tushare 返回的是原始值，与东方财富误差<1%。
+    # 因此对 399006：价格用自己，量用 399102 替代。
+    _TURNOVER_PROXY_MAP = {
+        "399006.SZ": "399102.SZ",  # 创业板指 → 创业板综（成交额代理）
+    }
+
     def get_index_data(self, code: str, lookback: int = 360,
                        end_date: str | None = None):
         """
@@ -86,7 +94,46 @@ class DashboardService:
         # Convert raw → qfq for display (no-op for indices, essential for stocks)
         if not df.empty:
             df = DataProvider.raw_to_qfq(df)
+
+        # 用综指的原始成交额/量替代成指的float-adjusted值
+        proxy_code = self._TURNOVER_PROXY_MAP.get(code)
+        if proxy_code and not df.empty:
+            proxy_rows = self._dp.get_daily(proxy_code, end_date=end_date,
+                                            lookback_days=lookback)
+            df = self._apply_turnover_proxy(df, proxy_rows)
+
         return df
+
+    def _apply_turnover_proxy(self, df, proxy_rows: list[dict]):
+        """将 proxy 的 vol/amount 按日期覆盖到 df 中。不修改 df 时返回原 df。"""
+        if not proxy_rows:
+            return df
+        proxy_df = rows_to_df(proxy_rows)
+        if proxy_df.empty:
+            return df
+        # 按日期对齐，只替换 vol 和 amount
+        proxy_indexed = proxy_df.set_index("date")[["vol", "amount"]]
+        df = df.set_index("date")
+        df.update(proxy_indexed, overwrite=True)
+        df = df.reset_index()
+        return df
+
+    def _merge_turnover_proxy(self, rows: list[dict], code: str,
+                              end_date: str | None = None) -> list[dict]:
+        """对成指：用综指的 vol/amount 替代 float-adjusted 值，返回修正后的 rows。"""
+        proxy_code = self._TURNOVER_PROXY_MAP.get(code)
+        if not proxy_code or not rows:
+            return rows
+        proxy_rows = self._dp.get_daily(proxy_code, end_date=end_date, lookback_days=9999)
+        if not proxy_rows:
+            return rows
+        proxy_map = {r["date"]: r for r in proxy_rows}
+        for row in rows:
+            pr = proxy_map.get(row["date"])
+            if pr:
+                row["vol"] = pr["vol"]
+                row["amount"] = pr["amount"]
+        return rows
 
     # ---- latest trade date ----
 
@@ -1807,7 +1854,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "8.5.13"
+    _AI_VERSION = "8.6.0"
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
@@ -1927,7 +1974,11 @@ class DashboardService:
         sh_user_tmpl = self._load_prompt("guide_sh_index")
         sh_user_msg = sh_user_tmpl.format(market_data=market_data_json, data=sh_data_json)
 
-        cz_rows = self._dp.get_daily("399006.SZ", end_date=trade_date, lookback_days=360)
+        # 创业板指：价格用399006，成交额/量用399102（综指）替代
+        # tushare index_daily 对成指返回float-adjusted量，只有原始值的~46%
+        # 综指返回原始值，与东方财富/通达信误差<1%
+        cz_rows_price = self._dp.get_daily("399006.SZ", end_date=trade_date, lookback_days=360)
+        cz_rows = self._merge_turnover_proxy(cz_rows_price, "399006.SZ", end_date=trade_date)
         cz_summary = build_technical_summary("399006.SZ", "创业板指", cz_rows)
         cz_contrib = self.get_index_contribution("399006.SZ", trade_date)
         cz_freq = self.get_industry_frequency("399006.SZ", trade_date)

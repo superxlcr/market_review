@@ -348,7 +348,7 @@ with st.expander("📈 上证指数 000001.SH", expanded=True):
 
 st.divider()
 
-# ============ 创业板指 ============
+# ============ 创业板指（量：创业板综代理） ============
 with st.expander("📉 创业板指 399006.SZ", expanded=True):
     # AI 导语
     if _ai_cache and "guide/cz_index" in _ai_cache:

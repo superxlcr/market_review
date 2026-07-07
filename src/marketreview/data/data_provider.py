@@ -38,7 +38,8 @@ _BASIC_CHUNK_DAYS = 10    # smaller chunks for daily_basic: its pagination limit
 # so we fetch them via api.index_daily separately).
 _TRACKED_INDICES = [
     "000001.SH",   # 上证指数
-    "399006.SZ",   # 创业板指
+    "399006.SZ",   # 创业板指（OHLCV价格）
+    "399102.SZ",   # 创业板综（成交额/量用于修正399006的float-adjusted偏差）
     "000016.SH",   # 上证50
     "000300.SH",   # 沪深300
     "399001.SZ",   # 深证成指
