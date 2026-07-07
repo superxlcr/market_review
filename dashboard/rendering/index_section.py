@@ -19,6 +19,7 @@ import pandas as pd
 import numpy as np
 
 from marketreview.tools.technical import (
+    calc_atr,
     calc_ma,
     ma_arrangement,
     ma_direction,
@@ -102,6 +103,9 @@ def render_ohlcv_section(
         sign_o = "+" if open_vs_prev >= 0 else ""
         sign_a = "+" if amount_vs_prev >= 0 else ""
 
+        atr_arr = calc_atr(df, 14)
+        atr14 = atr_arr[-1] if len(atr_arr) > 0 and not np.isnan(atr_arr[-1]) else 0
+        atr_pct = (atr14 / price * 100) if atr14 > 0 else 0
         st.html(f"""
         <div style="font-size:18px;line-height:2;">
             <div>最新价：<span style="color:{chg_color};font-weight:bold;">{price:.2f}</span></div>
@@ -110,6 +114,7 @@ def render_ohlcv_section(
             <div>昨日收盘：<span>{prev_close:.2f}</span></div>
             <div>今日成交额：<span style="color:{amount_color};">{today_amount:.2f}亿（{sign_a}{amount_vs_prev:.2f}%）</span></div>
             <div>昨日成交额：<span style="color:#333;">{yesterday_amount:.2f}亿</span></div>
+            <div>ATR(14)：<span style="color:#555;">{atr14:.2f}（占价格{atr_pct:.1f}%）</span></div>
         </div>
         """)
 
