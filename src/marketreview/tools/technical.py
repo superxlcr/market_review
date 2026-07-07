@@ -1049,7 +1049,7 @@ def get_offset_info(df: pd.DataFrame, period: int) -> dict[str, Any]:
     扣抵量 = turnover on that single day (in 亿).
     后续均量 = average turnover from 扣抵日 (inclusive) forward window days.
                Window: MA5/10→1, MA20/60/120/240→5.
-    pct = (5日均量 / xx量 - 1) * 100: 正=5日均量更大=安全, 负=5日均量不足=危险。
+    pct = (今日量 / xx量 - 1) * 100: 正=今日量更大=安全, 负=今日量不足=危险。
     """
     idx = len(df) - 1 - period
     if idx < 0:
@@ -1059,19 +1059,17 @@ def get_offset_info(df: pd.DataFrame, period: int) -> dict[str, Any]:
     # Window size for后续均量: MA5/10不取, 其余统一5天
     window = 1 if period <= 10 else 5
 
-    # 5日均量（亿），比单日量更稳定
-    avg_days = min(5, len(df))
-    avg5_amount = float(df["amount"].iloc[-avg_days:].mean()) / 1e5   # 千元 → 亿
+    today_amount = float(df.iloc[-1]["amount"]) / 1e5   # 千元 → 亿
 
     # 单日扣抵量
     offset_amount = float(df.iloc[idx]["amount"]) / 1e5
-    vs_today_pct = round((avg5_amount / offset_amount - 1) * 100, 1)
+    vs_today_pct = round((today_amount / offset_amount - 1) * 100, 1)
 
     # 后续均量: 扣抵日 + 后续 window-1 天
     end_idx = min(idx + window, len(df))
     window_amounts = [float(df.iloc[i]["amount"]) / 1e5 for i in range(idx, end_idx)]
     avg_offset_amount = round(sum(window_amounts) / len(window_amounts), 2)
-    avg_vs_today_pct = round((avg5_amount / avg_offset_amount - 1) * 100, 1)
+    avg_vs_today_pct = round((today_amount / avg_offset_amount - 1) * 100, 1)
 
     return {
         "offset_date": str(df.iloc[idx]["date"])[:10],
