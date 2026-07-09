@@ -11,3 +11,4 @@ backups/
 config/watchlist_industries.txt
 config/watchlist_stocks.txt
 config/buy_point_config.txt
+.temp/
