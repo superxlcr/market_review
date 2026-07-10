@@ -366,11 +366,12 @@ class High21Checker(BaseBuyPointChecker):
 # ── 均线买点 ──────────────────────────────────────────────────
 
 class MAChecker(BaseBuyPointChecker):
-    """均线买点（双向）.
+    """均线买点（仅支撑拉回）.
 
     对 MA60/MA120/MA240 逐一检查：
     1. 均线向上（↑）—— 起拖拽作用
-    2. 均线在现价下方 → 均线支撑（需放量确认）；均线在现价上方 → 突破（不看量，盘中可能出量）
+    2. 均线在现价下方 → 均线支撑（需放量确认）。
+       均线在现价上方（突破）不作为买点 —— 均线只买支撑拉回。
     """
 
     MA_PERIODS = [60, 120, 240]
@@ -411,33 +412,33 @@ class MAChecker(BaseBuyPointChecker):
             is_support = ma_val < cur
             dist = round((ma_val / cur - 1) * 100, 1)
 
-            if is_support:
-                # 支撑需要放量确认：今日量 > 扣抵量 & 后续均量
-                off = get_offset_info(df, p)
-                offset_amt = off.get("offset_amount_yi")
-                avg_amt = off.get("avg_offset_amount_yi")
+            # 均线只买支撑拉回，突破买点已移除
+            if not is_support:
+                log.info("MAChecker MA%d: 均线在现价上方（突破），已移除突破买点，skip", p)
+                continue
 
-                if offset_amt is None or avg_amt is None:
-                    log.info("MAChecker MA%d: offset_amt=%s avg_amt=%s, skip (N/A)",
-                             p, offset_amt, avg_amt)
-                    continue
-                if today_amount <= offset_amt * self.VOL_THRESHOLD:
-                    log.info("MAChecker MA%d: 今日量 %.2f <= 扣抵量%.2f×%.1f=%.2f, skip",
-                             p, today_amount, offset_amt, self.VOL_THRESHOLD, offset_amt * self.VOL_THRESHOLD)
-                    continue
-                if today_amount <= avg_amt * self.VOL_THRESHOLD:
-                    log.info("MAChecker MA%d: 今日量 %.2f <= 后续均量%.2f×%.1f=%.2f, skip",
-                             p, today_amount, avg_amt, self.VOL_THRESHOLD, avg_amt * self.VOL_THRESHOLD)
-                    continue
+            # 支撑需要放量确认：今日量 > 扣抵量 & 后续均量
+            off = get_offset_info(df, p)
+            offset_amt = off.get("offset_amount_yi")
+            avg_amt = off.get("avg_offset_amount_yi")
 
-                off_pct = round((today_amount / offset_amt - 1) * 100, 1)
-                avg_pct = round((today_amount / avg_amt - 1) * 100, 1)
-                bp_type = "均线支撑"
-                reason = f"MA{p}↑支撑，今日量>扣抵量+{off_pct}%，今日量>后续均量+{avg_pct}%"
-            else:
-                # 突破：不看量（盘中可能出量），只看方向和位置
-                bp_type = "突破"
-                reason = f"MA{p}↑突破"
+            if offset_amt is None or avg_amt is None:
+                log.info("MAChecker MA%d: offset_amt=%s avg_amt=%s, skip (N/A)",
+                         p, offset_amt, avg_amt)
+                continue
+            if today_amount <= offset_amt * self.VOL_THRESHOLD:
+                log.info("MAChecker MA%d: 今日量 %.2f <= 扣抵量%.2f×%.1f=%.2f, skip",
+                         p, today_amount, offset_amt, self.VOL_THRESHOLD, offset_amt * self.VOL_THRESHOLD)
+                continue
+            if today_amount <= avg_amt * self.VOL_THRESHOLD:
+                log.info("MAChecker MA%d: 今日量 %.2f <= 后续均量%.2f×%.1f=%.2f, skip",
+                         p, today_amount, avg_amt, self.VOL_THRESHOLD, avg_amt * self.VOL_THRESHOLD)
+                continue
+
+            off_pct = round((today_amount / offset_amt - 1) * 100, 1)
+            avg_pct = round((today_amount / avg_amt - 1) * 100, 1)
+            bp_type = "均线支撑"
+            reason = f"MA{p}↑支撑，今日量>扣抵量+{off_pct}%，今日量>后续均量+{avg_pct}%"
 
             results.append(BuyPoint(
                 type=bp_type,
