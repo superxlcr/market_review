@@ -1854,7 +1854,15 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "8.8.0"
+    _AI_VERSION = "9.0.0"
+
+    def run_winrate_scan(self, cfg, progress_cb=None):
+        """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。"""
+        from marketreview.winrate.scan_engine import run_scan
+        from marketreview.winrate.reporter import aggregate
+        trades = run_scan(self._dp, cfg, progress_cb=progress_cb)
+        stats = aggregate(trades)
+        return stats, trades
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
