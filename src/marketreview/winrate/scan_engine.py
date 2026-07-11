@@ -114,7 +114,16 @@ def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2):
 def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None) -> list[TradeResult]:
     """全市场并行扫描。数据须已预加载到 cache。"""
     basics = dp.cache.get_stock_basic()   # [{ts_code,name,list_date,is_st}]
-    universe = [b for b in basics if not b.get("is_st")]
+    if cfg.debug_code:
+        want = cfg.debug_code.strip().upper()
+        universe = [b for b in basics
+                    if b["ts_code"].upper() == want or b["ts_code"].split(".")[0] == want]
+        if not universe:
+            log.warning("调试标的 %s 未在 stock_basic 中找到，返回空", cfg.debug_code)
+            return []
+        log.info("调试模式：只扫描 %s（绕过 is_st 过滤）", universe[0]["ts_code"])
+    else:
+        universe = [b for b in basics if not b.get("is_st")]
     codes = [b["ts_code"] for b in universe]
     ind_map = dp.cache.get_stock_industries(codes)  # {code:{l1_name,l2_name,...}}
 

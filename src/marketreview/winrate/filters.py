@@ -16,27 +16,28 @@ def _latest_non_nan(vals: list[float]) -> float | None:
 
 
 def ma_group_state(df_asc: pd.DataFrame, periods: list[int]) -> str:
-    """periods 从快到慢（如 [5,10,20]）。返回 多头/空头/其他。
-    多头 = 快>中>慢 且最快线向上；空头 = 快<中<慢 且最快线向下。"""
+    """periods 从快到慢（如 [5,10,20]）。返回 多头/空头/盘整。
+    多头 = 快>中>慢 且最快线向上；空头 = 快<中<慢 且最快线向下；其余=盘整（含数据不足）。"""
     mas = calc_ma(df_asc, periods)
     latest = []
     for p in periods:
         v = _latest_non_nan(mas[f"MA{p}"])
         if v is None:
-            return "其他"
+            return "盘整"
         latest.append(v)
     fast_dir = ma_direction(mas[f"MA{periods[0]}"])
     if all(latest[i] > latest[i + 1] for i in range(len(latest) - 1)):
-        return "多头" if fast_dir == "↑" else "其他"
+        return "多头" if fast_dir == "↑" else "盘整"
     if all(latest[i] < latest[i + 1] for i in range(len(latest) - 1)):
-        return "空头" if fast_dir == "↓" else "其他"
-    return "其他"
+        return "空头" if fast_dir == "↓" else "盘整"
+    return "盘整"
 
 
-def passes_ma_arrange(df_asc: pd.DataFrame, want: str, periods: list[int]) -> bool:
-    if want == "无关" or not want:
+def passes_ma_arrange(df_asc: pd.DataFrame, allowed: list[str], periods: list[int]) -> bool:
+    """allowed 为空 或 含「无关」= 不限；否则要求 ma_group_state ∈ allowed。"""
+    if not allowed or "无关" in allowed:
         return True
-    return ma_group_state(df_asc, periods) == want
+    return ma_group_state(df_asc, periods) in allowed
 
 
 def passes_market_cap(mv_yi: float, cfg: WinrateConfig) -> bool:
@@ -73,8 +74,8 @@ def passes_all(df_asc: pd.DataFrame, cfg: WinrateConfig, mv_yi: float,
         return False
     if not passes_industry(l1, l2, cfg.industry_whitelist):
         return False
-    if not passes_ma_arrange(df_asc, cfg.short_ma_arrange, [5, 10, 20]):
+    if not passes_ma_arrange(df_asc, cfg.short_ma_states, [5, 10, 20]):
         return False
-    if not passes_ma_arrange(df_asc, cfg.long_ma_arrange, [60, 120, 240]):
+    if not passes_ma_arrange(df_asc, cfg.long_ma_states, [60, 120, 240]):
         return False
     return True

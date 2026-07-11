@@ -27,18 +27,20 @@ def test_ma_group_state_bear():
 
 def test_ma_group_state_insufficient():
     df = _rising_df(n=30)
-    assert F.ma_group_state(df, [60, 120, 240]) == "其他"
+    assert F.ma_group_state(df, [60, 120, 240]) == "盘整"
 
 
 def test_passes_ma_arrange_dont_care_always_true():
     df = _falling_df()
-    assert F.passes_ma_arrange(df, "无关", [60, 120, 240]) is True
+    assert F.passes_ma_arrange(df, [], [60, 120, 240]) is True          # 空=不限
+    assert F.passes_ma_arrange(df, ["无关"], [60, 120, 240]) is True     # 含无关=不限
 
 
 def test_passes_ma_arrange_match():
     df = _rising_df()
-    assert F.passes_ma_arrange(df, "多头", [60, 120, 240]) is True
-    assert F.passes_ma_arrange(df, "空头", [60, 120, 240]) is False
+    assert F.passes_ma_arrange(df, ["多头"], [60, 120, 240]) is True
+    assert F.passes_ma_arrange(df, ["空头"], [60, 120, 240]) is False
+    assert F.passes_ma_arrange(df, ["多头", "盘整"], [60, 120, 240]) is True  # 多选命中
 
 
 def test_passes_market_cap_bounds():

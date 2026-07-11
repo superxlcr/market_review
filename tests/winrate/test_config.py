@@ -14,9 +14,9 @@ def test_defaults():
     assert c.atr_multiplier == 2.0
     assert c.time_stop_days == 20
     assert c.open_chase_cap_pct == 102.0
-    assert c.long_ma_arrange == "多头"
-    assert c.short_ma_arrange == "无关"
-    assert c.buy_points == ["均线支撑", "回调一半", "波段50%"]
+    assert c.long_ma_states == ["多头"]
+    assert c.short_ma_states == []
+    assert c.buy_points == ["扣抵量均线支撑", "5日均量均线支撑", "回调一半", "波段50%"]
 
 
 def test_cap_bucket():
@@ -47,7 +47,7 @@ def test_parse_overrides(tmp_path):
     assert c.use_atr_stop is True
     assert c.atr_multiplier == 3.0
     assert c.time_stop_days == 15
-    assert c.long_ma_arrange == "空头"
+    assert c.long_ma_states == ["空头"]
     assert c.mv_min_yi == 100.0
     assert c.industry_whitelist == ["电子", "计算机"]
     assert c.min_list_days == 300

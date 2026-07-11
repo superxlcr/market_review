@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-ALL_BUY_POINTS = ["均线支撑", "回调一半", "波段50%"]
+ALL_BUY_POINTS = ["扣抵量均线支撑", "5日均量均线支撑", "回调一半", "波段50%"]
 
 
 @dataclass
@@ -24,14 +24,16 @@ class WinrateConfig:
     start_date: str = "20230921"
     end_date: str = "now"
     # 过滤器
-    short_ma_arrange: str = "无关"   # 多头 | 空头 | 无关
-    long_ma_arrange: str = "多头"
+    short_ma_states: list[str] = field(default_factory=list)          # 空=不限；多头/空头/盘整 可多选
+    long_ma_states: list[str] = field(default_factory=lambda: ["多头"])
     mv_min_yi: float = 0.0           # 0 = 不限下限
     mv_max_yi: float = 0.0           # 0 = 不限上限
     industry_whitelist: list[str] = field(default_factory=list)
     min_list_days: int = 250
     # 运行
     max_workers: int = 10
+    # 调试：填 ts_code 只跑单只（绕过 is_st），留空=全市场
+    debug_code: str = ""
 
 
 def default_winrate_config() -> WinrateConfig:
@@ -59,13 +61,14 @@ _KEY_MAP = {
     "开盘追高上限%": ("open_chase_cap_pct", float),
     "开始日期": ("start_date", str),
     "结束日期": ("end_date", str),
-    "短期均线排列": ("short_ma_arrange", str),
-    "长期均线排列": ("long_ma_arrange", str),
+    "短期均线排列": ("short_ma_states", "list"),
+    "长期均线排列": ("long_ma_states", "list"),
     "市值下限亿": ("mv_min_yi", float),
     "市值上限亿": ("mv_max_yi", float),
     "行业白名单": ("industry_whitelist", "list"),
     "上市最短天数": ("min_list_days", int),
     "并发数": ("max_workers", int),
+    "调试标的": ("debug_code", str),
 }
 
 

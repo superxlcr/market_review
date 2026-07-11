@@ -29,10 +29,10 @@ with c1:
     buy_points = st.multiselect("买点（可多选）", ALL_BUY_POINTS, default=base.buy_points)
     win_th = st.number_input("判赢阈值%（盘中浮盈）", 1.0, 50.0, base.win_threshold_pct)
 with c2:
-    short_ma = st.selectbox("短期均线排列", ["无关", "多头", "空头"],
-                            index=["无关", "多头", "空头"].index(base.short_ma_arrange))
-    long_ma = st.selectbox("长期均线排列", ["无关", "多头", "空头"],
-                           index=["无关", "多头", "空头"].index(base.long_ma_arrange))
+    short_ma = st.multiselect("短期均线排列（空=不限）", ["多头", "空头", "盘整"],
+                              default=base.short_ma_states)
+    long_ma = st.multiselect("长期均线排列（空=不限）", ["多头", "空头", "盘整"],
+                             default=base.long_ma_states)
 with c3:
     mv_min = st.number_input("市值下限(亿)", 0.0, 100000.0, base.mv_min_yi)
     mv_max = st.number_input("市值上限(亿, 0=不限)", 0.0, 100000.0, base.mv_max_yi)
@@ -45,11 +45,15 @@ with c5:
 with c6:
     workers = st.number_input("并发数", 1, 16, base.max_workers)
 
+debug_code = st.text_input(
+    "🐞 调试标的（留空=全市场；填 ts_code 只跑单只，如 000001.SZ）", base.debug_code)
+
 cfg = replace(
     base, buy_points=buy_points, win_threshold_pct=win_th,
-    short_ma_arrange=short_ma, long_ma_arrange=long_ma,
+    short_ma_states=short_ma, long_ma_states=long_ma,
     mv_min_yi=mv_min, mv_max_yi=mv_max, start_date=start_date,
     time_stop_days=int(time_stop), max_workers=int(workers),
+    debug_code=debug_code.strip(),
 )
 
 if st.button("▶ 运行扫描", type="primary", disabled=not buy_points):

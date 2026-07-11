@@ -3,7 +3,7 @@ from marketreview.winrate.config import WinrateConfig
 from marketreview.winrate.trade_sim import TradeResult
 
 
-def _fake_trade(bp="均线支撑"):
+def _fake_trade(bp="扣抵量均线支撑"):
     return TradeResult(
         buy_point=bp, code="A.SH", name="x", signal_date="20240101",
         entry_date="20240102", entry_price=10.0, exit_date="20240105",
@@ -15,10 +15,10 @@ def _fake_trade(bp="均线支撑"):
 def test_run_winrate_scan_returns_stats_and_trades():
     from services.dashboard_service import DashboardService
     svc = DashboardService()
-    cfg = WinrateConfig(buy_points=["均线支撑"])
+    cfg = WinrateConfig(buy_points=["扣抵量均线支撑"])
     with patch("marketreview.winrate.scan_engine.run_scan",
                return_value=[_fake_trade(), _fake_trade()]):
         stats, trades = svc.run_winrate_scan(cfg)
     assert len(trades) == 2
-    assert stats["均线支撑"].n == 2
-    assert stats["均线支撑"].win_rate == 1.0
+    assert stats["扣抵量均线支撑"].n == 2
+    assert stats["扣抵量均线支撑"].win_rate == 1.0

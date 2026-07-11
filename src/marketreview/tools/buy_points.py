@@ -204,6 +204,8 @@ def _probe_context(df, row_idx: int, period: int) -> dict:
 class BaseBuyPointChecker(ABC):
     """买点检查器基类."""
 
+    STAGE = "live"   # "live"=各页面可见；"trial"=试验中，仅买点胜率可见（find_all_buy_points 默认过滤）
+
     @abstractmethod
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         """从 K线数据 + 波段结果中提取买点列表."""
@@ -366,16 +368,25 @@ class High21Checker(BaseBuyPointChecker):
 # ── 均线买点 ──────────────────────────────────────────────────
 
 class MAChecker(BaseBuyPointChecker):
-    """均线买点（仅支撑拉回）.
+    """均线支撑买点（仅支撑拉回，试验中）.
 
     对 MA60/MA120/MA240 逐一检查：
     1. 均线向上（↑）—— 起拖拽作用
     2. 均线在现价下方 → 均线支撑（需放量确认）。
        均线在现价上方（突破）不作为买点 —— 均线只买支撑拉回。
+
+    放量确认的"量"由 vol_mode 决定（均只用信号日 T 及更早，无未来函数）：
+      - "today"：信号日成交额 → 「扣抵量均线支撑」
+      - "avg5" ：近 5 日均量   → 「5日均量均线支撑」
     """
 
+    STAGE = "trial"
     MA_PERIODS = [60, 120, 240]
-    VOL_THRESHOLD = 1.0   # 今日量 > 扣抵量/后续均量即可
+    VOL_THRESHOLD = 1.0   # 量 > 扣抵量/后续均量即可
+
+    def __init__(self, vol_mode: str = "today", type_name: str = "扣抵量均线支撑"):
+        self.vol_mode = vol_mode        # "today" | "avg5"
+        self.type_name = type_name
 
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         if df.empty:
@@ -383,7 +394,12 @@ class MAChecker(BaseBuyPointChecker):
             return []
 
         cur = band.current_price
-        today_amount = float(df["amount"].iloc[-1]) / 1e5  # 千元 → 亿
+        if self.vol_mode == "avg5":
+            measure = float(df["amount"].iloc[-5:].mean()) / 1e5  # 近5日均量（千元→亿）
+            vol_label = "5日均量"
+        else:
+            measure = float(df["amount"].iloc[-1]) / 1e5          # 今日量（千元→亿）
+            vol_label = "今日量"
 
         mas = calc_ma(df, self.MA_PERIODS)
         results: list[BuyPoint] = []
@@ -426,19 +442,19 @@ class MAChecker(BaseBuyPointChecker):
                 log.info("MAChecker MA%d: offset_amt=%s avg_amt=%s, skip (N/A)",
                          p, offset_amt, avg_amt)
                 continue
-            if today_amount <= offset_amt * self.VOL_THRESHOLD:
-                log.info("MAChecker MA%d: 今日量 %.2f <= 扣抵量%.2f×%.1f=%.2f, skip",
-                         p, today_amount, offset_amt, self.VOL_THRESHOLD, offset_amt * self.VOL_THRESHOLD)
+            if measure <= offset_amt * self.VOL_THRESHOLD:
+                log.info("MAChecker MA%d: %s %.2f <= 扣抵量%.2f×%.1f=%.2f, skip",
+                         p, vol_label, measure, offset_amt, self.VOL_THRESHOLD, offset_amt * self.VOL_THRESHOLD)
                 continue
-            if today_amount <= avg_amt * self.VOL_THRESHOLD:
-                log.info("MAChecker MA%d: 今日量 %.2f <= 后续均量%.2f×%.1f=%.2f, skip",
-                         p, today_amount, avg_amt, self.VOL_THRESHOLD, avg_amt * self.VOL_THRESHOLD)
+            if measure <= avg_amt * self.VOL_THRESHOLD:
+                log.info("MAChecker MA%d: %s %.2f <= 后续均量%.2f×%.1f=%.2f, skip",
+                         p, vol_label, measure, avg_amt, self.VOL_THRESHOLD, avg_amt * self.VOL_THRESHOLD)
                 continue
 
-            off_pct = round((today_amount / offset_amt - 1) * 100, 1)
-            avg_pct = round((today_amount / avg_amt - 1) * 100, 1)
-            bp_type = "均线支撑"
-            reason = f"MA{p}↑支撑，今日量>扣抵量+{off_pct}%，今日量>后续均量+{avg_pct}%"
+            off_pct = round((measure / offset_amt - 1) * 100, 1)
+            avg_pct = round((measure / avg_amt - 1) * 100, 1)
+            bp_type = self.type_name
+            reason = f"MA{p}↑支撑，{vol_label}>扣抵量+{off_pct}%，{vol_label}>后续均量+{avg_pct}%"
 
             results.append(BuyPoint(
                 type=bp_type,
@@ -478,12 +494,16 @@ def find_all_buy_points(df, band: BandResult,
         position_capital: 单个仓位资金（0=不计算仓位）
     """
     config = load_buy_point_config()
+    show_trial = config.get("显示试验买点", 0.0) >= 1
     checkers: list[BaseBuyPointChecker] = [
         HalfRetraceChecker(),
         Band50Checker(),
         High21Checker(),
-        MAChecker(),
+        MAChecker(vol_mode="today", type_name="扣抵量均线支撑"),
+        MAChecker(vol_mode="avg5", type_name="5日均量均线支撑"),
     ]
+    # 试验中的买点默认只在「买点胜率」出现，不污染个股追踪/波段分析
+    checkers = [c for c in checkers if show_trial or getattr(c, "STAGE", "live") != "trial"]
     all_points: list[BuyPoint] = []
     for c in checkers:
         all_points.extend(c.check(df, band))

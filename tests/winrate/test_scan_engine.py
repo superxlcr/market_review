@@ -18,8 +18,8 @@ def test_prepare_klines_adds_ma_keys():
 
 def test_scan_stock_no_signal_when_flat_series():
     # 全平的序列不会触发任何买点 → 空结果，且不报错
-    cfg = WinrateConfig(min_list_days=0, long_ma_arrange="无关",
-                        short_ma_arrange="无关")
+    cfg = WinrateConfig(min_list_days=0, long_ma_states=[],
+                        short_ma_states=[])
     rows_desc = [_row(f"202401{d:02d}", 10, 10, 10, 10) for d in range(1, 29)][::-1]
     trades = SE.scan_stock("600000.SH", "测试", rows_desc, cfg,
                            "电子", "半导体", "20200101",

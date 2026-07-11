@@ -10,9 +10,10 @@ from .trade_sim import BuyPointSignal
 
 # 页面标签 → checker
 _NAME_MAP = {
+    "扣抵量均线支撑": ("ma", MAChecker(vol_mode="today", type_name="扣抵量均线支撑")),
+    "5日均量均线支撑": ("ma", MAChecker(vol_mode="avg5", type_name="5日均量均线支撑")),
     "回调一半": ("half", HalfRetraceChecker()),
     "波段50%": ("band50", Band50Checker()),
-    "均线支撑": ("ma", MAChecker()),
 }
 
 
@@ -32,7 +33,7 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
                 except ValueError:
                     period = 0
                 out.append(BuyPointSignal(
-                    buy_point="均线支撑", target_price=bp.price,
+                    buy_point=name, target_price=bp.price,
                     close_stop_kind="ma", close_stop_period=period,
                     reason=bp.reason,
                 ))
