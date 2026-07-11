@@ -45,8 +45,23 @@ with c5:
 with c6:
     workers = st.number_input("并发数", 1, 16, base.max_workers)
 
-debug_code = st.text_input(
-    "🐞 调试标的（留空=全市场；填 ts_code 只跑单只，如 000001.SZ）", base.debug_code)
+_ALL_MARKET = "（全市场扫描）"
+_dbg_stocks = svc._dp.cache.get_stock_basic()
+debug_options = [_ALL_MARKET] + [
+    f"{s['name']} ({s['ts_code']})"
+    for s in sorted(_dbg_stocks, key=lambda x: x["ts_code"])
+]
+_dbg_idx = 0
+if base.debug_code:
+    for _i, _lbl in enumerate(debug_options):
+        if _lbl.endswith(f"({base.debug_code})"):
+            _dbg_idx = _i
+            break
+debug_label = st.selectbox(
+    "🐞 调试标的（默认全市场；可输入名字/代码搜索，选中则只跑单只）",
+    debug_options, index=_dbg_idx,
+)
+debug_code = "" if debug_label == _ALL_MARKET else debug_label.split("(")[-1].rstrip(")")
 
 cfg = replace(
     base, buy_points=buy_points, win_threshold_pct=win_th,
