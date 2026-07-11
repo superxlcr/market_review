@@ -407,6 +407,18 @@ class CacheManager:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_daily_basic_for_code(self, code: str) -> list[dict]:
+        """Return a single code's market-cap series ascending by trade_date."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT trade_date, total_mv, circ_mv
+                   FROM daily_basic_cache
+                   WHERE ts_code = ?
+                   ORDER BY trade_date ASC""",
+                [code],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def daily_basic_has_range(self, start_date: str, end_date: str) -> bool:
         """
         Return True if daily_basic_cache has COMPLETE data in [start_date, end_date].
