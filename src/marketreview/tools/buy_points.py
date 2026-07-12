@@ -399,6 +399,8 @@ class MAChecker(BaseBuyPointChecker):
             return []
 
         cur = band.current_price
+        if cur <= 0:            # 波段被阻断(current_price=0) → 无法算距离，跳过（与 Half/Band50 一致）
+            return []
         if self.vol_mode == "avg5":
             measure = float(df["amount"].iloc[-5:].mean()) / 1e5  # 近5日均量（千元→亿）
             vol_label = "5日均量"
@@ -476,6 +478,97 @@ class MAChecker(BaseBuyPointChecker):
                 reason=reason,
             ))
 
+        return results
+
+
+# ── 量价节点买点 ──────────────────────────────────────────────
+
+class VolPriceNodeChecker(BaseBuyPointChecker):
+    """量价节点买点（买拉回，试验中）.
+
+    量价节点(单日 k): close[k]/close[k-1] > 1.02 且 amount[k]/amount[k-1] > 1.2
+      —— 放量拉升，视作大资金进场。
+    成本: min(low[k], low[k-1])，两日最低价 = 大资金进入成本。
+    买入: 成本 × 1.04（喂 winrate 引擎的条件单）；止损: 盘中跌破成本。
+
+    用法（买拉回）:
+      ① 只在波段上升腿 [V, P] 内找节点；
+      ② 前一日涨跌停（成交额未正常释放）的节点作废；
+      ③ 已被后续 low 跌破过成本的节点作废；
+      ④ 股价从 P 回调、曾跌破 75%线(line_75) 后才激活挂单（浅回调即激活）。
+    """
+
+    STAGE = "trial"
+    PRICE_RATIO = 1.02
+    VOL_RATIO = 1.2
+    ENTRY_PREMIUM = 1.04
+
+    def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
+        if df.empty:
+            return []
+        # 波段有效 + 已从 P 跌破过 75%线（line_75，浅回调即激活）
+        if not band.v_qualified or band.p_idx < 0 or band.v_idx < 0:
+            log.debug("VolNode: 波段无效/无P/V, skip")
+            return []
+        if band.line_75 <= 0 or band.l_price <= 0 or band.l_price >= band.line_75:
+            log.debug("VolNode: 未跌破75%%线 (l=%.2f, line75=%.2f), skip",
+                      band.l_price, band.line_75)
+            return []
+
+        low = df["low"].to_numpy(dtype=float)
+        close = df["close"].to_numpy(dtype=float)
+        amount = df["amount"].to_numpy(dtype=float)
+        dates = df["date"].tolist()
+        n = len(df)
+        today_idx = n - 1
+        cur = band.current_price
+
+        # 板块单日涨跌停幅度：前一日涨跌停 → 成交额未正常释放，节点作废
+        limit = _get_board_threshold(code) / 2.0 / 100.0   # 主板0.10 / 双创0.20
+
+        # 后缀最低价：suffix_min[i] = min(low[i..today])，O(n) 一次算好供"已跌破"判定
+        suffix_min = [0.0] * n
+        run = float("inf")
+        for i in range(n - 1, -1, -1):
+            if low[i] < run:
+                run = low[i]
+            suffix_min[i] = run
+
+        results: list[BuyPoint] = []
+        seen_cost: set[float] = set()
+        lo = max(band.v_idx, 2)   # k-2 需存在（判前一日涨跌停）
+        for k in range(lo, band.p_idx + 1):
+            c0, c1, c2 = close[k], close[k - 1], close[k - 2]
+            a0, a1 = amount[k], amount[k - 1]
+            if c1 <= 0 or a1 <= 0:
+                continue
+            if c0 / c1 <= self.PRICE_RATIO:          # 涨幅 > 2%
+                continue
+            if a0 / a1 <= self.VOL_RATIO:            # 量比 > 1.2
+                continue
+            if c2 > 0 and abs(c1 / c2 - 1.0) >= limit - 1e-4:   # 前一日涨跌停 → 弃
+                continue
+            cost = min(low[k], low[k - 1])
+            if cost <= 0:
+                continue
+            if k + 1 <= today_idx and suffix_min[k + 1] < cost:  # 成本已被跌破 → 弃
+                continue
+            cost_r = round(cost, 2)
+            if cost_r in seen_cost:
+                continue
+            seen_cost.add(cost_r)
+            target = round(cost * self.ENTRY_PREMIUM, 2)
+            dist = round((target / cur - 1) * 100, 1) if cur > 0 else 0.0
+            results.append(BuyPoint(
+                type="量价节点",
+                position="量价节点",
+                price=target,
+                distance_pct=dist,
+                reason=f"量价节点@{dates[k]} 成本{cost_r}(两日最低)×1.04，盘中跌破成本止损",
+                intraday_stop=cost_r,
+            ))
+        log.debug("VolNode: %d 个存活节点 (窗口[%d,%d], code=%s)",
+                  len(results), band.v_idx, band.p_idx, code)
         return results
 
 

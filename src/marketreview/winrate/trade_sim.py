@@ -19,8 +19,9 @@ def board_limit_pct(code: str) -> float:
 class BuyPointSignal:
     buy_point: str
     target_price: float
-    close_stop_kind: str = "entry"   # "entry" | "ma"
+    close_stop_kind: str = "entry"   # "entry" | "ma" | "fixed"
     close_stop_period: int = 0       # ma 时用（60/120/240）
+    intraday_stop_price: float = 0.0  # >0 时：绝对盘中止损价（量价节点=节点成本），覆盖全局空间/ATR止损
     reason: str = ""
 
 
@@ -88,7 +89,9 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
 
     entry_date = str(er.get("date"))
     # 空间止损价
-    if cfg.use_atr_stop and atr_at_signal > 0:
+    if signal.intraday_stop_price > 0:
+        stop_price = signal.intraday_stop_price           # 量价节点：绝对止损价=节点成本
+    elif cfg.use_atr_stop and atr_at_signal > 0:
         stop_price = entry_price - cfg.atr_multiplier * atr_at_signal
     else:
         stop_price = entry_price * (1 - cfg.space_stop_pct / 100.0)
@@ -145,6 +148,8 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
             return _mk(i, cc, "时间止损")
         if signal.close_stop_kind == "ma":
             cs = _f(row.get(f"ma{signal.close_stop_period}"))
+        elif signal.close_stop_kind == "fixed":
+            cs = signal.intraday_stop_price   # 量价节点：收盘也看节点成本
         else:
             cs = entry_price
         if cs > 0 and cc < cs:

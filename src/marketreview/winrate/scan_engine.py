@@ -66,7 +66,7 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
             continue
 
         band = analyze_band([klines[j] for j in range(i + 1)], peak_lookback=band_lookback)
-        signals = detect_buy_points(df_upto, band, cfg.buy_points)
+        signals = detect_buy_points(df_upto, band, cfg.buy_points, code=code)
         if not signals:
             i += 1
             continue

@@ -40,7 +40,7 @@ def test_scan_is_position_less(monkeypatch):
     monkeypatch.setattr(SE, "passes_all", lambda *a, **k: True)
     monkeypatch.setattr(
         SE, "detect_buy_points",
-        lambda df, band, bps: [BuyPointSignal(
+        lambda df, band, bps, code="": [BuyPointSignal(
             buy_point="回调一半", target_price=float(df["close"].iloc[-1]),
             close_stop_kind="entry", close_stop_period=0)],
     )
