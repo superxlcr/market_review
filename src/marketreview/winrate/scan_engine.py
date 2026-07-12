@@ -49,6 +49,9 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
     end = None if cfg.end_date in ("", "now") else cfg.end_date
 
     results: list[TradeResult] = []
+    # 按 标的×买点 各自持仓：next_ok[买点]=该买点下次可建仓的最早 idx。
+    # 买点之间互不影响——一起跑只为共用数据/band 提效；某买点持仓中，仅它自己不重复建仓。
+    next_ok: dict[str, int] = {}
     i = 1
     while i < n - 1:
         date_T = dates[i]
@@ -67,6 +70,8 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
 
         band = analyze_band([klines[j] for j in range(i + 1)], peak_lookback=band_lookback)
         signals = detect_buy_points(df_upto, band, cfg.buy_points, code=code)
+        # 过滤持仓中的买点（各买点各自持仓，互不影响）
+        signals = [s for s in signals if i >= next_ok.get(s.buy_point, 0)]
         if not signals:
             i += 1
             continue
@@ -75,18 +80,26 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
         atr_vals = calc_atr(df_upto, period=14)
         atr_T = float(atr_vals[-1]) if atr_vals and atr_vals[-1] == atr_vals[-1] else 0.0
 
-        # position-less：每个信号独立评估，不跳过持仓期（持仓/冷却规则改到分析层做）
-        made: list[TradeResult] = []
         for sig in signals:
             tr = simulate_trade(sig, i, klines, cfg, code, name, atr_T)
-            if tr is not None:
-                _tag(tr, df_upto, mv_yi, industry_l1, industry_l2)
-                made.append(tr)
-
-        results.extend(made)
+            if tr is None:
+                continue
+            _tag(tr, df_upto, mv_yi, industry_l1, industry_l2)
+            results.append(tr)
+            # 该买点跳过自己的持仓期：下次可建仓 = 出场日之后（不影响其它买点）
+            exit_next = _date_idx(dates, tr.exit_date) + 1
+            if exit_next > next_ok.get(sig.buy_point, 0):
+                next_ok[sig.buy_point] = exit_next
         i += 1
 
     return results
+
+
+def _date_idx(dates: list[str], d: str) -> int:
+    try:
+        return dates.index(d)
+    except ValueError:
+        return len(dates) - 1
 
 
 def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2):

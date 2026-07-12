@@ -48,7 +48,7 @@ def aggregate(trades: list[TradeResult]) -> dict[str, BuyPointStats]:
 
 
 _EXPORT_FIELDS = [
-    "buy_point", "code", "name", "signal_date", "entry_date", "entry_price",
+    "buy_point", "reason", "code", "name", "signal_date", "entry_date", "entry_price",
     "exit_date", "exit_price", "exit_reason", "mfp_pct", "hold_days", "pnl_pct",
     "success", "short_ma_state", "long_ma_state", "market_cap_yi", "cap_bucket",
     "industry_l1", "industry_l2",

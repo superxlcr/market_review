@@ -40,6 +40,7 @@ class TradeResult:
     hold_days: int
     pnl_pct: float
     success: bool
+    reason: str = ""                 # 买入理由（哪个买点/节点/均线），由 checker 生成
     # 上下文标签（由 scan_engine 回填）
     short_ma_state: str = ""
     long_ma_state: str = ""
@@ -115,6 +116,7 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
             hold_days=exit_idx - entry_idx,
             pnl_pct=round((exit_price - entry_price) / entry_price * 100.0, 2),
             success=mfp_final >= cfg.win_threshold_pct,
+            reason=signal.reason,
         )
 
     for i in range(entry_idx + 1, len(klines_asc)):

@@ -85,10 +85,12 @@ def test_engine_honors_absolute_intraday_stop():
         k("20240103", 102, 102, 100, 101),   # 盘中 low=100 = 绝对止损价 → 出场
     ]
     sig = BuyPointSignal(buy_point="量价节点", target_price=104.0,
-                         close_stop_kind="fixed", intraday_stop_price=100.0)
+                         close_stop_kind="fixed", intraday_stop_price=100.0,
+                         reason="量价节点@20240101 成本100.0(两日最低)×1.04")
     cfg = WinrateConfig(space_stop_pct=5.0)
     tr = simulate_trade(sig, 0, klines, cfg, "600000.SH", "x", atr_at_signal=0.0)
     assert tr is not None
     assert tr.exit_reason == "盘中止损"
     assert tr.exit_price == 100.0
     assert round(tr.pnl_pct, 2) == round((100 - 104) / 104 * 100, 2)   # ≈ -3.85
+    assert tr.reason == "量价节点@20240101 成本100.0(两日最低)×1.04"   # 买入理由透出到成交记录
