@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import hashlib
 import os
 import numpy as np
 
@@ -570,6 +571,46 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
         log.debug("VolNode: %d 个存活节点 (窗口[%d,%d], code=%s)",
                   len(results), band.v_idx, band.p_idx, code)
         return results
+
+
+# ── 随机基准买点（无技能对照）──────────────────────────────────
+
+class RandomBaselineChecker(BaseBuyPointChecker):
+    """随机基准买点（纯对照，无技能地板）.
+
+    完全不看波段/量价/均线：每个交易日按固定概率 PROB「凭运气」发一个市价买点，
+    走和普通市价买点完全相同的离场机器（全局空间/ATR 止损 + 收盘跌破买入价）。
+    用途：校准所有买点的胜率——高于它才算真有 alpha，贴着它说明入场无效。
+
+    随机是「确定性」的：种子 = md5(code|date)，同一(标的,日期)每次跑结果一致，
+    保证跨批次可复现、可对比。**不能用 Python hash()**——它每进程加盐，跨次不稳定。
+    """
+
+    STAGE = "trial"
+    PROB = 0.02   # 每个合格交易日发信概率；调此值控制样本量（≈ PROB×合格日×标的数）
+
+    def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
+        if df.empty:
+            return []
+        date = str(df["date"].iloc[-1])
+        if self._rand01(code, date) >= self.PROB:
+            return []
+        cur = float(df["close"].iloc[-1])   # 不依赖 band：直接取信号日收盘作市价目标
+        if cur <= 0:
+            return []
+        return [BuyPoint(
+            type="随机基准",
+            position="随机基准",
+            price=round(cur, 2),
+            distance_pct=0.0,               # 市价 = 现价
+            reason=f"随机基准@{date} 无技能对照（市价随机 P={self.PROB}）",
+        )]
+
+    @staticmethod
+    def _rand01(code: str, date: str) -> float:
+        """确定性 [0,1)：md5(code|date) 前 32bit / 2^32。跨进程稳定（不同于 hash()）。"""
+        h = hashlib.md5(f"{code}|{date}".encode("utf-8")).hexdigest()
+        return int(h[:8], 16) / 0x1_0000_0000
 
 
 # ── 汇总入口 ──────────────────────────────────────────────────

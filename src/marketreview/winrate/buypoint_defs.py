@@ -5,6 +5,7 @@ import pandas as pd
 from marketreview.tools.band_analysis import BandResult
 from marketreview.tools.buy_points import (
     HalfRetraceChecker, Band50Checker, MAChecker, VolPriceNodeChecker,
+    RandomBaselineChecker,
 )
 from .trade_sim import BuyPointSignal
 
@@ -24,6 +25,7 @@ _NAME_MAP = {
     "回调一半": ("half", HalfRetraceChecker()),
     "波段50%": ("band50", Band50Checker()),
     "量价节点": ("volnode", VolPriceNodeChecker()),
+    "随机基准": ("random", RandomBaselineChecker()),
 }
 
 
@@ -35,8 +37,9 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
         if entry is None:
             continue
         kind, checker = entry
-        # 量价节点需要 code 判前一日涨跌停，其余 checker 签名统一 (df, band)
-        bps = checker.check(df_asc, band, code=code) if kind == "volnode" else checker.check(df_asc, band)
+        # 量价节点/随机基准需要 code（判涨跌停 / 随机种子），其余 checker 签名统一 (df, band)
+        bps = (checker.check(df_asc, band, code=code)
+               if kind in ("volnode", "random") else checker.check(df_asc, band))
         for bp in bps:
             if kind == "ma":
                 # 均线支撑：收盘止损 = 跌破 MA（该周期）；触发价 = MA 值
@@ -58,7 +61,7 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
                     reason=bp.reason,
                 ))
             else:
-                # 回调一半 / 波段50%：收盘止损 = 跌破买入价
+                # 回调一半 / 波段50% / 随机基准：收盘止损 = 跌破买入价；吃全局空间/ATR止损
                 out.append(BuyPointSignal(
                     buy_point=name, target_price=bp.price,
                     close_stop_kind="entry", close_stop_period=0,
