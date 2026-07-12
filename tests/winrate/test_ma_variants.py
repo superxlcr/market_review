@@ -58,3 +58,20 @@ def test_find_all_shows_trial_when_enabled(monkeypatch):
     monkeypatch.setattr(BP, "load_buy_point_config", lambda: {"显示试验买点": 1.0})
     pts = find_all_buy_points(df, _band(df))
     assert any(p.type in _TRIAL_TYPES for p in pts)
+
+
+def test_ma_single_period_only_checks_that_period():
+    df = _rising()
+    pts = MAChecker(vol_mode="today", periods=[20], type_name="MA20支撑").check(df, _band(df))
+    assert pts, "上升+放量应触发 MA20 支撑"
+    assert all(p.position == "MA20" for p in pts)   # 只检查单周期
+    assert all(p.type == "MA20支撑" for p in pts)
+
+
+def test_ma_no_volume_variant_ignores_volume():
+    df = _rising()
+    pts = MAChecker(vol_mode="none", periods=[60, 120, 240],
+                    type_name="无量均线支撑").check(df, _band(df))
+    assert pts
+    assert all(p.type == "无量均线支撑" for p in pts)
+    assert all("不看量" in p.reason for p in pts)

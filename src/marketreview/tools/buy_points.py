@@ -378,15 +378,20 @@ class MAChecker(BaseBuyPointChecker):
     放量确认的"量"由 vol_mode 决定（均只用信号日 T 及更早，无未来函数）：
       - "today"：信号日成交额 → 「扣抵量均线支撑」
       - "avg5" ：近 5 日均量   → 「5日均量均线支撑」
+      - "none" ：不看量，仅"均线向上 + 均线在价下(支撑)" → 「无量均线支撑」
+    periods：检查哪些均线周期；默认 [60,120,240]（组合变体）；
+             单周期变体传单元素列表（如 [20]）以拆开各周期效果。
     """
 
     STAGE = "trial"
     MA_PERIODS = [60, 120, 240]
     VOL_THRESHOLD = 1.0   # 量 > 扣抵量/后续均量即可
 
-    def __init__(self, vol_mode: str = "today", type_name: str = "扣抵量均线支撑"):
-        self.vol_mode = vol_mode        # "today" | "avg5"
+    def __init__(self, vol_mode: str = "today", type_name: str = "扣抵量均线支撑",
+                 periods: list[int] | None = None):
+        self.vol_mode = vol_mode        # "today" | "avg5" | "none"
         self.type_name = type_name
+        self.periods = list(periods) if periods else list(self.MA_PERIODS)
 
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         if df.empty:
@@ -397,14 +402,17 @@ class MAChecker(BaseBuyPointChecker):
         if self.vol_mode == "avg5":
             measure = float(df["amount"].iloc[-5:].mean()) / 1e5  # 近5日均量（千元→亿）
             vol_label = "5日均量"
+        elif self.vol_mode == "none":
+            measure = 0.0                                          # 不看量
+            vol_label = "无量"
         else:
             measure = float(df["amount"].iloc[-1]) / 1e5          # 今日量（千元→亿）
             vol_label = "今日量"
 
-        mas = calc_ma(df, self.MA_PERIODS)
+        mas = calc_ma(df, self.periods)
         results: list[BuyPoint] = []
 
-        for p in self.MA_PERIODS:
+        for p in self.periods:
             ma_key = f"MA{p}"
             ma_vals = mas[ma_key]
 
@@ -434,27 +442,31 @@ class MAChecker(BaseBuyPointChecker):
                 continue
 
             # 支撑需要放量确认：今日量 > 扣抵量 & 后续均量
-            off = get_offset_info(df, p)
-            offset_amt = off.get("offset_amount_yi")
-            avg_amt = off.get("avg_offset_amount_yi")
-
-            if offset_amt is None or avg_amt is None:
-                log.info("MAChecker MA%d: offset_amt=%s avg_amt=%s, skip (N/A)",
-                         p, offset_amt, avg_amt)
-                continue
-            if measure <= offset_amt * self.VOL_THRESHOLD:
-                log.info("MAChecker MA%d: %s %.2f <= 扣抵量%.2f×%.1f=%.2f, skip",
-                         p, vol_label, measure, offset_amt, self.VOL_THRESHOLD, offset_amt * self.VOL_THRESHOLD)
-                continue
-            if measure <= avg_amt * self.VOL_THRESHOLD:
-                log.info("MAChecker MA%d: %s %.2f <= 后续均量%.2f×%.1f=%.2f, skip",
-                         p, vol_label, measure, avg_amt, self.VOL_THRESHOLD, avg_amt * self.VOL_THRESHOLD)
-                continue
-
-            off_pct = round((measure / offset_amt - 1) * 100, 1)
-            avg_pct = round((measure / avg_amt - 1) * 100, 1)
             bp_type = self.type_name
-            reason = f"MA{p}↑支撑，{vol_label}>扣抵量+{off_pct}%，{vol_label}>后续均量+{avg_pct}%"
+            if self.vol_mode == "none":
+                # 不看量：仅"均线向上 + 均线在价下(支撑)"
+                reason = f"MA{p}↑支撑（不看量）"
+            else:
+                off = get_offset_info(df, p)
+                offset_amt = off.get("offset_amount_yi")
+                avg_amt = off.get("avg_offset_amount_yi")
+
+                if offset_amt is None or avg_amt is None:
+                    log.info("MAChecker MA%d: offset_amt=%s avg_amt=%s, skip (N/A)",
+                             p, offset_amt, avg_amt)
+                    continue
+                if measure <= offset_amt * self.VOL_THRESHOLD:
+                    log.info("MAChecker MA%d: %s %.2f <= 扣抵量%.2f×%.1f=%.2f, skip",
+                             p, vol_label, measure, offset_amt, self.VOL_THRESHOLD, offset_amt * self.VOL_THRESHOLD)
+                    continue
+                if measure <= avg_amt * self.VOL_THRESHOLD:
+                    log.info("MAChecker MA%d: %s %.2f <= 后续均量%.2f×%.1f=%.2f, skip",
+                             p, vol_label, measure, avg_amt, self.VOL_THRESHOLD, avg_amt * self.VOL_THRESHOLD)
+                    continue
+
+                off_pct = round((measure / offset_amt - 1) * 100, 1)
+                avg_pct = round((measure / avg_amt - 1) * 100, 1)
+                reason = f"MA{p}↑支撑，{vol_label}>扣抵量+{off_pct}%，{vol_label}>后续均量+{avg_pct}%"
 
             results.append(BuyPoint(
                 type=bp_type,

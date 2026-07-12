@@ -13,7 +13,7 @@ from .trade_sim import simulate_trade, TradeResult
 
 log = get_logger(__name__)
 
-_MA_PERIODS = [5, 10, 20, 60, 120, 240]
+_MA_PERIODS = [5, 10, 20, 55, 60, 120, 144, 240]
 
 
 def prepare_klines(rows_desc: list[dict]) -> list[dict]:
@@ -75,7 +75,7 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
         atr_vals = calc_atr(df_upto, period=14)
         atr_T = float(atr_vals[-1]) if atr_vals and atr_vals[-1] == atr_vals[-1] else 0.0
 
-        # 每个买点各自模拟；持仓中不重复建仓 → 取最早出场，游标跳到其后
+        # position-less：每个信号独立评估，不跳过持仓期（持仓/冷却规则改到分析层做）
         made: list[TradeResult] = []
         for sig in signals:
             tr = simulate_trade(sig, i, klines, cfg, code, name, atr_T)
@@ -83,23 +83,10 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
                 _tag(tr, df_upto, mv_yi, industry_l1, industry_l2)
                 made.append(tr)
 
-        if not made:
-            i += 1
-            continue
-
         results.extend(made)
-        # 跳到所有本轮成交里最晚的出场日之后（避免持仓期重复建仓）
-        latest_exit = max(_date_idx(dates, t.exit_date) for t in made)
-        i = max(i + 1, latest_exit + 1)
+        i += 1
 
     return results
-
-
-def _date_idx(dates: list[str], d: str) -> int:
-    try:
-        return dates.index(d)
-    except ValueError:
-        return len(dates) - 1
 
 
 def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2):

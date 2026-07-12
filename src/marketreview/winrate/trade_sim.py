@@ -150,6 +150,5 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
         if cs > 0 and cc < cs:
             return _mk(i, cc, "收盘止损")
 
-    # 数据到底仍持仓 → 末日收盘清仓
-    last = len(klines_asc) - 1
-    return _mk(last, _f(klines_asc[last].get("close")), "回测结束")
+    # 数据到底仍未触发任何出场 → 右删失（观察期被截断），不计样本
+    return None

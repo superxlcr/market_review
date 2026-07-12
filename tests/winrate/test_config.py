@@ -16,7 +16,11 @@ def test_defaults():
     assert c.open_chase_cap_pct == 102.0
     assert c.long_ma_states == ["多头"]
     assert c.short_ma_states == []
-    assert c.buy_points == ["扣抵量均线支撑", "5日均量均线支撑", "回调一半", "波段50%"]
+    assert c.buy_points == [
+        "回调一半", "波段50%",
+        "扣抵量均线支撑", "5日均量均线支撑", "无量均线支撑",
+        "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑", "MA240支撑",
+    ]
 
 
 def test_cap_bucket():

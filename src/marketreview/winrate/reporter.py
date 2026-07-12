@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from pathlib import Path
 
 from .config import WinrateConfig
@@ -34,7 +35,7 @@ def aggregate(trades: list[TradeResult]) -> dict[str, BuyPointStats]:
         small = sum(1 for t in ts if t.exit_reason == "小胜利")
         stop = sum(1 for t in ts if t.exit_reason == "盘中止损")
         loss = sum(1 for t in ts
-                   if t.exit_reason in ("收盘止损", "时间止损", "回测结束") and t.pnl_pct < 0)
+                   if t.exit_reason in ("收盘止损", "时间止损") and t.pnl_pct < 0)
         wins = sum(1 for t in ts if t.success)
         out[bp] = BuyPointStats(
             buy_point=bp, n=n,
@@ -71,3 +72,33 @@ def export_csv(trades: list[TradeResult], cfg: WinrateConfig,
         writer.writeheader()
         for r in rows:
             writer.writerow({k: r.get(k, "") for k in _EXPORT_FIELDS})
+
+
+def save_run(trades: list[TradeResult], cfg: WinrateConfig,
+             base_dir: str | Path = ".winrate_data") -> str:
+    """把一次扫描结果落盘：base_dir/<时间戳>/ 下每买点一个 CSV + 配置快照。
+
+    CSV 为干净表头+数据（无 # 注释），供 scripts/winrate_analysis.py 直接读。
+    配置快照记录实际生效的 cfg（含页面上改过的值），服务"改配置看效果"的历史对比。
+    返回 run 目录路径。
+    """
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(base_dir) / ts
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    for bp in cfg.buy_points:
+        rows = export_rows(trades, bp)
+        if not rows:
+            continue  # 无触发的买点不建空文件
+        with open(run_dir / f"{bp}.csv", "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=_EXPORT_FIELDS)
+            writer.writeheader()
+            for r in rows:
+                writer.writerow({k: r.get(k, "") for k in _EXPORT_FIELDS})
+
+    with open(run_dir / "config_snapshot.txt", "w", encoding="utf-8") as f:
+        f.write(f"# winrate run {ts}\n")
+        for k, v in asdict(cfg).items():
+            f.write(f"{k}={v}\n")
+
+    return str(run_dir)
