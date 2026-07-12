@@ -152,6 +152,6 @@ if st.session_state.get("band_result"):
                                       position_capital=position_capital)
     render_buy_point_table(buy_points)
 
-    # ── MA 探底记录 ──
-    ma_probes = compute_ma_probes(df, band)
-    render_ma_probes(ma_probes)
+    # ── MA 探底记录（暂隐藏，趋势行情下参考价值有限）──
+    # ma_probes = compute_ma_probes(df, band)
+    # render_ma_probes(ma_probes)

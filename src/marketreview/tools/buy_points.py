@@ -582,7 +582,7 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
                 position="量价节点",
                 price=target,
                 distance_pct=dist,
-                reason=f"量价节点@{dates[k]} 成本{cost_r}(两日最低)×1.04，跌破成本止损{stop_price}",
+                reason=f"量价节点@{dates[k]} 成本{cost_r}(两日最低)×1.04",
                 intraday_stop=stop_price,
             ))
         log.debug("VolNode: %d 个存活节点 (窗口[%d,%d], code=%s)",

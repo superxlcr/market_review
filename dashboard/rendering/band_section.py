@@ -221,7 +221,7 @@ def render_buy_point_table(buy_points: list[BuyPoint]) -> None:
             <th style="text-align:center;width:10%;">位置</th>
             <th style="text-align:right;width:9%;">价格</th>
             <th style="text-align:right;width:7%;">距离</th>
-            <th style="text-align:right;width:22%;">盘中止损</th>
+            <th style="text-align:right;width:15%;">盘中止损</th>
             <th style="text-align:center;width:6%;">仓位</th>
             <th style="text-align:left;">原因</th>
         </tr></thead>

@@ -174,9 +174,9 @@ for s in _stocks:
                                               trend_direction=_trend_direction,
                                               position_capital=position_capital)
             render_buy_point_table(buy_points)
-            # ── MA 探底记录 ──
-            ma_probes = compute_ma_probes(band_df, band)
-            render_ma_probes(ma_probes)
+            # ── MA 探底记录（暂隐藏，趋势行情下参考价值有限）──
+            # ma_probes = compute_ma_probes(band_df, band)
+            # render_ma_probes(ma_probes)
 
 st.divider()
 st.caption("编辑自选个股：修改 `config/watchlist_stocks.txt` 后刷新页面")
