@@ -18,7 +18,7 @@ def test_defaults():
     assert c.long_ma_states == ["多头"]
     assert c.short_ma_states == []
     assert c.buy_points == [
-        "回调一半", "回调一半严格", "波段50%", "量价节点", "MA240支撑", "随机基准",
+        "回调一半", "回调一半严格", "波段50%", "量价节点", "量价节点上浮2%", "MA240支撑", "随机基准",
     ]
 
 
@@ -29,9 +29,10 @@ def test_buy_point_three_state():
         assert BUY_POINT_STAGE[name] == "disabled"
         assert name not in ALL_BUY_POINTS
     # live + trial 均在扫描集
-    for name in ["回调一半", "波段50%", "量价节点", "MA240支撑", "回调一半严格", "随机基准"]:
+    for name in ["回调一半", "波段50%", "量价节点", "MA240支撑",
+                 "回调一半严格", "量价节点上浮2%", "随机基准"]:
         assert name in ALL_BUY_POINTS
-    assert len(ALL_BUY_POINTS) == 6
+    assert len(ALL_BUY_POINTS) == 7
     assert all(BUY_POINT_STAGE[n] != "disabled" for n in ALL_BUY_POINTS)
 
 

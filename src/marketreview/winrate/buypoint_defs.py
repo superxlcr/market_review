@@ -26,6 +26,7 @@ _NAME_MAP = {
     "回调一半严格": ("half", HalfRetraceChecker(strict=True)),
     "波段50%": ("band50", Band50Checker()),
     "量价节点": ("volnode", VolPriceNodeChecker()),
+    "量价节点上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02)),
     "随机基准": ("random", RandomBaselineChecker()),
 }
 

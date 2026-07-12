@@ -506,7 +506,7 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
     量价节点(单日 k): close[k]/close[k-1] > 1.02 且 amount[k]/amount[k-1] > 1.2
       —— 放量拉升，视作大资金进场。
     成本: min(low[k], low[k-1])，两日最低价 = 大资金进入成本。
-    买入: 成本 × 1.04（喂 winrate 引擎的条件单）；止损: 盘中跌破成本。
+    买入: 成本 × ENTRY_PREMIUM（默认 1.04=上浮4%；trial 变体 1.02=上浮2%）；止损: 盘中跌破成本。
 
     用法（买拉回）:
       ① 只在波段上升腿 [V, P] 内找节点；
@@ -519,6 +519,11 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
     PRICE_RATIO = 1.02
     VOL_RATIO = 1.2
     ENTRY_PREMIUM = 1.04
+
+    def __init__(self, entry_premium: float = 1.04):
+        # entry_premium=1.04 → live（默认上浮4%）；其它值 → trial（如上浮2%=1.02 对照）
+        self.ENTRY_PREMIUM = entry_premium
+        self.STAGE = "live" if abs(entry_premium - 1.04) < 1e-9 else "trial"
 
     def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
         if df.empty:
@@ -577,12 +582,14 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
             target = round(cost * self.ENTRY_PREMIUM, 2)
             stop_price = round(cost_r - 0.01, 2)   # 跌破成本 = 成本低一分钱
             dist = round((target / cur - 1) * 100, 1) if cur > 0 else 0.0
+            prem = self.ENTRY_PREMIUM
+            tag = "" if abs(prem - 1.04) < 1e-9 else f"[上浮{round((prem - 1) * 100):g}%] "
             results.append(BuyPoint(
                 type="量价节点",
                 position="量价节点",
                 price=target,
                 distance_pct=dist,
-                reason=f"量价节点@{dates[k]} 成本{cost_r}(两日最低)×1.04",
+                reason=f"{tag}量价节点@{dates[k]} 成本{cost_r}(两日最低)×{prem:g}",
                 intraday_stop=stop_price,
             ))
         log.debug("VolNode: %d 个存活节点 (窗口[%d,%d], code=%s)",
@@ -719,6 +726,7 @@ def find_all_buy_points(df, band: BandResult,
         MAChecker(vol_mode="today", periods=[240], type_name="MA240支撑", stage="live"),  # live
         High21Checker(),                                                    # trial（默认隐藏）
         HalfRetraceChecker(strict=True),                                    # trial（原始严格版）
+        VolPriceNodeChecker(entry_premium=1.02),                            # trial（上浮2%对照，需 code）
     ]
     # STAGE 过滤：disabled 永不出现；trial 仅在「显示试验买点」开时出现
     checkers = [c for c in checkers
