@@ -99,19 +99,20 @@ def _calc_stop_losses(bp: BuyPoint, atr_pct: float | None,
             bp.close_stop = ma_val
             bp.close_stop_pct = 0.0
             bp.close_stop_reason = "跌破MA"
+    elif bp.position == "量价节点":
+        # 量价节点：自带成本止损（成本-0.01，checker 已算好），不覆盖
+        if bp.intraday_stop > 0 and bp_price > 0:
+            bp.intraday_stop_pct = round((bp_price - bp.intraday_stop) / bp_price * 100, 1)
+        bp.intraday_stop_reason = "跌破成本"
+        bp.close_stop = bp.intraday_stop
+        bp.close_stop_pct = bp.intraday_stop_pct
+        bp.close_stop_reason = "跌破成本"
     else:
-        # 回调一半 / 波段50%
-        if atr_pct is not None and atr_pct > 0:
-            pct = min(atr_pct * 2, atr_cap)
-            if pct >= atr_cap:
-                bp.intraday_stop_reason = f"{atr_cap:.0f}%上限"
-            else:
-                bp.intraday_stop_reason = f"2×ATR {atr_pct*2:.1f}%"
-        else:
-            pct = atr_cap
-            bp.intraday_stop_reason = f"{atr_cap:.0f}%上限"
+        # 回调一半 / 波段50%：固定空间止损（默认5%，读配置 主力盘中止损%；结论=紧止损尾亏更干净）
+        pct = config.get("主力盘中止损%", 5.0)
         bp.intraday_stop_pct = round(pct, 1)
         bp.intraday_stop = round(bp_price * (1 - pct / 100), 2)
+        bp.intraday_stop_reason = f"{pct:.0f}%空间止损"
         # 收盘：跌破买入价
         bp.close_stop = bp_price
         bp.close_stop_pct = 0.0
@@ -205,7 +206,7 @@ def _probe_context(df, row_idx: int, period: int) -> dict:
 class BaseBuyPointChecker(ABC):
     """买点检查器基类."""
 
-    STAGE = "live"   # "live"=各页面可见；"trial"=试验中，仅买点胜率可见（find_all_buy_points 默认过滤）
+    STAGE = "live"   # "live"=各页面可见；"trial"=试验中，仅买点胜率可见（find_all_buy_points 默认过滤）；"disabled"=停用，哪都不出现
 
     @abstractmethod
     def check(self, df, band: BandResult) -> list[BuyPoint]:
@@ -219,7 +220,14 @@ class HalfRetraceChecker(BaseBuyPointChecker):
     """回调一半位置买点.
 
     条件: 已跌破62.5%（trigger_625_date 非空）+ 波段幅度成立 + 回调≥13天.
+
+    strict=True（回调一半严格，原始定义）: 额外要求「回调谷底未跌破50%线」——
+    一旦回调最低点跌破波段50%线，趋势按定义已改变，此处合理买点应是波段50%而非回调一半。
     """
+
+    def __init__(self, strict: bool = False):
+        self.strict = strict
+        self.STAGE = "trial" if strict else "live"
 
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         if not band.trigger_625_date:
@@ -228,6 +236,10 @@ class HalfRetraceChecker(BaseBuyPointChecker):
             return []
         pullback_days = band.rows_count - 1 - band.p_idx
         if pullback_days < 13:
+            return []
+
+        # 严格版：回调谷底跌破50%线 → 趋势已改变 → 不触发
+        if self.strict and band.line_50 > 0 and band.l_price < band.line_50:
             return []
 
         hr_latest = band.half_retrace_series[-1]["price"] if band.half_retrace_series else 0.0
@@ -242,7 +254,8 @@ class HalfRetraceChecker(BaseBuyPointChecker):
         else:
             bp_type = "重新突破"
 
-        reason = f"回调{pullback_days}天 ≥ 13天，且跌破过波段 62.5% {band.line_625:.2f}"
+        prefix = "[严格] " if self.strict else ""
+        reason = f"{prefix}回调{pullback_days}天 ≥ 13天，且跌破过波段 62.5% {band.line_625:.2f}"
 
         return [BuyPoint(
             type=bp_type,
@@ -302,6 +315,8 @@ class High21Checker(BaseBuyPointChecker):
     从 P 到今日找局部收盘波峰，波峰距今 ≥ 21天 且价格在回调一半上方。
     风险较高，仓位减半（capital_multiplier=0.5）。
     """
+
+    STAGE = "trial"   # 从个股页撤下（未纳入胜率分析，先隐藏）
 
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         if not band.v_qualified:
@@ -389,10 +404,11 @@ class MAChecker(BaseBuyPointChecker):
     VOL_THRESHOLD = 1.0   # 量 > 扣抵量/后续均量即可
 
     def __init__(self, vol_mode: str = "today", type_name: str = "扣抵量均线支撑",
-                 periods: list[int] | None = None):
+                 periods: list[int] | None = None, stage: str = "trial"):
         self.vol_mode = vol_mode        # "today" | "avg5" | "none"
         self.type_name = type_name
         self.periods = list(periods) if periods else list(self.MA_PERIODS)
+        self.STAGE = stage              # 实例级 STAGE（MA240 传 "live"，其余默认 "trial"）
 
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         if df.empty:
@@ -499,7 +515,7 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
       ④ 股价从 P 回调、曾跌破 75%线(line_75) 后才激活挂单（浅回调即激活）。
     """
 
-    STAGE = "trial"
+    STAGE = "live"
     PRICE_RATIO = 1.02
     VOL_RATIO = 1.2
     ENTRY_PREMIUM = 1.04
@@ -559,14 +575,15 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
                 continue
             seen_cost.add(cost_r)
             target = round(cost * self.ENTRY_PREMIUM, 2)
+            stop_price = round(cost_r - 0.01, 2)   # 跌破成本 = 成本低一分钱
             dist = round((target / cur - 1) * 100, 1) if cur > 0 else 0.0
             results.append(BuyPoint(
                 type="量价节点",
                 position="量价节点",
                 price=target,
                 distance_pct=dist,
-                reason=f"量价节点@{dates[k]} 成本{cost_r}(两日最低)×1.04，盘中跌破成本止损",
-                intraday_stop=cost_r,
+                reason=f"量价节点@{dates[k]} 成本{cost_r}(两日最低)×1.04，跌破成本止损{stop_price}",
+                intraday_stop=stop_price,
             ))
         log.debug("VolNode: %d 个存活节点 (窗口[%d,%d], code=%s)",
                   len(results), band.v_idx, band.p_idx, code)
@@ -624,6 +641,60 @@ def _calc_shares(price: float, capital: float) -> str:
     return f"{rounded:,}股"
 
 
+def _annotate_confluence(all_points: list[BuyPoint], df) -> None:
+    """给买点 reason 追加共振标记（邻近阈值 2%）。规则源自 163313/190319 双跑结论：
+      · 波段50% 附近有 MA/量价 → 偏正面（支撑位人气）
+      · 量价节点 附近有 MA240（年线）→ 偏正面
+      · 回调一半 与 波段50% 共振 → 强正面；仅与 MA 共振 → 谨慎（可能套牢盘）
+    """
+    if not all_points:
+        return
+    periods = [20, 55, 60, 120, 144, 240]
+    try:
+        mas = calc_ma(df, periods)
+    except Exception:
+        return
+    ma_latest: dict[int, float] = {}
+    for p in periods:
+        for v in reversed(mas[f"MA{p}"]):
+            if not np.isnan(v) and v > 0:
+                ma_latest[p] = float(v)
+                break
+
+    def _near(price: float, target: float, tol: float = 0.02) -> bool:
+        return target > 0 and price > 0 and abs(price - target) / price <= tol
+
+    def _nearest_ma(price: float):
+        best = None
+        for p, v in ma_latest.items():
+            if _near(price, v):
+                d = abs(price - v) / price
+                if best is None or d < best[1]:
+                    best = (p, d)
+        return best[0] if best else None
+
+    band50 = next((bp.price for bp in all_points if bp.position == "波段50%"), 0.0)
+    volnode_prices = [bp.price for bp in all_points if bp.position == "量价节点"]
+
+    for bp in all_points:
+        if bp.position == "波段50%":
+            p = _nearest_ma(bp.price)
+            near_vol = any(_near(bp.price, vp) for vp in volnode_prices)
+            if p or near_vol:
+                tag = f"MA{p}" if p else "量价节点"
+                bp.reason += f" ｜🔴共振支撑(近{tag})，偏正面"
+        elif bp.position == "量价节点":
+            if 240 in ma_latest and _near(bp.price, ma_latest[240]):
+                bp.reason += " ｜🔴年线共振，偏正面"
+        elif bp.position == "回调一半":
+            if band50 and _near(bp.price, band50):
+                bp.reason += " ｜🔴与波段50%共振（强）"
+            else:
+                p = _nearest_ma(bp.price)
+                if p:
+                    bp.reason += f" ｜🟠近MA{p}，或有套牢盘，谨慎"
+
+
 def find_all_buy_points(df, band: BandResult,
                         ts_code: str = "",
                         atr: float | None = None,
@@ -642,17 +713,21 @@ def find_all_buy_points(df, band: BandResult,
     config = load_buy_point_config()
     show_trial = config.get("显示试验买点", 0.0) >= 1
     checkers: list[BaseBuyPointChecker] = [
-        HalfRetraceChecker(),
-        Band50Checker(),
-        High21Checker(),
-        MAChecker(vol_mode="today", type_name="扣抵量均线支撑"),
-        MAChecker(vol_mode="avg5", type_name="5日均量均线支撑"),
+        HalfRetraceChecker(),                                               # live
+        Band50Checker(),                                                    # live
+        VolPriceNodeChecker(),                                             # live（量价节点，需 code）
+        MAChecker(vol_mode="today", periods=[240], type_name="MA240支撑", stage="live"),  # live
+        High21Checker(),                                                    # trial（默认隐藏）
+        HalfRetraceChecker(strict=True),                                    # trial（原始严格版）
     ]
-    # 试验中的买点默认只在「买点胜率」出现，不污染个股追踪/波段分析
-    checkers = [c for c in checkers if show_trial or getattr(c, "STAGE", "live") != "trial"]
+    # STAGE 过滤：disabled 永不出现；trial 仅在「显示试验买点」开时出现
+    checkers = [c for c in checkers
+                if getattr(c, "STAGE", "live") != "disabled"
+                and (show_trial or getattr(c, "STAGE", "live") != "trial")]
     all_points: list[BuyPoint] = []
     for c in checkers:
-        all_points.extend(c.check(df, band))
+        bps = c.check(df, band, code=ts_code) if isinstance(c, VolPriceNodeChecker) else c.check(df, band)
+        all_points.extend(bps)
 
     # ── 涨幅过滤 ──
     threshold = _get_board_threshold(ts_code)
@@ -691,6 +766,9 @@ def find_all_buy_points(df, band: BandResult,
         for bp in all_points:
             capital = position_capital * bp.capital_multiplier
             bp.position_size = _calc_shares(bp.price, capital)
+
+    # 共振提示（追加到 reason；邻近阈值 2%）
+    _annotate_confluence(all_points, df)
 
     all_points.sort(key=lambda bp: bp.price, reverse=True)
     return all_points

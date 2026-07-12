@@ -1,6 +1,7 @@
 from pathlib import Path
 from marketreview.winrate.config import (
     WinrateConfig, default_winrate_config, parse_winrate_config, cap_bucket,
+    ALL_BUY_POINTS, BUY_POINT_STAGE,
 )
 
 
@@ -17,11 +18,21 @@ def test_defaults():
     assert c.long_ma_states == ["多头"]
     assert c.short_ma_states == []
     assert c.buy_points == [
-        "回调一半", "波段50%",
-        "扣抵量均线支撑", "5日均量均线支撑", "无量均线支撑",
-        "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑", "MA240支撑",
-        "量价节点", "随机基准",
+        "回调一半", "回调一半严格", "波段50%", "量价节点", "MA240支撑", "随机基准",
     ]
+
+
+def test_buy_point_three_state():
+    # disabled 不进扫描集（MA 家族 + 均量三兄弟已停用，仅 MA240 留存）
+    for name in ["无量均线支撑", "5日均量均线支撑", "扣抵量均线支撑",
+                 "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑"]:
+        assert BUY_POINT_STAGE[name] == "disabled"
+        assert name not in ALL_BUY_POINTS
+    # live + trial 均在扫描集
+    for name in ["回调一半", "波段50%", "量价节点", "MA240支撑", "回调一半严格", "随机基准"]:
+        assert name in ALL_BUY_POINTS
+    assert len(ALL_BUY_POINTS) == 6
+    assert all(BUY_POINT_STAGE[n] != "disabled" for n in ALL_BUY_POINTS)
 
 
 def test_cap_bucket():

@@ -23,6 +23,7 @@ _NAME_MAP = {
     "MA144支撑": ("ma", MAChecker(vol_mode="today", periods=[144], type_name="MA144支撑")),
     "MA240支撑": ("ma", MAChecker(vol_mode="today", periods=[240], type_name="MA240支撑")),
     "回调一半": ("half", HalfRetraceChecker()),
+    "回调一半严格": ("half", HalfRetraceChecker(strict=True)),
     "波段50%": ("band50", Band50Checker()),
     "量价节点": ("volnode", VolPriceNodeChecker()),
     "随机基准": ("random", RandomBaselineChecker()),

@@ -3,13 +3,35 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-ALL_BUY_POINTS = [
-    "回调一半", "波段50%",
-    "扣抵量均线支撑", "5日均量均线支撑", "无量均线支撑",          # 组合变体：量确认维度
-    "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑", "MA240支撑",  # 单周期维度
-    "量价节点",                                                # 买拉回：波段上升腿放量节点，跌破成本止损
-    "随机基准",                                                # 无技能对照：市价随机，校准其它买点胜率
+# 买点状态（单一真相源，胜率侧）：
+#   live=启用（个股页+胜率）  trial=实验中（仅胜率）  disabled=停用（不出现）
+# 实盘侧（tools/buy_points.py 的 find_all_buy_points）另有一份 checker.STAGE，需与此保持一致。
+BUY_POINT_STAGE = {
+    "回调一半": "live",
+    "波段50%": "live",
+    "量价节点": "live",           # 买拉回：波段上升腿放量节点，跌破成本止损
+    "MA240支撑": "live",          # MA 家族唯一幸存（长均中性 edge +5.4）
+    "回调一半严格": "trial",       # 原始定义：回调谷底跌破50%线即趋势已改变，不再触发
+    "随机基准": "trial",          # 无技能对照：市价随机，校准其它买点胜率
+    "扣抵量均线支撑": "disabled",
+    "5日均量均线支撑": "disabled",
+    "无量均线支撑": "disabled",
+    "MA20支撑": "disabled",
+    "MA55支撑": "disabled",
+    "MA60支撑": "disabled",
+    "MA120支撑": "disabled",
+    "MA144支撑": "disabled",
+}
+
+# 展示/扫描顺序（含全部；disabled 会被 ALL_BUY_POINTS 过滤掉，改状态即可重新启用）
+_BUY_POINT_ORDER = [
+    "回调一半", "回调一半严格", "波段50%", "量价节点", "MA240支撑", "随机基准",
+    "扣抵量均线支撑", "5日均量均线支撑", "无量均线支撑",
+    "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑",
 ]
+
+# 胜率页可选项 / 默认扫描集 = 非 disabled
+ALL_BUY_POINTS = [n for n in _BUY_POINT_ORDER if BUY_POINT_STAGE.get(n, "live") != "disabled"]
 
 
 @dataclass

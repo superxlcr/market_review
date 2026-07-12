@@ -230,6 +230,15 @@ def render_ohlcv_section(
             arrangement = ma_arrangement(df, medium_long_periods=medium_long_periods)
             st.markdown(f"**均线排列:** {arrangement}")
 
+            # 长期均线空头形态警示（仅个股）：中长期均线值随周期递增 = 短均在长均之下 = 空头
+            if section_type == "stock":
+                _ml = [v for v in (latest_val(mas[f"MA{p}"]) for p in medium_long_periods) if v]
+                if len(_ml) >= 2 and all(_ml[i] < _ml[i + 1] for i in range(len(_ml) - 1)):
+                    st.markdown(
+                        "<span style='color:#ef6c00;font-weight:600;'>⚠ 长期均线空头形态，不建议介入个股</span>",
+                        unsafe_allow_html=True,
+                    )
+
         with vol_col:
             st.markdown("**成交额分析**")
             vol = volume_analysis(df)

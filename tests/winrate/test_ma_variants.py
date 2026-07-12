@@ -46,18 +46,34 @@ def test_avg5_variant_type_and_reason():
     assert all("5日均量" in p.reason for p in pts)
 
 
+def _band_hr():
+    """能触发 回调一半（宽松 live + 严格 trial）的 band：跌破62.5、v_qualified、
+    回调>=13天、有回调一半价、回调谷底 9.5 ≥ 50%线 9.0（严格版也过门槛）。"""
+    b = BandResult()
+    b.trigger_625_date = "20240101"
+    b.v_qualified = True
+    b.p_idx = 0
+    b.rows_count = 20
+    b.half_retrace_series = [{"price": 9.9}]
+    b.current_price = 10.0
+    b.line_625 = 10.2
+    b.line_50 = 9.0
+    b.l_price = 9.5
+    return b
+
+
 def test_find_all_hides_trial_by_default(monkeypatch):
     df = _rising()
     monkeypatch.setattr(BP, "load_buy_point_config", lambda: {})  # 无 显示试验买点 → 默认隐藏
-    pts = find_all_buy_points(df, _band(df))
-    assert all(p.type not in _TRIAL_TYPES for p in pts)
+    pts = find_all_buy_points(df, _band_hr())
+    assert all("[严格]" not in p.reason for p in pts)   # 回调一半严格（trial）默认隐藏
 
 
 def test_find_all_shows_trial_when_enabled(monkeypatch):
     df = _rising()
     monkeypatch.setattr(BP, "load_buy_point_config", lambda: {"显示试验买点": 1.0})
-    pts = find_all_buy_points(df, _band(df))
-    assert any(p.type in _TRIAL_TYPES for p in pts)
+    pts = find_all_buy_points(df, _band_hr())
+    assert any("[严格]" in p.reason for p in pts)       # 开启后严格版出现
 
 
 def test_ma_single_period_only_checks_that_period():

@@ -43,7 +43,7 @@ def test_volnode_detects_single_valid_node():
     p = pts[0]
     assert p.type == "量价节点" and p.position == "量价节点"
     assert p.price == 104.0                     # 成本 min(low8,low7)=100 ×1.04
-    assert p.intraday_stop == 100.0
+    assert p.intraday_stop == 99.99             # 跌破成本 = 成本100.0 低一分钱
     assert "量价节点" in p.reason and "成本100.0" in p.reason
 
 
