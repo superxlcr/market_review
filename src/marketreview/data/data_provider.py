@@ -74,6 +74,7 @@ class DataProvider:
     def ensure_data_loaded(
         self, end_date: str, progress_cb=None,
         extra_industry_codes: list[str] | None = None,
+        min_fetch_start: str | None = None,
     ) -> dict:
         """
         Ensure tushare_cache has raw K-line + adj_factor for all stocks.
@@ -89,6 +90,13 @@ class DataProvider:
         end_dt = datetime.strptime(end_date, "%Y%m%d")
         fetch_start_dt = end_dt - timedelta(days=_FETCH_DAYS)
         fetch_start = fetch_start_dt.strftime("%Y%m%d")
+        # 胜率数据准备：允许把 fetch_start 压到更早的下限（预热缓冲，盖 band300+MA240+3浪3）
+        if min_fetch_start:
+            floor = min_fetch_start.replace("-", "")
+            if floor < fetch_start:
+                log.info("ensure_data_loaded: fetch_start lowered %s -> %s (min_fetch_start)",
+                         fetch_start, floor)
+                fetch_start = floor
         check_start_dt = end_dt - timedelta(days=_CHECK_DAYS)
         check_start = check_start_dt.strftime("%Y%m%d")
         db_start_dt = end_dt - timedelta(days=_DB_FETCH_DAYS)
@@ -115,9 +123,12 @@ class DataProvider:
 
         if proxy_earliest and proxy_latest:
             proxy_earliest_clean = proxy_earliest.replace("-", "")
-            # Gap at head? Use check_start (360d) not fetch_start (500d)
+            # Gap at head? Use check_start (500d) not fetch_start (1000d)
             # so we don't re-fetch just because we're a few days short of 500.
-            if proxy_earliest_clean > check_start:
+            # 传了 min_fetch_start 时，门槛放宽到该下限，确保前置段缺口也被识别
+            effective_floor = (min(min_fetch_start.replace("-", ""), check_start)
+                               if min_fetch_start else check_start)
+            if proxy_earliest_clean > effective_floor:
                 missing_ranges.append(
                     (fetch_start, _yesterday(proxy_earliest_clean))
                 )
@@ -1482,6 +1493,62 @@ class DataProvider:
             else:
                 code = f"{code}.SZ"
         return code
+
+    def check_kline_coverage(self, start: str, end: str,
+                             threshold: float = 0.9) -> dict:
+        """检查 [start,end] 每个交易日的 K线覆盖率，供胜率数据准备门禁用。
+
+        分母 = stock_basic 总数（与 _validate_coverage 口径一致）。
+        一条 GROUP BY 查回每日 count，避免 N 次单日查询。
+
+        返回:
+          {ready, total_dates, covered_dates, missing_dates, min_ratio, error}
+          - ready = (missing_dates 为空 且 total_dates > 0)
+          - missing_dates = ratio < threshold 的日期（升序，最多前 50 个）
+          - 无数据的日期不出现在 count dict，故不计入 total_dates
+            （完全没拉到的日期由 total_dates 偏少体现，调用方按范围判断）
+          - stock_basic 为空 → ready=False, error 非空
+        """
+        start = start.replace("-", "")
+        end = end.replace("-", "")
+        total_stocks = self.cache.get_stock_basic_count()
+        if total_stocks == 0:
+            log.warning("check_kline_coverage: stock_basic 为空，无法判定覆盖率")
+            return {"ready": False, "total_dates": 0, "covered_dates": 0,
+                    "missing_dates": [], "min_ratio": 0.0,
+                    "error": "stock_basic 为空，请先在控制台拉取基础数据"}
+
+        counts = self.cache.count_daily_by_date_range(start, end)
+        if not counts:
+            log.warning("check_kline_coverage: [%s,%s] 无任何缓存数据", start, end)
+            return {"ready": False, "total_dates": 0, "covered_dates": 0,
+                    "missing_dates": [], "min_ratio": 0.0,
+                    "error": f"[{start},{end}] 无任何缓存数据"}
+
+        missing: list[str] = []
+        min_ratio = 1.0
+        for d in sorted(counts.keys()):
+            ratio = counts[d] / total_stocks
+            if ratio < min_ratio:
+                min_ratio = ratio
+            if ratio < threshold:
+                missing.append(d)
+        covered = len(counts) - len(missing)
+        log.info("check_kline_coverage [%s~%s]: total_dates=%d covered=%d "
+                 "missing=%d min_ratio=%.3f threshold=%.2f",
+                 start, end, len(counts), covered, len(missing),
+                 min_ratio, threshold)
+        if missing:
+            log.warning("check_kline_coverage: 缺口日期(前10)=%s 共%d天",
+                        missing[:10], len(missing))
+        return {
+            "ready": len(missing) == 0,
+            "total_dates": len(counts),
+            "covered_dates": covered,
+            "missing_dates": missing[:50],
+            "min_ratio": round(min_ratio, 3),
+            "error": None,
+        }
 
 
 # ═══════════════════════════════════════════════════════════════
