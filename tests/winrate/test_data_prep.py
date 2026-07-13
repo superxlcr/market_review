@@ -108,3 +108,27 @@ def test_check_kline_coverage_per_day_listed_denominator(tmp_path):
     assert res["ready"] is True          # 按日分母=3，3/3=100%
     assert res["min_ratio"] >= 0.9
     assert res["missing_dates"] == []
+
+
+def test_check_wave33_coverage_all_ready(tmp_path):
+    dp = _make_dp_with_basic(tmp_path, n_basic=3)
+    # 两天都有 wave33 + K线
+    for d in ["20240101", "20240102"]:
+        dp.cache.upsert_wave33(d, 10, 5, 50.0, "[]")
+        for i in range(3):
+            dp.cache.upsert_daily(f"60000{i}.SH", [_row(f"60000{i}.SH", d)])
+    res = dp.check_wave33_coverage("20240101", "20240102")
+    assert res["ready"] is True
+    assert res["missing_dates"] == []
+
+
+def test_check_wave33_coverage_missing(tmp_path):
+    dp = _make_dp_with_basic(tmp_path, n_basic=3)
+    # 20240101 有 wave33，20240102 有 K线但没 wave33
+    dp.cache.upsert_wave33("20240101", 10, 5, 50.0, "[]")
+    for d in ["20240101", "20240102"]:
+        for i in range(3):
+            dp.cache.upsert_daily(f"60000{i}.SH", [_row(f"60000{i}.SH", d)])
+    res = dp.check_wave33_coverage("20240101", "20240102")
+    assert res["ready"] is False
+    assert res["missing_dates"] == ["20240102"]
