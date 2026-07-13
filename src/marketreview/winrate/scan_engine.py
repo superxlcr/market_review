@@ -37,7 +37,8 @@ def prepare_klines(rows_desc: list[dict]) -> list[dict]:
 
 def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
                industry_l1: str, industry_l2: str, list_date: str,
-               mv_series: dict[str, float], band_lookback: int = 300) -> list[TradeResult]:
+               mv_series: dict[str, float], band_lookback: int = 300,
+               cache=None) -> list[TradeResult]:
     klines = prepare_klines(rows_desc)
     n = len(klines)
     if n < 60:
@@ -84,7 +85,7 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
             tr = simulate_trade(sig, i, klines, cfg, code, name, atr_T)
             if tr is None:
                 continue
-            _tag(tr, df_upto, mv_yi, industry_l1, industry_l2)
+            _tag(tr, df_upto, mv_yi, industry_l1, industry_l2, cache)
             results.append(tr)
             # 该买点跳过自己的持仓期：下次可建仓 = 出场日之后（不影响其它买点）
             exit_next = _date_idx(dates, tr.exit_date) + 1
@@ -102,13 +103,32 @@ def _date_idx(dates: list[str], d: str) -> int:
         return len(dates) - 1
 
 
-def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2):
+def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2, cache=None):
     tr.short_ma_state = ma_group_state(df_upto, [5, 10, 20])
     tr.long_ma_state = ma_group_state(df_upto, [60, 120, 240])
     tr.market_cap_yi = round(mv_yi, 1)
     tr.cap_bucket = cap_bucket(mv_yi) if mv_yi > 0 else ""
     tr.industry_l1 = l1
     tr.industry_l2 = l2
+    w33 = _wave33_state(cache, tr.signal_date)
+    tr.wave33_direction = w33["direction"]
+    tr.wave33_streak = w33["streak"]
+    tr.wave33_label = w33["label"]
+
+
+def _wave33_state(cache, signal_date: str) -> dict:
+    """取 signal_date 及之前 21 天 wave33 count 序列，算趋势状态。
+    缺数据 → 空状态（门禁已保证就绪；此处防御性返回空）。"""
+    from marketreview.tools.wave33 import compute_trend
+    if cache is None:
+        return {"direction": "", "streak": 0, "label": ""}
+    rows = cache.get_wave33_range(limit=21, end_date=signal_date)  # DESC
+    if len(rows) < 2:
+        log.warning("_wave33_state: signal_date=%s wave33 序列不足(%d)，留空",
+                    signal_date, len(rows))
+        return {"direction": "", "streak": 0, "label": ""}
+    counts = [r["count"] for r in rows]   # most-recent-first（compute_trend 要求）
+    return compute_trend(counts)
 
 
 def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None) -> list[TradeResult]:
@@ -139,6 +159,7 @@ def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None) -> list[Tra
             code, b.get("name", ""), rows_desc, cfg,
             ind.get("l1_name", ""), ind.get("l2_name", ""),
             b.get("list_date", ""), mv_series,
+            cache=dp.cache,
         )
 
     all_trades: list[TradeResult] = []
