@@ -1,6 +1,7 @@
 """买点胜率回测 — 全市场扫描单买点胜率。"""
 import os
 import sys
+from datetime import datetime, timedelta
 import streamlit as st
 from dataclasses import replace
 from dotenv import load_dotenv
@@ -70,7 +71,82 @@ cfg = replace(
     debug_code=debug_code.strip(),
 )
 
-if st.button("▶ 运行扫描", type="primary", disabled=not buy_points):
+# ── 数据准备（拉取/校验扫描范围内的日 K，作为运行扫描的前置门禁）──
+_PREP_LOOKBACK_CAL = 600   # 预热缓冲日历日（盖 band300+MA240+3浪3，留余量）
+
+
+def _prep_range(start_date: str, end_date: str) -> tuple[str, str]:
+    """数据准备范围 = [start_date - 600日历日, end_date]。end_date='now' 用最新缓存日。"""
+    sd = datetime.strptime(start_date.replace("-", ""), "%Y%m%d")
+    prep_start = (sd - timedelta(days=_PREP_LOOKBACK_CAL)).strftime("%Y%m%d")
+    prep_end = "" if end_date in ("", "now") else end_date.replace("-", "")
+    if not prep_end:
+        # now → 用代理股票最新缓存日（与主路径一致）
+        prep_end = svc._dp.cache.get_latest_date("000001.SZ") or start_date
+        prep_end = prep_end.replace("-", "")
+    return prep_start, prep_end
+
+
+prep_start, prep_end = _prep_range(start_date, cfg.end_date)
+st.caption(f"📦 数据准备范围：`{prep_start}` ~ `{prep_end}` "
+           f"（扫描窗前推 {_PREP_LOOKBACK_CAL} 日历日预热）")
+
+# 就绪状态：缓存 + 范围一致性
+_cov_range = st.session_state.get("wr_cov_range")
+_cov_cache = st.session_state.get("wr_cov_cache")
+_range_match = (_cov_range == (prep_start, prep_end))
+_data_ready = bool(_cov_cache and _range_match and _cov_cache.get("ready")
+                   and not _cov_cache.get("missing_dates"))
+
+# 状态条
+if not _cov_cache:
+    st.info("⏳ 数据未准备：请先点「数据准备」拉取扫描范围内的日 K 数据。")
+elif not _range_match:
+    st.warning("⚠️ 扫描日期已变更，数据准备结果失效，请重新点「数据准备」。")
+elif _cov_cache.get("error"):
+    st.error(f"❌ 校验失败：{_cov_cache['error']}，请重试「数据准备」。")
+elif _data_ready:
+    st.success(f"✅ 数据就绪：覆盖 {_cov_cache['total_dates']} 个交易日，"
+               f"最低覆盖率 {_cov_cache['min_ratio']:.0%}。")
+else:
+    miss = _cov_cache.get("missing_dates", [])
+    st.warning(f"⚠️ 数据未就绪：缺口 {len(miss)} 天"
+               + (f"（{', '.join(miss[:5])}…）" if miss else "")
+               + "，请重试「数据准备」补齐。")
+
+col_prep, _ = st.columns([1, 3])
+with col_prep:
+    if st.button("📦 数据准备", help="按上方范围拉取/校验全市场日 K + 复权因子"):
+        prog = st.progress(0.0)
+        status = st.empty()
+        status.text("数据准备中（首次全市场可能十几分钟）…")
+
+        def _prep_cb(*args):
+            # ensure_data_loaded 的 progress_cb 签名是 (phase, cur, total) 或 (phase, cur, total, label)
+            # 取最后两个数字作为 (cur, total)
+            if len(args) >= 2 and isinstance(args[-2], (int, float)) and isinstance(args[-1], (int, float)):
+                cur, total = args[-2], args[-1]
+                if total:
+                    prog.progress(min(cur / total, 1.0))
+                    status.text(f"数据准备中… {cur}/{total}")
+            elif args:
+                status.text(f"数据准备中… {args[0]}")
+
+        try:
+            svc.prepare_winrate_data(prep_start, prep_end, progress_cb=_prep_cb)
+        except Exception as e:
+            st.error(f"数据准备出错：{e}")
+        else:
+            st.session_state.wr_cov_cache = svc.check_winrate_coverage(prep_start, prep_end)
+            st.session_state.wr_cov_range = (prep_start, prep_end)
+        prog.progress(1.0)
+        status.empty()
+        st.rerun()
+
+# ── 运行扫描（数据未就绪时禁用）──
+if st.button("▶ 运行扫描", type="primary",
+             disabled=not (buy_points and _data_ready),
+             help="数据就绪后可用" if _data_ready else "请先完成「数据准备」"):
     prog = st.progress(0.0)
     status = st.empty()
 
