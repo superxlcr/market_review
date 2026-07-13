@@ -199,6 +199,19 @@ class CacheManager:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def count_daily_by_date_range(self, start: str, end: str) -> dict[str, int]:
+        """一条 GROUP BY 查 [start,end] 每个交易日的 distinct code 数。
+        返回 {date: count}；无数据的日期不出现在 dict 里。
+        与 count_daily_date 同口径（DISTINCT code），避免 N 次单日查询。
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT date, COUNT(DISTINCT code) AS cnt FROM tushare_cache "
+                "WHERE date >= ? AND date <= ? GROUP BY date",
+                [start, end],
+            ).fetchall()
+        return {r["date"]: r["cnt"] for r in rows}
+
     def get_previous_trade_date(self, date_str: str) -> str | None:
         """Return the most recent trade date in cache strictly before date_str."""
         with self._get_conn() as conn:
