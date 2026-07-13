@@ -1854,7 +1854,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "9.7.0"
+    _AI_VERSION = "9.8.0"
 
     def run_winrate_scan(self, cfg, progress_cb=None):
         """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。"""
@@ -1863,6 +1863,23 @@ class DashboardService:
         trades = run_scan(self._dp, cfg, progress_cb=progress_cb)
         stats = aggregate(trades)
         return stats, trades
+
+    def prepare_winrate_data(self, start: str, end: str, progress_cb=None) -> dict:
+        """拉取/校验 [start,end] 全市场 K线+复权因子，复用 ensure_data_loaded 主路径。
+
+        start 通常 = winrate start_date − 600 日历日（预热缓冲，盖 band300+MA240+3浪3）。
+        返回 ensure_data_loaded 的结果 dict。
+        """
+        log.info("[AI v%s] prepare_winrate_data(%s~%s)", self._AI_VERSION, start, end)
+        return self._dp.ensure_data_loaded(end, progress_cb=progress_cb,
+                                           min_fetch_start=start)
+
+    def check_winrate_coverage(self, start: str, end: str) -> dict:
+        """返回数据就绪状态，供页面门禁用。见 DataProvider.check_kline_coverage。"""
+        res = self._dp.check_kline_coverage(start, end)
+        log.info("check_winrate_coverage(%s~%s): ready=%s, missing=%d",
+                 start, end, res.get("ready"), len(res.get("missing_dates", [])))
+        return res
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
