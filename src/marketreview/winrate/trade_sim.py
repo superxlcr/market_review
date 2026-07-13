@@ -48,6 +48,10 @@ class TradeResult:
     cap_bucket: str = ""
     industry_l1: str = ""
     industry_l2: str = ""
+    # 3浪3 市场趋势状态（按 signal_date 查 21 天 count 序列算，市场层标签）
+    wave33_direction: str = ""   # "up" | "down" | "flat"
+    wave33_streak: int = 0       # 连续天数
+    wave33_label: str = ""       # "确认上升，连续上升 5 天" 等
 
 
 def _f(v) -> float:

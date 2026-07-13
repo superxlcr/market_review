@@ -118,3 +118,17 @@ def test_atr_stop_used_when_enabled():
     r = simulate_trade(_entry_sig(10.0), 0, klines, cfg, "600000.SH", "测试", atr_at_signal=0.3)
     assert r.exit_reason == "盘中止损"
     assert round(r.exit_price, 2) == 9.4
+
+
+def test_trade_result_wave33_fields_default_empty():
+    """TradeResult 新增 wave33 三字段，默认空/0。"""
+    from marketreview.winrate.trade_sim import TradeResult
+    tr = TradeResult(
+        buy_point="回调一半", code="600000.SH", name="测试",
+        signal_date="20240101", entry_date="20240102", entry_price=10.0,
+        exit_date="20240105", exit_price=10.5, exit_reason="小胜利",
+        mfp_pct=12.0, hold_days=3, pnl_pct=5.0, success=True,
+    )
+    assert tr.wave33_direction == ""
+    assert tr.wave33_streak == 0
+    assert tr.wave33_label == ""
