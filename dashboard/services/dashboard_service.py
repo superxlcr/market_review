@@ -686,8 +686,8 @@ class DashboardService:
         import time as _time
         from marketreview.tools.wave33 import scan_wave33
 
-        USE_DAYS = 40       # needed for chart display
-        CACHE_DAYS = 80     # over-fetch when scanning
+        USE_DAYS = 96       # needed for chart display + trend buffer (v9.10.1: was 40, bumped to match get_wave33_data fetch_days)
+        CACHE_DAYS = 140    # over-fetch when scanning (was 80, ~1.5x USE)
 
         t0 = _time.time()
 
@@ -878,10 +878,16 @@ class DashboardService:
         if end_date is None:
             end_date = datetime.now().strftime("%Y%m%d")
 
-        # Need: chart_days for display + rolling_days for the earliest bar's window
-        fetch_days = chart_days + rolling_days
+        # Need: chart_days for display + rolling_days for the earliest bar's
+        # window + TREND_BUFFER so compute_trend_series has enough history for
+        # the hysteresis to stabilise (the earliest rolling_days rows have
+        # incomplete rolling windows — we fetch more to push those out of the
+        # trend-relevant range).
+        TREND_BUFFER = 60
+        fetch_days = chart_days + rolling_days + TREND_BUFFER
         log.info("get_wave33_data: end_date=%s chart_days=%s rolling_days=%s "
-                 "fetch_days=%s", end_date, chart_days, rolling_days, fetch_days)
+                 "fetch_days=%s(buffer=%s)", end_date, chart_days, rolling_days,
+                 fetch_days, TREND_BUFFER)
         rows = self._dp.cache.get_wave33_range(limit=fetch_days, end_date=end_date)
         rows = list(reversed(rows))  # chronological (oldest first)
 
@@ -944,16 +950,23 @@ class DashboardService:
             profit_pcts.append(round(cum_profit / len(cum_all) * 100, 1)
                              if cum_all else 0.0)
 
+        # Compute trend on FULL series first (need enough history for
+        # hysteresis + initial-direction guess to stabilise), then slice
+        # the result to chart_days.  v9.7.0 bug: slicing first then
+        # computing trend_series on 15 bars caused early-bar colours to
+        # flip when the date boundary changed.
+        full_rev = list(reversed(counts))
+        trend = compute_trend(full_rev) if full_rev else {
+            "direction": "flat", "streak": 0, "label": "维持，盘整中"
+        }
+        full_trend_series = compute_trend_series(counts)
+
         # Only return the last `chart_days` entries for the chart
         dates = dates[-chart_days:]
         counts = counts[-chart_days:]
         profit_counts = profit_counts[-chart_days:]
         profit_pcts = profit_pcts[-chart_days:]
-
-        rev_counts = list(reversed(counts))
-        trend = compute_trend(rev_counts) if rev_counts else {
-            "direction": "flat", "streak": 0, "label": "维持，盘整中"
-        }
+        trend_series = full_trend_series[-chart_days:]
 
         # Window boundary for the last (most recent) bar — used in sidebar label
         last_window_end = all_dates[-1] if all_dates else ""
@@ -979,7 +992,7 @@ class DashboardService:
             "profit_counts": profit_counts,
             "profit_pcts": profit_pcts,
             "trend": trend,
-            "trend_series": compute_trend_series(counts),
+            "trend_series": trend_series,
             "last_window_start": last_window_start,
             "last_window_end": last_window_end,
             "latest_day_count": latest_day_count,
@@ -1854,7 +1867,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "9.10.0"
+    _AI_VERSION = "9.10.2"
 
     def run_winrate_scan(self, cfg, progress_cb=None):
         """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。"""

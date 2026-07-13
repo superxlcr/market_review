@@ -1,0 +1,31 @@
+- [Design Progress](design-progress.md) — Current state of system design (Agents, data layer, architecture)
+- [Agent 3 Design Decisions](agent3-design-decisions.md) — Revised Agent 3 decisions (基本面分离, 4 states, 持仓分层)
+- [Visual Companion Setup](visual-companion-setup.md) — How to start/stop the design mockup server on port 60508
+- [Data Layer Architecture](data-layer-architecture.md) — v3: raw+adj_factor→qfq, asset_type col, incremental loading, 1000d fetch/500d check
+- [Dashboard Setup](dashboard-setup.md) — How to start/stop the Streamlit dashboard on port 8501
+- [Dashboard Page Registration](dashboard-page-registration.md) — Pages registered explicitly in app.py via st.Page; not auto-discovered from pages/
+- [Two-Window Cache Design](two-window-cache-design.md) — USE window checks cache, CACHE window (2x) over-fetches on miss
+- [Cache Levels Design](cache-levels-design.md) — Three-tier cache: Streamlit TTL, module dict, SQLite DB — when to use each
+- [Logging Convention](logging-convention.md) — Standard logging levels, placement rules, required log points
+- [Always Filter By Date](always-filter-by-date.md) — Cache reads MUST filter by trade_date; never bare "latest N rows"
+- [Streamlit Cache Clear](streamlit-cache-clear.md) — Proper kill+pycache-clear procedure for Windows when Streamlit shows stale code
+- [Change Summary Preference](change-summary-preference.md) — User wants a summary table after each round of code changes
+- [Color Convention](color-convention.md) — Red=bullish, Green=bearish; all UI signals follow this
+- [Industry Label Override](industry-label-override.md) — L1/L2/L3 override mechanism for contribution display; edit as needed
+- [Query Stock Industry](query-stock-industry.md) — One-liner to look up a stock's L1/L2/L3 classification
+- [Data Gap Detection](data-gap-detection.md) — Auto-detect & re-fetch silent gaps in tushare daily data (≥90% coverage check)
+- [Calc KD Dual Purpose](calc-kd-dual-purpose.md) — Two KD functions: calc_kd for display, calc_kd_standard for formula screening
+- [AI Guide Design](ai-guide-design.md) — AI 导语共识：三大板块顶部加导读，具体分析内容待定
+- [AI Prompt Data Principle](ai-prompt-data-principle.md) — 只给数据和用法说明，不下结论；列表给AI自己找规律
+- [AI Version Number](ai-version-number.md) — X.Y.Z rules for verifying hot-reload works after restart
+- [Market Panorama Reference](market-panorama-reference.md) — Complete reference: page layout, data flow, indicator rules, AI guide system
+- [Date Format Convention](date-format-convention.md) — All DB dates YYYYMMDD; never use `_with_dashes` for queries
+- [Band V/P Constraint](band-vp-constraint.md) — V/P < 3/7 推导: 50%×1.1 < 62.5% → 波段深度 ≥ 2.33 倍
+- [Mandatory Pre-Change Workflow](mandatory-pre-change-workflow.md) — Hard gate: list memories, verify env, restart+verify before any code change; skip = session stopped
+- [Database Schema Reference](database-schema-reference.md) — Complete DB schema, all 11 tables + columns, data flow tushare→cache→DataFrame, how to query for debugging
+- [Utility Scripts](utility-scripts.md) — Project utility scripts: db_query, kill_port, debug_stock, restart_streamlit
+- [Fundamental Analysis Design](fundamental-analysis-design.md) — 基本面分析功能设计讨论，产业链知识库方案探索（进行中）
+- [Trading System Design Goal](trading-system-design-goal.md) — 系统目标=捕捉30%+趋势行情；实盘先筛标的+评估行情，行情不行不参与（决定胜率分析口径）
+- [Trader Profile](trader-profile.md) — 用户个人画像：财务状况、性格、时间约束、交易动机
+- [Trading Time Boundaries](trading-time-boundaries.md) — 交易的时间边界：三个边界防心态失衡，投入过多→期待过高→心态崩盘
+- [QFQ vs 通达信](qfq-vs-tongdaxin.md) — 我们前复权(乘法)与通达信(减现金分红)差一点点是口径不同不是bug；raw已核对

@@ -8,8 +8,8 @@
 
 Whenever you are about to modify ANY file:
 
-1. **Scan MEMORY.md** — Read `C:\Users\superxlcr\.claude\projects\i--AIcode-marketreview\memory\MEMORY.md` and list which memory files apply to this change.
-2. **Read the relevant memories** — Open and read each one. Quote the rule in your response.
+1. **Scan MEMORY.md** — Read `docs/memory/MEMORY.md` and list which memory files apply to this change.
+2. **Read the relevant memories** — Open and read each one from `docs/memory/`. Quote the rule in your response.
 3. **State the plan** — What files, what changes, why. Wait for approval before writing code.
 
 ## Post-Change Checklist (MUST complete AFTER writing code)
