@@ -53,8 +53,12 @@ Dashboard Pages
 |-------|-------|---------|
 | _FETCH_DAYS | 1000 | Calendar days to fetch (~670 trading days) |
 | _CHECK_DAYS | 500 | Calendar days required for cache "complete" |
-| _CHUNK_DAYS | 30 | Days per API chunk (~20 trading days) |
+| _CHUNK_DAYS | 20 | Days per API chunk (~14 trading days) |
 | _PAGE_SIZE | 5000 | Tushare API page limit |
+| _DB_FETCH_DAYS | 180 | Calendar days for daily_basic (market cap) fetch |
+| _BASIC_CHUNK_DAYS | 10 | Smaller chunks for daily_basic (offset limit ~100k) |
+| _INDUSTRY_FETCH_DAYS | 1000 | Calendar days for industry daily fetch |
+| _INDUSTRY_CHECK_DAYS | 40 | Calendar days for industry cache check (~27td) |
 
 ### Incremental Loading
 
@@ -72,7 +76,18 @@ tushare_cache (code, date, open, high, low, close, vol, amount, adj_factor, asse
 -- asset_type: 'stock' or 'index'
 -- NO pre_close column (computed as prev_close × adj_prev / adj_today)
 -- Indices have adj_factor=1.0 always
+
+stock_industry_cache (ts_code PK, name, l1_code, l1_name, l2_code, l2_name, l3_code, l3_name)
+-- SW industry classification, fetched once per stock via index_member_all
+
+ai_summary (trade_date, summary_type, guide_key, content, model, created_at)
+-- AI-generated summaries, cache-first, PK: (trade_date, summary_type, guide_key)
+
+stk_limit_cache (ts_code, trade_date, up_limit, down_limit)
+-- Daily price limits, fetched on first use, permanent cache
 ```
+
+Full schema (11 tables) → [[database-schema-reference]].
 
 ### Index Data
 

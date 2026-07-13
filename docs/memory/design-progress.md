@@ -7,7 +7,16 @@ metadata:
   originSessionId: 55145255-5748-4ea9-b1aa-32fd8b27c26e
 ---
 
-## Design Progress as of 2026-06-14
+> **⚠️ 历史快照 — 2026-06-14 封存。**
+> 此后的进展未更新本文档，请以实际代码和以下活文档为准：
+> - **架构** → `ARCHITECTURE.md`（最后更新 2026-07-14）
+> - **数据库** → [[database-schema-reference]]
+> - **数据层** → [[data-layer-architecture]]
+> - **交易系统** → [[trading-system-design-goal]]
+>
+> 已实现但本文未记录：LLM 抽象层、AI 总结、胜率回测系统（`src/marketreview/winrate/`）、买点体系（`buy_points.py`）、波段分析（`band_analysis.py`）、交易系统 v2。
+
+## Design Progress as of 2026-06-14 (历史快照)
 
 ### Completed — Architecture
 - **System Architecture**: 4 Agents + Streamlit Dashboard (CrewAI removed, replaced by direct LLM API calls)

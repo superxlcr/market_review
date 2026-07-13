@@ -33,10 +33,18 @@ Whenever you are about to modify ANY file:
 ## Project Structure
 
 ```
-src/marketreview/     — Core library (data layer, tools, rendering)
+src/marketreview/     — Core library
+  data/               — DataProvider + CacheManager (SQLite)
+  tools/              — Technical indicators, band analysis, buy points, wave33
+  winrate/            — Winrate backtest engine (config, scanner, trade sim)
+  llm/                — LLM abstraction (OpenAI-compatible client + concurrency)
 dashboard/            — Streamlit UI
-  pages/              — Individual pages
+  pages/              — Individual pages (控制台, 市场全景, 板块分析, 个股追踪)
   services/           — DashboardService (orchestration)
+  rendering/          — Plotly charts, index sections, band/buy-point rendering
 logs/                 — Per-module log files (auto-created)
 data/                 — SQLite databases (auto-created)
+docs/memory/          — Project knowledge base (conventions, design decisions, references)
+scripts/              — Utility scripts (db_query, kill_port, debug_stock)
+tests/                — pytest tests
 ```

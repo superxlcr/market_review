@@ -1,6 +1,6 @@
 # A股复盘系统 — 架构文档
 
-> 最后更新：2026-06-21
+> 最后更新：2026-07-14
 
 ## 1. 系统概述
 
@@ -49,7 +49,9 @@ marketreview/
 │   │   └── 03_个股追踪.py        # 自选股追踪
 │   ├── rendering/
 │   │   ├── charts.py             # Plotly 图表构建（K线+均线+成交量）
-│   │   └── styles.py             # 颜色工具 + CSS
+│   │   ├── styles.py             # 颜色工具 + CSS
+│   │   ├── index_section.py      # 指数分析区块（K线/指标/权重贡献）
+│   │   └── band_section.py       # 波段结构 + 买点渲染
 │   └── services/
 │       └── dashboard_service.py  # 统一服务门面
 ├── src/marketreview/
@@ -61,7 +63,14 @@ marketreview/
 │   │   ├── technical.py          # 技术分析工具
 │   │   ├── contribution.py       # 权重贡献 + 行业频率
 │   │   ├── wave33.py             # 33 公式选股
-│   │   └── kline_patterns.py     # K 线形态检测
+│   │   ├── kline_patterns.py     # K 线形态识别
+│   │   ├── band_analysis.py      # 波段结构分析（波峰/波谷/趋势）
+│   │   └── buy_points.py         # 买点检测（回调一半/量价节点/均线支撑等）
+│   ├── winrate/                  # 胜率回测引擎
+│   │   ├── config.py             # 回测配置 + 买点状态管理
+│   │   ├── buypoint_defs.py      # 买点→可回测信号适配
+│   │   ├── trade_sim.py          # 交易模拟器（进场/止损/止盈）
+│   │   └── scanner.py            # 全市场批量回测扫描
 │   ├── llm/
 │   │   ├── __init__.py           # LLMClient 抽象 + 工厂
 │   │   ├── openai_client.py      # OpenAI-compatible 客户端
@@ -294,14 +303,14 @@ _ensure_stock_industries():
 
 **两窗口设计：**
 ```
-USE 窗口  = 40 个交易日（15 K线柱 + 21 滚动窗口 + 4 缓冲）
-CACHE 窗口 = 80 个交易日（2× USE 窗口，超取）
+USE 窗口  = 96 个交易日（15 K线柱 + 21 滚动窗口 + 60 trend buffer）
+CACHE 窗口 = 140 个交易日（~1.5× USE 窗口，超取）
 ```
 
 **缓存判断逻辑：**
 ```
 1. 获取 end_date 前 180 天的交易日列表
-2. 取最近 40 个交易日作为 USE 窗口
+2. 取最近 96 个交易日作为 USE 窗口
 3. 检查 USE 窗口中每个日期：cache.has_wave33_date(d)
 
 快路径（USE 窗口全部命中）：
@@ -309,13 +318,13 @@ CACHE 窗口 = 80 个交易日（2× USE 窗口，超取）
   → 返回（不触发扫描）
 
 慢路径（USE 窗口有缺失）：
-  → 取 80 个交易日作为 CACHE 窗口
+  → 取 140 个交易日作为 CACHE 窗口
   → 扫描 CACHE 窗口中所有未缓存的日期
   → scan_wave33() 逐日扫描选股结果
   → _precompute_cumulative_profit(use_dates)
 ```
 
-**设计意图：** 用户在相邻日期之间切换时（如 6/20 → 6/19），新日期的 40 天 USE 窗口大部分已在上次 80 天 CACHE 扫描中覆盖，快路径直接命中。
+**设计意图：** 用户在相邻日期之间切换时（如 6/20 → 6/19），新日期的 96 天 USE 窗口大部分已在上次 140 天 CACHE 扫描中覆盖，快路径直接命中。额外的 60 天 TREND_BUFFER 确保 `compute_trend_series` 滞后确认逻辑有足够历史数据稳定方向。
 
 ### 5.9 Step C — AI 总结（cache-first）
 
@@ -509,8 +518,8 @@ DataProvider.get_market_breadth(date)
 ### 7.3 wave33.py — 33 公式选股
 - 条件：连续5日 K>80 + WR(10/20)<20 + RSI(9)>70 + 市值 > 100亿
 - 两窗口缓存设计：
-  - **USE 窗口**：40 个交易日（满足图表显示）
-  - **CACHE 窗口**：80 个交易日（2x 超取 = 切换日期即时命中）
+  - **USE 窗口**：96 个交易日（15 K线柱 + 21 滚动窗口 + 60 trend buffer）
+  - **CACHE 窗口**：140 个交易日（~1.5x 超取 = 切换日期即时命中）
 - 滚动 21 日去重 + 累计盈利预计算
 - `compute_trend()`：趋势方向判定（含滞后确认逻辑）
 
@@ -579,7 +588,7 @@ LLM 配置通过环境变量：
 |----|------|
 | 前端 | Streamlit（Plotly K线图表） |
 | 服务层 | Python（DashboardService 门面模式） |
-| 数据层 | SQLite（8 表，自愈 schema） |
+| 数据层 | SQLite（11 表，自愈 schema） |
 | LLM | DeepSeek / OpenAI-compatible API（并发调用） |
 | 数据源 | Tushare Pro API |
 | 日志 | Python logging（每模块独立文件 + errors.log 汇总） |
