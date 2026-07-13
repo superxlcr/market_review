@@ -91,28 +91,38 @@ prep_start, prep_end = _prep_range(start_date, cfg.end_date)
 st.caption(f"📦 数据准备范围：`{prep_start}` ~ `{prep_end}` "
            f"（扫描窗前推 {_PREP_LOOKBACK_CAL} 日历日预热）")
 
-# 就绪状态：缓存 + 范围一致性
+# 就绪状态：缓存 + 范围一致性（K线 + wave33 双门禁）
 _cov_range = st.session_state.get("wr_cov_range")
 _cov_cache = st.session_state.get("wr_cov_cache")
 _range_match = (_cov_range == (prep_start, prep_end))
-_data_ready = bool(_cov_cache and _range_match and _cov_cache.get("ready")
-                   and not _cov_cache.get("missing_dates"))
+_kline = (_cov_cache or {}).get("kline", {}) if _range_match else {}
+_wave33 = (_cov_cache or {}).get("wave33", {}) if _range_match else {}
+_kline_ready = bool(_kline.get("ready"))
+_wave33_ready = bool(_wave33.get("ready"))
+_data_ready = _kline_ready and _wave33_ready
 
 # 状态条
 if not _cov_cache:
-    st.info("⏳ 数据未准备：请先点「数据准备」拉取扫描范围内的日 K 数据。")
+    st.info("⏳ 数据未准备：请先点「数据准备」拉取扫描范围内的日 K + 3浪3 数据。")
 elif not _range_match:
     st.warning("⚠️ 扫描日期已变更，数据准备结果失效，请重新点「数据准备」。")
-elif _cov_cache.get("error"):
-    st.error(f"❌ 校验失败：{_cov_cache['error']}，请重试「数据准备」。")
+elif _kline.get("error") or _wave33.get("error"):
+    errs = [e for e in [_kline.get("error"), _wave33.get("error")] if e]
+    st.error(f"❌ 校验失败：{' / '.join(errs)}，请重试「数据准备」。")
 elif _data_ready:
-    st.success(f"✅ 数据就绪：覆盖 {_cov_cache['total_dates']} 个交易日，"
-               f"最低覆盖率 {_cov_cache['min_ratio']:.0%}。")
+    kline_n = _kline.get("total_dates", 0)
+    st.success(f"✅ 数据就绪：K线覆盖 {kline_n} 个交易日，3浪3 全覆盖。")
 else:
-    miss = _cov_cache.get("missing_dates", [])
-    st.warning(f"⚠️ 数据未就绪：缺口 {len(miss)} 天"
-               + (f"（{', '.join(miss[:5])}…）" if miss else "")
-               + "，请重试「数据准备」补齐。")
+    kline_miss = _kline.get("missing_dates", [])
+    w33_miss = _wave33.get("missing_dates", [])
+    msgs = []
+    if kline_miss:
+        msgs.append(f"K线缺口 {len(kline_miss)} 天"
+                    + (f"（{', '.join(kline_miss[:5])}…）" if kline_miss else ""))
+    if w33_miss:
+        msgs.append(f"3浪3 缺算 {len(w33_miss)} 天"
+                    + (f"（{', '.join(w33_miss[:5])}…）" if w33_miss else ""))
+    st.warning("⚠️ 数据未就绪：" + "，".join(msgs) + "。请重试「数据准备」补齐。")
 
 col_prep, _ = st.columns([1, 3])
 with col_prep:
