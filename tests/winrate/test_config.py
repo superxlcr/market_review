@@ -17,22 +17,23 @@ def test_defaults():
     assert c.open_chase_cap_pct == 102.0
     assert c.long_ma_states == ["多头"]
     assert c.short_ma_states == []
-    assert c.buy_points == [
-        "回调一半", "回调一半严格", "波段50%", "量价节点", "量价节点上浮2%", "MA240支撑", "随机基准",
-    ]
+    # 默认 buy_points = 全部非 disabled（均线家族已调 trial）
+    assert c.buy_points == list(ALL_BUY_POINTS)
+    assert "量价节点严格" in c.buy_points
+    assert "量价节点严格上浮2%" in c.buy_points
 
 
 def test_buy_point_three_state():
-    # disabled 不进扫描集（MA 家族 + 均量三兄弟已停用，仅 MA240 留存）
+    # 均线家族已从 disabled 调为 trial（跑长数据看效果），均进扫描集
     for name in ["无量均线支撑", "5日均量均线支撑", "扣抵量均线支撑",
                  "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑"]:
-        assert BUY_POINT_STAGE[name] == "disabled"
-        assert name not in ALL_BUY_POINTS
+        assert BUY_POINT_STAGE[name] == "trial"
+        assert name in ALL_BUY_POINTS
     # live + trial 均在扫描集
     for name in ["回调一半", "波段50%", "量价节点", "MA240支撑",
-                 "回调一半严格", "量价节点上浮2%", "随机基准"]:
+                 "回调一半严格", "量价节点上浮2%", "量价节点严格",
+                 "量价节点严格上浮2%", "随机基准"]:
         assert name in ALL_BUY_POINTS
-    assert len(ALL_BUY_POINTS) == 7
     assert all(BUY_POINT_STAGE[n] != "disabled" for n in ALL_BUY_POINTS)
 
 

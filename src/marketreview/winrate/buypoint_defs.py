@@ -27,6 +27,8 @@ _NAME_MAP = {
     "波段50%": ("band50", Band50Checker()),
     "量价节点": ("volnode", VolPriceNodeChecker()),
     "量价节点上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02)),
+    "量价节点严格": ("volnode", VolPriceNodeChecker(entry_premium=1.04, strict=True)),
+    "量价节点严格上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02, strict=True)),
     "随机基准": ("random", RandomBaselineChecker()),
 }
 

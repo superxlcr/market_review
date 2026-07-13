@@ -34,3 +34,15 @@ def test_selected_filters_out_unwanted():
     df = pd.DataFrame({"amount": [1.0] * 20})
     sigs = detect_buy_points(df, band, ["回调一半"])  # 只要回调一半
     assert all(s.buy_point == "回调一半" for s in sigs)
+
+
+def test_volnode_strict_registered():
+    """量价节点严格版（上浮4%/2%）注册到 _NAME_MAP，kind=volnode。"""
+    from marketreview.winrate.buypoint_defs import _NAME_MAP
+    assert _NAME_MAP["量价节点严格"][0] == "volnode"
+    assert _NAME_MAP["量价节点严格上浮2%"][0] == "volnode"
+    # strict checker 实例
+    assert _NAME_MAP["量价节点严格"][1].strict is True
+    assert _NAME_MAP["量价节点严格上浮2%"][1].strict is True
+    # 非严格版不受影响
+    assert _NAME_MAP["量价节点"][1].strict is False
