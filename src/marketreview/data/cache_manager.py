@@ -212,6 +212,17 @@ class CacheManager:
             ).fetchall()
         return {r["date"]: r["cnt"] for r in rows}
 
+    def get_all_list_dates(self) -> list[str]:
+        """返回所有 stock_basic 的 list_date（YYYYMMDD）列表，含可能的空串。
+        供按日已上市数计算：count(date <= d) = 截至 d 已上市的股票数。
+        一次查回全表（~5000 行），避免 per-date N 次查询。
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT list_date FROM stock_basic_cache"
+            ).fetchall()
+        return [r["list_date"] or "" for r in rows]
+
     def get_previous_trade_date(self, date_str: str) -> str | None:
         """Return the most recent trade date in cache strictly before date_str."""
         with self._get_conn() as conn:

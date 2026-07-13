@@ -85,3 +85,26 @@ def test_check_kline_coverage_no_basic(tmp_path):
     res = dp.check_kline_coverage("20240101", "20240101")
     assert res["ready"] is False
     assert res["error"] is not None
+
+
+def test_check_kline_coverage_per_day_listed_denominator(tmp_path):
+    """按日已上市数作分母：早期日期分母小，不会因后上市新股拖低覆盖率。
+    构造：5 只票，3 只 2020 年上市、2 只 2024 年上市。
+    20210101 这天只塞那 3 只早期票 → 按日分母=3，ratio=100% ready；
+    若误用 stock_basic 总数(5) 分母 → ratio=60% 会误判缺口。"""
+    dp = DataProvider.__new__(DataProvider)
+    dp.cache = CacheManager(str(tmp_path / "t.db"))
+    dp.cache.upsert_stock_basic([
+        {"ts_code": "600000.SH", "name": "A", "list_date": "20200101", "is_st": 0},
+        {"ts_code": "600001.SH", "name": "B", "list_date": "20200101", "is_st": 0},
+        {"ts_code": "600002.SH", "name": "C", "list_date": "20200101", "is_st": 0},
+        {"ts_code": "600003.SH", "name": "D", "list_date": "20240101", "is_st": 0},
+        {"ts_code": "600004.SH", "name": "E", "list_date": "20240101", "is_st": 0},
+    ])
+    for c in ["600000.SH", "600001.SH", "600002.SH"]:
+        dp.cache.upsert_daily(c, [_row(c, "20210101")])
+
+    res = dp.check_kline_coverage("20210101", "20210101")
+    assert res["ready"] is True          # 按日分母=3，3/3=100%
+    assert res["min_ratio"] >= 0.9
+    assert res["missing_dates"] == []

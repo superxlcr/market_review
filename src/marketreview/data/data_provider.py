@@ -1498,8 +1498,9 @@ class DataProvider:
                              threshold: float = 0.9) -> dict:
         """检查 [start,end] 每个交易日的 K线覆盖率，供胜率数据准备门禁用。
 
-        分母 = stock_basic 总数（与 _validate_coverage 口径一致）。
-        一条 GROUP BY 查回每日 count，避免 N 次单日查询。
+        分母 = 该交易日当时已上市的股票数（list_date <= 该日），而非 stock_basic 总数。
+        原因：用"今天的股票总数"判"2021年的覆盖率"会让后上市的新股拖低分母，
+        早期日期永远 < 90%，门禁误判。按日已上市数才是真实可达覆盖率。
 
         返回:
           {ready, total_dates, covered_dates, missing_dates, min_ratio, error}
@@ -1509,11 +1510,15 @@ class DataProvider:
             （完全没拉到的日期由 total_dates 偏少体现，调用方按范围判断）
           - stock_basic 为空 → ready=False, error 非空
         """
+        import bisect
         start = start.replace("-", "")
         end = end.replace("-", "")
-        total_stocks = self.cache.get_stock_basic_count()
-        if total_stocks == 0:
-            log.warning("check_kline_coverage: stock_basic 为空，无法判定覆盖率")
+
+        list_dates = self.cache.get_all_list_dates()
+        # 仅保留合法 YYYYMMDD，排序供 bisect 算"<= d 的已上市数"
+        valid_ld = sorted(d for d in list_dates if d and len(d) == 8 and d.isdigit())
+        if not valid_ld:
+            log.warning("check_kline_coverage: stock_basic 为空/无 list_date，无法判定覆盖率")
             return {"ready": False, "total_dates": 0, "covered_dates": 0,
                     "missing_dates": [], "min_ratio": 0.0,
                     "error": "stock_basic 为空，请先在控制台拉取基础数据"}
@@ -1528,14 +1533,18 @@ class DataProvider:
         missing: list[str] = []
         min_ratio = 1.0
         for d in sorted(counts.keys()):
-            ratio = counts[d] / total_stocks
+            # 截至 d 已上市的股票数 = list_date <= d 的计数（bisect_right 找插入点）
+            listed_so_far = bisect.bisect_right(valid_ld, d)
+            if listed_so_far == 0:
+                continue   # 该日理论上无股票上市（极早日期），跳过不判
+            ratio = counts[d] / listed_so_far
             if ratio < min_ratio:
                 min_ratio = ratio
             if ratio < threshold:
                 missing.append(d)
         covered = len(counts) - len(missing)
         log.info("check_kline_coverage [%s~%s]: total_dates=%d covered=%d "
-                 "missing=%d min_ratio=%.3f threshold=%.2f",
+                 "missing=%d min_ratio=%.3f threshold=%.2f (分母=按日已上市数)",
                  start, end, len(counts), covered, len(missing),
                  min_ratio, threshold)
         if missing:
