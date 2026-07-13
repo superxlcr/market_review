@@ -347,23 +347,36 @@ class DataProvider:
         missing date breaks path-dependent indicators (SMA, EMA) and
         produces wrong screening results that are very hard to diagnose.
 
+        分母 = 该交易日当时已上市的股票数（list_date <= 该日），而非 stock_basic
+        总数。否则早期日期因含后上市新股，覆盖率永远 < 阈值，触发无意义的重拉
+        （见 check_kline_coverage 同口径）。
+
         Logs a warning for each date below threshold.  If gaps are found,
         attempts one re-fetch of the gapped dates.
         """
+        import bisect
         date_strs = self.cache.get_daily_dates_in_range(start, end)
         if not date_strs:
             return
 
-        total_stocks = self.cache.get_stock_basic_count()
-        if total_stocks == 0:
+        # 按日已上市数：一次查回全表 list_date，排序后 bisect 算每日分母
+        list_dates = self.cache.get_all_list_dates()
+        valid_ld = sorted(d for d in list_dates if d and len(d) == 8 and d.isdigit())
+        if not valid_ld:
             return  # no stock_basic yet, skip validation
+
+        def _listed_so_far(d: str) -> int:
+            return bisect.bisect_right(valid_ld, d)
 
         gaps = []
         for d in date_strs:
             cnt = self.cache.count_daily_date(d)
-            ratio = cnt / total_stocks if total_stocks > 0 else 1.0
+            total = _listed_so_far(d)
+            if total == 0:
+                continue   # 该日理论上无股票上市（极早日期），跳过
+            ratio = cnt / total
             if ratio < self._COVERAGE_WARN_THRESHOLD:
-                gaps.append((d, cnt, total_stocks))
+                gaps.append((d, cnt, total))
 
         if gaps:
             # Log all gaps
