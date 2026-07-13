@@ -1877,6 +1877,10 @@ class DashboardService:
         from marketreview.tools.wave33 import scan_wave33
         trade_dates = self._dp.cache.get_daily_dates_in_range(start, end)
         if trade_dates:
+            # scan_wave33 期望 DESC（latest_date=dates[0] 取最新日算 lookback 窗口），
+            # get_daily_dates_in_range 返回 ASC，必须反转，否则 latest_date 取成最早日、
+            # 每只票 K线只取到最早日 → 后续日期切片算的是错误指标 → count 全 0。
+            trade_dates = list(reversed(trade_dates))
             scan_wave33(trade_dates, self._dp, progress_cb=progress_cb)
             log.info("prepare_winrate_data: wave33 预算完成 %d 天", len(trade_dates))
         else:
