@@ -122,13 +122,17 @@ with col_prep:
         status.text("数据准备中（首次全市场可能十几分钟）…")
 
         def _prep_cb(*args):
-            # ensure_data_loaded 的 progress_cb 签名是 (phase, cur, total) 或 (phase, cur, total, label)
-            # 取最后两个数字作为 (cur, total)
-            if len(args) >= 2 and isinstance(args[-2], (int, float)) and isinstance(args[-1], (int, float)):
-                cur, total = args[-2], args[-1]
+            # ensure_data_loaded 的 progress_cb 签名：(phase, cur, total, [label])
+            # phase="init"|"chunk"|"index"|"basic"|"validate"|"done" 等，cur/total 在固定位置 args[1]/args[2]
+            if len(args) >= 3 and isinstance(args[1], (int, float)) and isinstance(args[2], (int, float)):
+                cur, total = args[1], args[2]
+                phase = args[0]
                 if total:
                     prog.progress(min(cur / total, 1.0))
-                    status.text(f"数据准备中… {cur}/{total}")
+                    label = args[3] if len(args) >= 4 else ""
+                    status.text(f"数据准备中 [{phase}] {cur}/{total}" + (f" {label}" if label else ""))
+                else:
+                    status.text(f"数据准备中 [{phase}]…")
             elif args:
                 status.text(f"数据准备中… {args[0]}")
 
