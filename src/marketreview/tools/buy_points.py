@@ -520,10 +520,12 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
     VOL_RATIO = 1.2
     ENTRY_PREMIUM = 1.04
 
-    def __init__(self, entry_premium: float = 1.04):
+    def __init__(self, entry_premium: float = 1.04, strict: bool = False):
         # entry_premium=1.04 → live（默认上浮4%）；其它值 → trial（如上浮2%=1.02 对照）
+        # strict=True → trial（严格版：节点须≥波段50%线，否则作废）
         self.ENTRY_PREMIUM = entry_premium
-        self.STAGE = "live" if abs(entry_premium - 1.04) < 1e-9 else "trial"
+        self.strict = strict
+        self.STAGE = "live" if (abs(entry_premium - 1.04) < 1e-9 and not strict) else "trial"
 
     def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
         if df.empty:
@@ -580,6 +582,10 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
                 continue
             seen_cost.add(cost_r)
             target = round(cost * self.ENTRY_PREMIUM, 2)
+            # 严格版：节点落在波段50%线下方 → 趋势结构已弱化，作废
+            if self.strict and band.line_50 > 0 and target < band.line_50:
+                log.debug("VolNode strict: target=%.2f < line_50=%.2f, skip", target, band.line_50)
+                continue
             stop_price = round(cost_r - 0.01, 2)   # 跌破成本 = 成本低一分钱
             dist = round((target / cur - 1) * 100, 1) if cur > 0 else 0.0
             prem = self.ENTRY_PREMIUM
@@ -727,6 +733,8 @@ def find_all_buy_points(df, band: BandResult,
         High21Checker(),                                                    # trial（默认隐藏）
         HalfRetraceChecker(strict=True),                                    # trial（原始严格版）
         VolPriceNodeChecker(entry_premium=1.02),                            # trial（上浮2%对照，需 code）
+        VolPriceNodeChecker(entry_premium=1.04, strict=True),               # trial（严格，上浮4%）
+        VolPriceNodeChecker(entry_premium=1.02, strict=True),               # trial（严格，上浮2%）
     ]
     # STAGE 过滤：disabled 永不出现；trial 仅在「显示试验买点」开时出现
     checkers = [c for c in checkers

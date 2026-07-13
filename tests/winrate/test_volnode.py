@@ -94,3 +94,41 @@ def test_engine_honors_absolute_intraday_stop():
     assert tr.exit_price == 100.0
     assert round(tr.pnl_pct, 2) == round((100 - 104) / 104 * 100, 2)   # ≈ -3.85
     assert tr.reason == "量价节点@20240101 成本100.0(两日最低)×1.04"   # 买入理由透出到成交记录
+
+
+# ── 严格版：50% 线过滤 ──
+
+def test_volnode_strict_filters_node_below_line50():
+    """strict 下 target < line_50 的节点被过滤。
+    节点 target=104（成本100×1.04）；设 line_50=105 → 104<105 → 作废。"""
+    df = _df(_CLOSE, _LOW, _AMT)
+    b = _band()
+    b.line_50 = 105.0   # 高于 target 104
+    pts = VolPriceNodeChecker(entry_premium=1.04, strict=True).check(df, b, code="600000.SH")
+    assert pts == []
+
+
+def test_volnode_strict_keeps_node_above_line50():
+    """strict 下 target >= line_50 的节点保留。
+    target=104；设 line_50=97.5（真实 50% 线）→ 104>=97.5 → 保留。"""
+    df = _df(_CLOSE, _LOW, _AMT)
+    b = _band()
+    b.line_50 = 88.0 + 0.5 * (107.0 - 88.0)   # 97.5
+    pts = VolPriceNodeChecker(entry_premium=1.04, strict=True).check(df, b, code="600000.SH")
+    assert len(pts) == 1
+    assert pts[0].price == 104.0
+
+
+def test_volnode_strict_stage_is_trial():
+    """strict 实例 STAGE=trial（不论 entry_premium）。"""
+    assert VolPriceNodeChecker(entry_premium=1.04, strict=True).STAGE == "trial"
+    assert VolPriceNodeChecker(entry_premium=1.02, strict=True).STAGE == "trial"
+
+
+def test_volnode_non_strict_ignores_line50():
+    """非 strict 行为不变：line_50 不影响（即使 target<line_50 也保留）。"""
+    df = _df(_CLOSE, _LOW, _AMT)
+    b = _band()
+    b.line_50 = 105.0   # 高于 target 104，但非 strict 不过滤
+    pts = VolPriceNodeChecker(entry_premium=1.04, strict=False).check(df, b, code="600000.SH")
+    assert len(pts) == 1
