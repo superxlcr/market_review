@@ -50,3 +50,10 @@ def test_export_csv_writes_config_header(tmp_path):
     text = out.read_text(encoding="utf-8-sig")
     assert "判赢阈值" in text or "win_threshold_pct" in text
     assert "A.SH" in text
+
+
+def test_export_fields_include_wave33():
+    """CSV 导出字段含 wave33 三列。"""
+    assert "wave33_direction" in R._EXPORT_FIELDS
+    assert "wave33_streak" in R._EXPORT_FIELDS
+    assert "wave33_label" in R._EXPORT_FIELDS
