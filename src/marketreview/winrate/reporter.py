@@ -76,11 +76,13 @@ def export_csv(trades: list[TradeResult], cfg: WinrateConfig,
 
 
 def save_run(trades: list[TradeResult], cfg: WinrateConfig,
-             base_dir: str | Path = ".winrate_data") -> str:
+             base_dir: str | Path = ".winrate_data",
+             scan_meta: dict | None = None) -> str:
     """把一次扫描结果落盘：base_dir/<时间戳>/ 下每买点一个 CSV + 配置快照。
 
     CSV 为干净表头+数据（无 # 注释），供 scripts/winrate_analysis.py 直接读。
     配置快照记录实际生效的 cfg（含页面上改过的值），服务"改配置看效果"的历史对比。
+    scan_meta: 扫描元信息（elapsed/total_stocks/max_workers/trades_n），写进快照便于对比耗时。
     返回 run 目录路径。
     """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -99,6 +101,11 @@ def save_run(trades: list[TradeResult], cfg: WinrateConfig,
 
     with open(run_dir / "config_snapshot.txt", "w", encoding="utf-8") as f:
         f.write(f"# winrate run {ts}\n")
+        if scan_meta:
+            f.write("# scan_meta\n")
+            for k, v in scan_meta.items():
+                f.write(f"{k}={v}\n")
+            f.write("# config\n")
         for k, v in asdict(cfg).items():
             f.write(f"{k}={v}\n")
 

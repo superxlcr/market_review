@@ -168,9 +168,29 @@ if st.button("▶ 运行扫描", type="primary",
         prog.progress(done / total)
         status.text(f"已扫描 {done}/{total} 只股票")
 
+    timing_sink = []   # 收集每只标的耗时/线程名，写 scan_timing.csv 观测并发
+    import time as _time
+    _t0 = _time.perf_counter()
     with st.spinner("全市场扫描中..."):
-        stats, trades = svc.run_winrate_scan(cfg, progress_cb=cb)
-    saved_dir = save_run(trades, cfg)
+        stats, trades = svc.run_winrate_scan(cfg, progress_cb=cb, timing_sink=timing_sink)
+    _elapsed = _time.perf_counter() - _t0
+    # scan_meta 写进 config_snapshot（含总耗时/票数/并发），便于历史对比
+    total_stocks = len([t for t in timing_sink if t.get("code") != "__TOTAL__"])
+    scan_meta = {"elapsed": round(_elapsed, 1), "total_stocks": total_stocks,
+                 "max_workers": cfg.max_workers, "trades_n": len(trades)}
+    saved_dir = save_run(trades, cfg, scan_meta=scan_meta)
+    # 写 scan_timing.csv：每只标的 code/name/elapsed/thread/完成时间戳/笔数
+    if timing_sink:
+        import csv as _csv
+        with open(f"{saved_dir}/scan_timing.csv", "w", encoding="utf-8-sig",
+                  newline="") as f:
+            w = _csv.DictWriter(f, fieldnames=["code", "name", "elapsed", "thread",
+                                               "completed_at", "trades_n"])
+            w.writeheader()
+            for row in timing_sink:
+                row["elapsed"] = round(row.get("elapsed", 0), 2)
+                row["completed_at"] = round(row.get("completed_at", 0), 2)
+                w.writerow(row)
     prog.progress(1.0)
     status.empty()
     st.session_state.wr_stats = stats

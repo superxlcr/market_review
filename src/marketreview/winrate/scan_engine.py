@@ -1,5 +1,7 @@
 """扫描引擎：单只股票 walk-forward（闸1持仓→闸2过滤+买点→模拟），多线程并行。"""
 from __future__ import annotations
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
@@ -154,8 +156,13 @@ def _wave33_state(cache, signal_date: str) -> dict:
     return compute_trend(counts)
 
 
-def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None) -> list[TradeResult]:
-    """全市场并行扫描。数据须已预加载到 cache。"""
+def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,
+              timing_sink: list | None = None) -> list[TradeResult]:
+    """全市场并行扫描。数据须已预加载到 cache。
+
+    timing_sink: 传入空 list，每只标的的耗时/线程名/笔数会 append 进去，
+                 末尾追加一行 __TOTAL__ 总耗时。供页面写 scan_timing.csv 观测并发效果。
+    """
     basics = dp.cache.get_stock_basic()   # [{ts_code,name,list_date,is_st}]
     if cfg.debug_code:
         want = cfg.debug_code.strip().upper()
@@ -172,22 +179,35 @@ def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None) -> list[Tra
 
     def _one(b: dict) -> list[TradeResult]:
         code = b["ts_code"]
+        t_start = time.perf_counter()
         rows_desc = dp.cache.get_daily(code, limit=2000)
         if not rows_desc:
+            if timing_sink is not None:
+                timing_sink.append({"code": code, "name": b.get("name", ""),
+                                     "elapsed": time.perf_counter() - t_start,
+                                     "thread": threading.current_thread().name,
+                                     "completed_at": time.time(), "trades_n": 0})
             return []
         mv_rows = dp.cache.get_daily_basic_for_code(code)  # Task 6 新增
         mv_series = {r["trade_date"]: float(r["total_mv"]) / 1e4 for r in mv_rows}
         ind = ind_map.get(code, {})
-        return scan_stock(
+        trades = scan_stock(
             code, b.get("name", ""), rows_desc, cfg,
             ind.get("l1_name", ""), ind.get("l2_name", ""),
             b.get("list_date", ""), mv_series,
             cache=dp.cache,
         )
+        if timing_sink is not None:
+            timing_sink.append({"code": code, "name": b.get("name", ""),
+                                "elapsed": time.perf_counter() - t_start,
+                                "thread": threading.current_thread().name,
+                                "completed_at": time.time(), "trades_n": len(trades)})
+        return trades
 
     all_trades: list[TradeResult] = []
     total = len(universe)
     done = 0
+    scan_t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=cfg.max_workers) as ex:
         futs = {ex.submit(_one, b): b for b in universe}
         for fut in as_completed(futs):
@@ -198,5 +218,12 @@ def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None) -> list[Tra
                 log.warning("scan_stock 失败 %s: %s", futs[fut].get("ts_code"), e)
             if progress_cb:
                 progress_cb(done, total)
-    log.info("扫描完成: %d只股票, 共 %d 笔交易", total, len(all_trades))
+    scan_elapsed = time.perf_counter() - scan_t0
+    log.info("扫描完成: %d只股票, 共 %d 笔交易, 耗时 %.1fs (并发 %d)",
+             total, len(all_trades), scan_elapsed, cfg.max_workers)
+    if timing_sink is not None:
+        timing_sink.append({"code": "__TOTAL__", "name": "",
+                            "elapsed": scan_elapsed,
+                            "thread": "", "completed_at": time.time(),
+                            "trades_n": len(all_trades)})
     return all_trades
