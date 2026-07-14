@@ -223,11 +223,22 @@ class HalfRetraceChecker(BaseBuyPointChecker):
 
     strict=True（回调一半严格，原始定义）: 额外要求「回调谷底未跌破50%线」——
     一旦回调最低点跌破波段50%线，趋势按定义已改变，此处合理买点应是波段50%而非回调一半。
+
+    close_below_max_pct: 收盘 < target 时，允许的最大距离（%）。
+    0=不限；>0 时，若收盘价低于 target 超过此幅度则跳过——防止假突破（追高太远）。
+    例: 4.0 表示收盘距 target >4% 时不发信号。
     """
 
-    def __init__(self, strict: bool = False):
+    def __init__(self, strict: bool = False, close_below_max_pct: float = 0.0):
         self.strict = strict
-        self.STAGE = "trial" if strict else "live"
+        self.close_below_max_pct = close_below_max_pct
+        # strict+5% = live（推荐版）；其余变体 = trial
+        if strict and close_below_max_pct == 5.0:
+            self.STAGE = "live"
+        elif strict or close_below_max_pct > 0:
+            self.STAGE = "trial"
+        else:
+            self.STAGE = "trial"  # 普通版被替代
 
     def check(self, df, band: BandResult) -> list[BuyPoint]:
         if not band.trigger_625_date:
@@ -249,12 +260,21 @@ class HalfRetraceChecker(BaseBuyPointChecker):
         cur = band.current_price
         dist = round((hr_latest / cur - 1) * 100, 1)
 
+        # 收盘距 target 过滤：仅对「需上涨触发」（收盘 < target）限制距离
+        # 收盘 > target（需下跌触发）不限——回调买入风险对称
+        if self.close_below_max_pct > 0 and cur < hr_latest:
+            gap_pct = (hr_latest - cur) / cur * 100  # 正数 = target 在收盘上方多少%
+            if gap_pct > self.close_below_max_pct:
+                return []
+
         if cur < hr_latest:
             bp_type = "突破"
         else:
             bp_type = "重新突破"
 
         prefix = "[严格] " if self.strict else ""
+        if self.close_below_max_pct > 0:
+            prefix = f"[严格≤{self.close_below_max_pct:.0f}%] "
         reason = f"{prefix}回调{pullback_days}天 ≥ 13天，且跌破过波段 62.5% {band.line_625:.2f}"
 
         return [BuyPoint(
@@ -522,11 +542,15 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
     ENTRY_PREMIUM = 1.04
 
     def __init__(self, entry_premium: float = 1.04, strict: bool = False):
-        # entry_premium=1.04 → live（默认上浮4%）；其它值 → trial（如上浮2%=1.02 对照）
-        # strict=True → trial（严格版：节点须≥波段50%线，否则作废）
         self.ENTRY_PREMIUM = entry_premium
         self.strict = strict
-        self.STAGE = "live" if (abs(entry_premium - 1.04) < 1e-9 and not strict) else "trial"
+        # strict + 2% = live（推荐版，盈亏比2.35）；其余变体 = trial
+        if strict and abs(entry_premium - 1.02) < 1e-9:
+            self.STAGE = "live"
+        elif abs(entry_premium - 1.04) < 1e-9 and not strict:
+            self.STAGE = "trial"  # 原版4%不严格被替代
+        else:
+            self.STAGE = "trial"
 
     def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
         if df.empty:
@@ -727,15 +751,16 @@ def find_all_buy_points(df, band: BandResult,
     config = load_buy_point_config()
     show_trial = config.get("显示试验买点", 0.0) >= 1
     checkers: list[BaseBuyPointChecker] = [
-        HalfRetraceChecker(),                                               # live
+        HalfRetraceChecker(),                                               # trial（被严格5%版替代）
         Band50Checker(),                                                    # live
-        VolPriceNodeChecker(),                                             # live（量价节点，需 code）
+        VolPriceNodeChecker(entry_premium=1.02, strict=True),               # live（量价节点严格上浮2%）
         MAChecker(vol_mode="today", periods=[240], type_name="MA240支撑", stage="live"),  # live
         High21Checker(),                                                    # trial（默认隐藏）
-        HalfRetraceChecker(strict=True),                                    # trial（原始严格版）
-        VolPriceNodeChecker(entry_premium=1.02),                            # trial（上浮2%对照，需 code）
-        VolPriceNodeChecker(entry_premium=1.04, strict=True),               # trial（严格，上浮4%）
-        VolPriceNodeChecker(entry_premium=1.02, strict=True),               # trial（严格，上浮2%）
+        HalfRetraceChecker(strict=True),                                    # trial（原始严格版，被5%版替代）
+        HalfRetraceChecker(strict=True, close_below_max_pct=5.0),           # live（严格+收盘距≤5%，推荐）
+        VolPriceNodeChecker(),                                             # trial（原版量价节点4%）
+        VolPriceNodeChecker(entry_premium=1.02),                            # trial（上浮2%不严格）
+        VolPriceNodeChecker(entry_premium=1.04, strict=True),               # trial（严格上浮4%）
     ]
     # STAGE 过滤：disabled 永不出现；trial 仅在「显示试验买点」开时出现
     checkers = [c for c in checkers

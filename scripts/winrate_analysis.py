@@ -58,7 +58,9 @@ def load_data(data_dir: str) -> pd.DataFrame:
         sys.exit(f"[错误] {data_dir} 下没有 CSV。先在「买点胜率」页跑一次。")
     if resolved != data_dir:
         print(f"[run] 使用最新 run: {resolved}")
-    df = pd.concat([pd.read_csv(f, encoding="utf-8-sig") for f in files], ignore_index=True)
+    df = pd.concat([pd.read_csv(f, encoding="utf-8-sig")
+                    for f in files if "scan_timing" not in os.path.basename(f)
+                    and "scan_meta" not in os.path.basename(f)], ignore_index=True)
     # 引擎已 position-less 且不再产出「回测结束」右删失单，分析层无需再清洗。
     df["sd"] = df["signal_date"].astype(str)
     df["ym"] = df["sd"].str[:6]

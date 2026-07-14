@@ -25,6 +25,7 @@ _NAME_MAP = {
     "MA240支撑": ("ma", MAChecker(vol_mode="today", periods=[240], type_name="MA240支撑")),
     "回调一半": ("half", HalfRetraceChecker()),
     "回调一半严格": ("half", HalfRetraceChecker(strict=True)),
+    "回调一半严格5%": ("half", HalfRetraceChecker(strict=True, close_below_max_pct=5.0)),
     "波段50%": ("band50", Band50Checker()),
     "量价节点": ("volnode", VolPriceNodeChecker()),
     "量价节点上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02)),
