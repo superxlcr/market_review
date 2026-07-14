@@ -7,6 +7,7 @@ from marketreview.tools.buy_points import (
     HalfRetraceChecker, Band50Checker, MAChecker, VolPriceNodeChecker,
     RandomBaselineChecker,
 )
+from marketreview.tools.technical import calc_ma
 from .trade_sim import BuyPointSignal
 
 # 页面标签 → checker
@@ -32,18 +33,29 @@ _NAME_MAP = {
     "随机基准": ("random", RandomBaselineChecker()),
 }
 
+# 所有 MA checker 用到的周期并集（预算一次共享，避免每个 checker 各算一遍）
+_ALL_MA_PERIODS = sorted({p for _, (kind, chk) in _NAME_MAP.items()
+                          if kind == "ma" for p in chk.periods})
+
 
 def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
                       selected: list[str], code: str = "") -> list[BuyPointSignal]:
     out: list[BuyPointSignal] = []
+    # 预算 MA 一次（全周期并集），所有 MA checker 共享，避免重复 calc_ma
+    has_ma = any(_NAME_MAP.get(n, ("",))[0] == "ma" for n in selected)
+    pre_mas = calc_ma(df_asc, _ALL_MA_PERIODS) if (has_ma and not df_asc.empty) else None
     for name in selected:
         entry = _NAME_MAP.get(name)
         if entry is None:
             continue
         kind, checker = entry
         # 量价节点/随机基准需要 code（判涨跌停 / 随机种子），其余 checker 签名统一 (df, band)
-        bps = (checker.check(df_asc, band, code=code)
-               if kind in ("volnode", "random") else checker.check(df_asc, band))
+        if kind == "volnode" or kind == "random":
+            bps = checker.check(df_asc, band, code=code)
+        elif kind == "ma":
+            bps = checker.check(df_asc, band, pre_mas=pre_mas)
+        else:
+            bps = checker.check(df_asc, band)
         for bp in bps:
             if kind == "ma":
                 # 均线支撑：收盘止损 = 跌破 MA（该周期）；触发价 = MA 值

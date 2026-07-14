@@ -44,11 +44,24 @@ def ma_direction(ma_values: list[float]) -> str:
     Determine MA direction by comparing today's value to yesterday's.
     Simple 1-day slope: >0.06% up, <0.06% down, else flat.
     Returns '↑' (up), '↓' (down), or '→' (flat).
+
+    从尾部反向找最后两个有效值（等价于旧版遍历全序列取 valid[-2:]，
+    但 O(尾部几个) 而非 O(全序列)——单只扫描被调数千次，旧 listcomp 占 5.8s）。
     """
-    valid = [v for v in ma_values if not np.isnan(v)]
-    if len(valid) < 2:
+    last = None
+    prev = None
+    for v in reversed(ma_values):
+        if not np.isnan(v):
+            if last is None:
+                last = v
+            else:
+                prev = v
+                break
+    if last is None or prev is None:
+        return "→"   # 有效值不足2个
+    if prev <= 0:
         return "→"
-    chg_pct = (valid[-1] - valid[-2]) / valid[-2] * 100
+    chg_pct = (last - prev) / prev * 100
     if chg_pct > 0.05:
         return "↑"
     elif chg_pct < -0.05:

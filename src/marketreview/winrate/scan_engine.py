@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from marketreview.tools.technical import rows_to_df, calc_ma, calc_atr
-from marketreview.tools.band_analysis import analyze_band
+from marketreview.tools.band_analysis import analyze_band, find_valleys
 from marketreview.data.data_provider import DataProvider
 from marketreview.log_util import get_logger
 from .config import WinrateConfig, cap_bucket
@@ -49,10 +49,18 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
     start = cfg.start_date
     end = None if cfg.end_date in ("", "now") else cfg.end_date
 
+    # 一次预算全周期 valleys（neighborhood=5）：V 是 P 之前的谷底，离 today 远（V/P<3/7 约束），
+    # 右边早满 5 天，全量预算与每天重算等价（边界候选不可能是 V）。analyze_band 复用省大头。
+    all_lows = [float(k.get("low") or 0.0) for k in klines]
+    all_dates = [str(k.get("date", "")) for k in klines]
+    all_valleys = find_valleys(all_lows, all_dates, 0, n - 1, neighborhood=5)
+
     results: list[TradeResult] = []
     # 按 标的×买点 各自持仓：next_ok[买点]=该买点下次可建仓的最早 idx。
     # 买点之间互不影响——一起跑只为共用数据/band 提效；某买点持仓中，仅它自己不重复建仓。
     next_ok: dict[str, int] = {}
+    prev_band = None   # 上一交易日的 BandResult（P 不变时跨天复用）
+    prev_band_i = -1
     i = 1
     while i < n - 1:
         date_T = dates[i]
@@ -69,7 +77,15 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
             i += 1
             continue
 
-        band = analyze_band([klines[j] for j in range(i + 1)], peak_lookback=band_lookback)
+        # compute_close_peaks=False: close_peaks 仅 21日高点买点用，
+        # 该买点暂未纳入胜率分析（STAGE=trial，未注册到 _NAME_MAP），跳过省 ~0.5s/只。
+        # 将来启用 21日高点时改回 True。
+        # pre_valleys=全周期预算 valleys 复用；prev_band=P 不变时跨天复用（95% 天命中）。
+        band = analyze_band([klines[j] for j in range(i + 1)], peak_lookback=band_lookback,
+                            compute_close_peaks=False, pre_valleys=all_valleys,
+                            prev_band=prev_band, prev_i=prev_band_i)
+        prev_band = band
+        prev_band_i = i
         signals = detect_buy_points(df_upto, band, cfg.buy_points, code=code)
         # 过滤持仓中的买点（各买点各自持仓，互不影响）
         signals = [s for s in signals if i >= next_ok.get(s.buy_point, 0)]
@@ -77,9 +93,12 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
             i += 1
             continue
 
-        # ATR@T（用于 ATR 止损）
-        atr_vals = calc_atr(df_upto, period=14)
-        atr_T = float(atr_vals[-1]) if atr_vals and atr_vals[-1] == atr_vals[-1] else 0.0
+        # ATR@T（仅启用 ATR 止损时才计算，否则跳过省 0.8s/只）
+        if cfg.use_atr_stop:
+            atr_vals = calc_atr(df_upto, period=14)
+            atr_T = float(atr_vals[-1]) if atr_vals and atr_vals[-1] == atr_vals[-1] else 0.0
+        else:
+            atr_T = 0.0
 
         for sig in signals:
             tr = simulate_trade(sig, i, klines, cfg, code, name, atr_T)

@@ -410,7 +410,7 @@ class MAChecker(BaseBuyPointChecker):
         self.periods = list(periods) if periods else list(self.MA_PERIODS)
         self.STAGE = stage              # 实例级 STAGE（MA240 传 "live"，其余默认 "trial"）
 
-    def check(self, df, band: BandResult) -> list[BuyPoint]:
+    def check(self, df, band: BandResult, pre_mas: dict | None = None) -> list[BuyPoint]:
         if df.empty:
             log.debug("MAChecker: df empty, skip")
             return []
@@ -428,7 +428,8 @@ class MAChecker(BaseBuyPointChecker):
             measure = float(df["amount"].iloc[-1]) / 1e5          # 今日量（千元→亿）
             vol_label = "今日量"
 
-        mas = calc_ma(df, self.periods)
+        # 预算 MA 共享：detect_buy_points 入口算一次全周期传进来，避免每个 checker 重算
+        mas = pre_mas if pre_mas else calc_ma(df, self.periods)
         results: list[BuyPoint] = []
 
         for p in self.periods:

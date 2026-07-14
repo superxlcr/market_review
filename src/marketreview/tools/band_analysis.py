@@ -33,7 +33,8 @@ class ClosePeak:
 
 
 def find_valleys(
-    rows_asc: list[dict],
+    lows: list[float],
+    dates: list[str],
     start_idx: int,
     end_idx: int,
     neighborhood: int = 10,
@@ -41,41 +42,47 @@ def find_valleys(
     """在 [start_idx, end_idx] 范围内找局部谷底.
 
     局部谷底: 该 K 线的 low 比左右各 neighborhood 天内的 low 都低.
+    入参用预算好的 lows/dates 数组（由 analyze_band 入口提取一次），
+    避免循环内反复 _safe_float + dict.get（原 253万次调用的大头）。
     """
     valleys: list[ValleyPoint] = []
-    n = len(rows_asc)
+    n = len(lows)
+    if start_idx > end_idx or start_idx >= n:
+        return valleys
+    end_i = min(end_idx, n - 1)
 
-    for i in range(start_idx, end_idx + 1):
-        cur_low = _safe_float(rows_asc[i].get("low"))
+    for i in range(start_idx, end_i + 1):
+        cur_low = lows[i]
         if cur_low <= 0:
             continue
 
-        # 检查左边 neighborhood 天
+        # 检查左边 neighborhood 天（数组索引，遇不满足即 break）
         left_start = max(0, i - neighborhood)
-        left_ok = all(
-            cur_low < _safe_float(rows_asc[j].get("low"))
-            for j in range(left_start, i)
-        )
+        left_ok = True
+        for j in range(left_start, i):
+            if cur_low >= lows[j]:
+                left_ok = False
+                break
+        if not left_ok:
+            continue
 
         # 检查右边 neighborhood 天
         right_end = min(n - 1, i + neighborhood)
-        right_ok = all(
-            cur_low < _safe_float(rows_asc[j].get("low"))
-            for j in range(i + 1, right_end + 1)
-        )
+        right_ok = True
+        for j in range(i + 1, right_end + 1):
+            if cur_low >= lows[j]:
+                right_ok = False
+                break
 
         if left_ok and right_ok:
-            valleys.append(ValleyPoint(
-                price=cur_low,
-                date=str(rows_asc[i].get("date", "")),
-                idx=i,
-            ))
+            valleys.append(ValleyPoint(price=cur_low, date=dates[i], idx=i))
 
     return valleys
 
 
 def find_close_peaks(
-    rows_asc: list[dict],
+    closes: list[float],
+    dates: list[str],
     start_idx: int,
     end_idx: int,
     neighborhood: int = 10,
@@ -84,35 +91,37 @@ def find_close_peaks(
 
     局部收盘波峰: 该 K 线的 close 比左右各 neighborhood 天内的 close 都高.
     逻辑与 find_valleys 对称，反过来而已，但用收盘价而非最高价.
+    入参用预算好的 closes/dates 数组。
     """
     peaks: list[ClosePeak] = []
-    n = len(rows_asc)
+    n = len(closes)
+    if start_idx > end_idx or start_idx >= n:
+        return peaks
+    end_i = min(end_idx, n - 1)
 
-    for i in range(start_idx, end_idx + 1):
-        cur_close = _safe_float(rows_asc[i].get("close"))
+    for i in range(start_idx, end_i + 1):
+        cur_close = closes[i]
         if cur_close <= 0:
             continue
 
-        # 检查左边 neighborhood 天
         left_start = max(0, i - neighborhood)
-        left_ok = all(
-            cur_close > _safe_float(rows_asc[j].get("close"))
-            for j in range(left_start, i)
-        )
+        left_ok = True
+        for j in range(left_start, i):
+            if cur_close <= closes[j]:
+                left_ok = False
+                break
+        if not left_ok:
+            continue
 
-        # 检查右边 neighborhood 天
         right_end = min(n - 1, i + neighborhood)
-        right_ok = all(
-            cur_close > _safe_float(rows_asc[j].get("close"))
-            for j in range(i + 1, right_end + 1)
-        )
+        right_ok = True
+        for j in range(i + 1, right_end + 1):
+            if cur_close <= closes[j]:
+                right_ok = False
+                break
 
         if left_ok and right_ok:
-            peaks.append(ClosePeak(
-                price=cur_close,
-                date=str(rows_asc[i].get("date", "")),
-                idx=i,
-            ))
+            peaks.append(ClosePeak(price=cur_close, date=dates[i], idx=i))
 
     return peaks
 
@@ -180,12 +189,24 @@ def _safe_float(v) -> float:
 def analyze_band(
     rows_asc: list[dict],
     peak_lookback: int = 300,
+    compute_close_peaks: bool = True,
+    pre_valleys: list[ValleyPoint] | None = None,
+    prev_band: "BandResult | None" = None,
+    prev_i: int = -1,
 ) -> BandResult:
     """分析一个标的的波段结构.
 
     Args:
         rows_asc: K线数据，date ASC（已前复权），每行含 open/high/low/close/date
         peak_lookback: 波峰回溯窗口（交易日），默认 300（~14个月）
+        compute_close_peaks: 是否计算 close_peaks（仅 High21 买点用）。
+            胜率扫描不用 High21，传 False 跳过省 ~0.5s/只。
+        pre_valleys: 标的全周期预算好的局部谷底列表（neighborhood=5）。
+            传入时按 [peak-lookback, peak] 过滤子集复用，跳过 find_valleys 重算
+            （P 不变时 V/valleys 不变，跨天复用省大头）。None 则内部重算。
+        prev_band: 上一交易日的 BandResult（含 prev_i），用于 P 不变时跨天复用。
+            P 不变判定：T+1.high ≤ prev P.price 且 prev P.idx 仍在 [T+1-lookback, T+1] 窗口内。
+            不变则复用 P/V/valleys/趋势线/trigger_625，只 O(1) 更新 L/half_retrace。
 
     Returns:
         BandResult with P, V, trend lines, and qualification status.
@@ -199,13 +220,74 @@ def analyze_band(
 
     today_idx = len(rows_asc) - 1
 
+    # ── 0. P 不变快路径：跨天复用 prev_band（在数组提取前，避免每天重提全数组）──
+    # P 不变判定：今天没创新高、旧 P 仍在窗口内、与 prev 严格相邻。
+    # 满足则 P/V/valleys/趋势线/trigger_625 全不变（实测 95% 天），只取今天 1 根的 high/low/close/date。
+    today_row = rows_asc[today_idx]
+    today_high = _safe_float(today_row.get("high"))
+    today_low = _safe_float(today_row.get("low"))
+    today_close = _safe_float(today_row.get("close"))
+    today_date = str(today_row.get("date", ""))
+    if (prev_band is not None and prev_band.p_idx >= 0
+            and prev_i == today_idx - 1):
+        lookback_start_now = max(0, today_idx - peak_lookback)
+        if (today_high <= prev_band.p_price
+                and prev_band.p_idx >= lookback_start_now
+                and prev_band.line_50 > 0):
+            peak_idx = prev_band.p_idx
+            result.p_price = prev_band.p_price
+            result.p_date = prev_band.p_date
+            result.p_idx = prev_band.p_idx
+            result.v_price = prev_band.v_price
+            result.v_date = prev_band.v_date
+            result.v_idx = prev_band.v_idx
+            result.vp_ratio = prev_band.vp_ratio
+            result.v_qualified = prev_band.v_qualified
+            result.valleys = prev_band.valleys
+            result.line_75 = prev_band.line_75
+            result.line_625 = prev_band.line_625
+            result.line_50 = prev_band.line_50
+            # L 增量
+            if today_low < prev_band.l_price:
+                result.l_price = today_low
+                result.l_date = today_date
+            else:
+                result.l_price = prev_band.l_price
+                result.l_date = prev_band.l_date
+            # half_retrace 增量：running_low = min(prev 终值, today_low)
+            running_low = min(prev_band.l_price, today_low)
+            result.trigger_625_date = prev_band.trigger_625_date
+            if running_low < result.line_625 and not result.trigger_625_date:
+                result.trigger_625_date = today_date
+            half = (result.p_price + running_low) / 2.0
+            result.half_retrace_series = list(prev_band.half_retrace_series)
+            result.half_retrace_series.append({"date": today_date, "price": round(half, 2)})
+            # close_peaks：胜率扫描跳过；个股页重算（P 不变但今天可能新峰）
+            if compute_close_peaks:
+                highs_full = [_safe_float(r.get("high")) for r in rows_asc]
+                closes_full = [_safe_float(r.get("close")) for r in rows_asc]
+                dates_full = [str(r.get("date", "")) for r in rows_asc]
+                result.close_peaks = find_close_peaks(closes_full, dates_full, peak_idx, today_idx, neighborhood=10)
+            result.current_price = today_close
+            result.current_date = today_date
+            result.current_vs_50 = ((today_close - result.line_50) / result.line_50
+                                     if result.line_50 > 0 else 0.0)
+            log.debug("analyze_band: P 不变复用 prev_band (P@%d, today=%d)", peak_idx, today_idx)
+            return result
+
+    # 预算数组（仅 P 变的 5% 天走到这里）：一次提取 high/low/close/date
+    highs = [_safe_float(r.get("high")) for r in rows_asc]
+    lows = [_safe_float(r.get("low")) for r in rows_asc]
+    closes = [_safe_float(r.get("close")) for r in rows_asc]
+    dates = [str(r.get("date", "")) for r in rows_asc]
+
     # ── 1. 找波段新高 P ──
     lookback_start = max(0, today_idx - peak_lookback)
     peak_high = 0.0
     peak_idx = -1
 
     for i in range(lookback_start, today_idx + 1):
-        h = _safe_float(rows_asc[i].get("high"))
+        h = highs[i]
         if h > peak_high:
             peak_high = h
             peak_idx = i
@@ -215,18 +297,26 @@ def analyze_band(
         return result
 
     result.p_price = peak_high
-    result.p_date = str(rows_asc[peak_idx].get("date", ""))
+    result.p_date = dates[peak_idx]
     result.p_idx = peak_idx
 
     # ── 1.5 找 P 之前 lookback 窗口内的所有局部谷底 ──
     valley_search_start = max(0, peak_idx - peak_lookback)
-    result.valleys = find_valleys(rows_asc, valley_search_start, peak_idx, neighborhood=5)
-    log.info("Found %d local valleys in [%d, %d] (lookback=%d, P@%d)",
-             len(result.valleys), valley_search_start, peak_idx, peak_lookback, peak_idx)
+    if pre_valleys is not None:
+        # 复用预算好的全周期 valleys，按 [valley_search_start, peak_idx] 过滤子集
+        result.valleys = [v for v in pre_valleys
+                          if valley_search_start <= v.idx <= peak_idx]
+        log.info("Reused %d local valleys (filtered) in [%d, %d] (P@%d)",
+                 len(result.valleys), valley_search_start, peak_idx, peak_idx)
+    else:
+        result.valleys = find_valleys(lows, dates, valley_search_start, peak_idx, neighborhood=5)
+        log.info("Found %d local valleys in [%d, %d] (lookback=%d, P@%d)",
+                 len(result.valleys), valley_search_start, peak_idx, peak_lookback, peak_idx)
 
-    # ── 1.6 找 P→今日 的局部收盘波峰（用于 21日收盘高点 买点）──
-    result.close_peaks = find_close_peaks(rows_asc, peak_idx, today_idx, neighborhood=10)
-    log.info("Found %d close peaks in [%d, %d]", len(result.close_peaks), peak_idx, today_idx)
+    # ── 1.6 找 P→今日 的局部收盘波峰（仅 High21 买点用，胜率扫描可跳过）──
+    if compute_close_peaks:
+        result.close_peaks = find_close_peaks(closes, dates, peak_idx, today_idx, neighborhood=10)
+        log.info("Found %d close peaks in [%d, %d]", len(result.close_peaks), peak_idx, today_idx)
 
     # ── 2. 选 V — 局部谷底中最高且满足 V/P < 3/7 ──
     qualified = [v for v in result.valleys if v.price / peak_high < (3.0 / 7.0)]
@@ -257,31 +347,31 @@ def analyze_band(
     lowest_low = float("inf")
     lowest_idx = -1
     for i in range(peak_idx, today_idx + 1):
-        l = _safe_float(rows_asc[i].get("low"))
+        l = lows[i]
         if l < lowest_low:
             lowest_low = l
             lowest_idx = i
 
     result.l_price = lowest_low
-    result.l_date = str(rows_asc[lowest_idx].get("date", "")) if lowest_idx >= 0 else ""
+    result.l_date = dates[lowest_idx] if lowest_idx >= 0 else ""
 
     # ── 5.5 回调半分位序列（从 P 起每交易日一点，随 L 下移而下降）──
     running_low = float("inf")
     for i in range(peak_idx, today_idx + 1):
-        l = _safe_float(rows_asc[i].get("low"))
+        l = lows[i]
         if l < running_low:
             running_low = l
         if running_low < result.line_625 and not result.trigger_625_date:
-            result.trigger_625_date = str(rows_asc[i].get("date", ""))
+            result.trigger_625_date = dates[i]
         half = (result.p_price + running_low) / 2.0
         result.half_retrace_series.append({
-            "date": str(rows_asc[i].get("date", "")),
+            "date": dates[i],
             "price": round(half, 2),
         })
 
     # ── 6. 当前价格 vs 50% 趋势线 ──
-    result.current_price = _safe_float(rows_asc[today_idx].get("close"))
-    result.current_date = str(rows_asc[today_idx].get("date", ""))
+    result.current_price = closes[today_idx]
+    result.current_date = dates[today_idx]
     if result.line_50 > 0:
         result.current_vs_50 = (
             (result.current_price - result.line_50) / result.line_50
