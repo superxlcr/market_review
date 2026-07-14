@@ -64,7 +64,7 @@ class WinrateConfig:
     industry_whitelist: list[str] = field(default_factory=list)
     min_list_days: int = 250
     # 运行
-    max_workers: int = 10
+    max_workers: int = 1
     # 调试：填 ts_code 只跑单只（绕过 is_st），留空=全市场
     debug_code: str = ""
 
