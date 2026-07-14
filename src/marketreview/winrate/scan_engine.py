@@ -2,6 +2,8 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import pandas as pd
+
 from marketreview.tools.technical import rows_to_df, calc_ma, calc_atr
 from marketreview.tools.band_analysis import analyze_band, find_valleys
 from marketreview.data.data_provider import DataProvider
@@ -55,6 +57,10 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
     all_dates = [str(k.get("date", "")) for k in klines]
     all_valleys = find_valleys(all_lows, all_dates, 0, n - 1, neighborhood=5)
 
+    # 一次建全周期 DataFrame（klines 已 ASC + 数值化，等价于 rows_to_df 但只建一次），
+    # 循环里 iloc 切片取视图，避免每天重建 df_upto（原 2.94s/只，42%）。
+    df_full = pd.DataFrame(klines)
+
     results: list[TradeResult] = []
     # 按 标的×买点 各自持仓：next_ok[买点]=该买点下次可建仓的最早 idx。
     # 买点之间互不影响——一起跑只为共用数据/band 提效；某买点持仓中，仅它自己不重复建仓。
@@ -68,9 +74,7 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
             i += 1
             continue
 
-        df_upto = rows_to_df([  # 截至 T 的 DataFrame（已 qfq，用 klines 直接切）
-            klines[j] for j in range(i + 1)
-        ])
+        df_upto = df_full.iloc[:i + 1]   # 截至 T 的视图（消费者只读不改）
         mv_yi = mv_series.get(date_T, 0.0)
 
         if not passes_all(df_upto, cfg, mv_yi, industry_l1, industry_l2, list_date, date_T):
