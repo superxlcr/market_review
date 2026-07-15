@@ -232,9 +232,11 @@ class HalfRetraceChecker(BaseBuyPointChecker):
     def __init__(self, strict: bool = False, close_below_max_pct: float = 0.0):
         self.strict = strict
         self.close_below_max_pct = close_below_max_pct
-        # strict+5% = live（推荐版）；其余变体 = trial
-        if strict and close_below_max_pct == 5.0:
+        # strict 无5%过滤 = live（5%过滤砍掉的反而是高弹性反弹，见0715分析）
+        if strict and close_below_max_pct == 0.0:
             self.STAGE = "live"
+        elif strict and close_below_max_pct == 5.0:
+            self.STAGE = "trial"  # 5%过滤不成立
         elif strict or close_below_max_pct > 0:
             self.STAGE = "trial"
         else:
@@ -756,8 +758,8 @@ def find_all_buy_points(df, band: BandResult,
         VolPriceNodeChecker(entry_premium=1.02, strict=True),               # live（量价节点严格上浮2%）
         MAChecker(vol_mode="today", periods=[240], type_name="MA240支撑", stage="live"),  # live
         High21Checker(),                                                    # trial（默认隐藏）
-        HalfRetraceChecker(strict=True),                                    # trial（原始严格版，被5%版替代）
-        HalfRetraceChecker(strict=True, close_below_max_pct=5.0),           # live（严格+收盘距≤5%，推荐）
+        HalfRetraceChecker(strict=True),                                    # live（回调一半严格）
+        HalfRetraceChecker(strict=True, close_below_max_pct=5.0),           # trial（5%过滤不成立，被砍信号胜率反而更高）
         VolPriceNodeChecker(),                                             # trial（原版量价节点4%）
         VolPriceNodeChecker(entry_premium=1.02),                            # trial（上浮2%不严格）
         VolPriceNodeChecker(entry_premium=1.04, strict=True),               # trial（严格上浮4%）
