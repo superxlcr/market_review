@@ -1130,8 +1130,15 @@ class DataProvider:
         Returns total concept count loaded.
         """
         if self.cache.has_concepts():
-            log.info("_ensure_concepts: already cached, skip")
-            return len(self.cache.get_concept_index())
+            # 完整性检查：concept_index 有数据不代表 concept_member 也有
+            member_count = self.cache.concept_member_count()
+            if member_count > 0:
+                log.info("_ensure_concepts: already cached (%d members), skip", member_count)
+                return len(self.cache.get_concept_index())
+            else:
+                log.warning("_ensure_concepts: concept_index exists but concept_member is EMPTY! "
+                            "Clearing and re-fetching...")
+                self.cache.clear_concepts()
 
         log.info("_ensure_concepts: fetching concept index list ...")
         df_idx = self._api.ths_index()
@@ -1156,35 +1163,45 @@ class DataProvider:
             })
         self.cache.upsert_concept_index(idx_rows)
 
-        # 2) Fetch members for each concept (parallel)
+        # 2) Fetch members for each concept (rate-limited parallel)
+        # ths_member API limit: 500 calls/min → 3 workers + 0.8s delay ≈ 225/min, safe
         import time
+        import random
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         concept_list = [(r["ts_code"], r["name"]) for _, r in df_idx.iterrows()]
         total = len(concept_list)
         done = 0
+        done_lock = None  # initialized inside _fetch_one via nonlocal workaround
+
+        # Use a list wrapper for thread-safe counter
+        _counter = [0]
 
         def _fetch_one(ts_code: str, name: str) -> tuple[str, int]:
-            nonlocal done
+            time.sleep(0.8 + random.uniform(0, 0.3))  # rate-limit: 0.8-1.1s between calls
             try:
                 mdf = self._api.ths_member(ts_code=ts_code)
-                done += 1
-                if progress_cb and done % 50 == 0:
-                    progress_cb("concept_members", done, total,
-                                f"概念成分股 {done}/{total}")
-                if mdf is None or mdf.empty:
-                    return (ts_code, 0)
-                rows = [{"stock_code": r["con_code"],
-                         "stock_name": r.get("con_name", "")}
-                        for _, r in mdf.iterrows()]
-                self.cache.upsert_concept_members(ts_code, rows)
-                return (ts_code, len(rows))
             except Exception as e:
-                done += 1
+                _counter[0] += 1
+                if progress_cb and _counter[0] % 50 == 0:
+                    progress_cb("concept_members", _counter[0], total,
+                                f"概念成分股 {_counter[0]}/{total}")
                 log.debug("_ensure_concepts: %s (%s) failed: %s", name, ts_code, e)
                 return (ts_code, 0)
 
-        with ThreadPoolExecutor(max_workers=8) as ex:
+            _counter[0] += 1
+            if progress_cb and _counter[0] % 50 == 0:
+                progress_cb("concept_members", _counter[0], total,
+                            f"概念成分股 {_counter[0]}/{total}")
+            if mdf is None or mdf.empty:
+                return (ts_code, 0)
+            rows = [{"stock_code": r["con_code"],
+                     "stock_name": r.get("con_name", "")}
+                    for _, r in mdf.iterrows()]
+            self.cache.upsert_concept_members(ts_code, rows)
+            return (ts_code, len(rows))
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
             futs = {ex.submit(_fetch_one, code, name): code
                     for code, name in concept_list}
             for fut in as_completed(futs):
@@ -1200,13 +1217,13 @@ class DataProvider:
 
     def _get_or_build_concept_map(self, stock_codes: list[str]) -> dict[str, dict]:
         """Return {code: {concept_i: str, concept_n: str}} for winrate scan tagging.
-        concept_n is comma-separated N-type concept names.
+        concept_n is pipe-separated N-type concept names.
         """
         raw = self.cache.get_stock_concepts(stock_codes)
         return {
             code: {
                 "concept_i": info["i_concept"],
-                "concept_n": ",".join(info["n_concepts"]) if info["n_concepts"] else "",
+                "concept_n": "|".join(info["n_concepts"]) if info["n_concepts"] else "",
             }
             for code, info in raw.items()
         }

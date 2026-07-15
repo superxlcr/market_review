@@ -900,6 +900,18 @@ class CacheManager:
             ).fetchone()
         return row is not None
 
+    def concept_member_count(self) -> int:
+        """Return total rows in concept_member table."""
+        with self._get_conn() as conn:
+            return conn.execute("SELECT COUNT(*) FROM concept_member").fetchone()[0]
+
+    def clear_concepts(self):
+        """Delete all concept data (index + members) to force re-fetch."""
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM concept_member")
+            conn.execute("DELETE FROM concept_index")
+            conn.commit()
+
     def upsert_concept_index(self, rows: list[dict]):
         """Batch upsert concept index rows.
         Each row: {ts_code, name, type, list_date, count}."""

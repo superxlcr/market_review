@@ -50,7 +50,7 @@ class TradeResult:
     industry_l2: str = ""
     industry_l3: str = ""              # 申万三级行业
     concept_i: str = ""                # 同花顺 I 型行业分类
-    concept_n: str = ""                # 同花顺 N 型概念标签（逗号分隔）
+    concept_n: str = ""                # 同花顺 N 型概念标签（竖线分隔）
 
 
 def _f(v) -> float:
