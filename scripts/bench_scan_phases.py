@@ -7,7 +7,7 @@ for line in open(os.path.join(os.path.dirname(__file__), "..", ".env"), encoding
         os.environ["TUSHARE_TOKEN"] = line.split("=", 1)[1].strip()
 
 from marketreview.data.data_provider import DataProvider
-from marketreview.winrate.scan_engine import prepare_klines, _date_idx, _tag, _wave33_state
+from marketreview.winrate.scan_engine import prepare_klines, _date_idx, _tag
 from marketreview.winrate.config import WinrateConfig, cap_bucket
 from marketreview.tools.technical import rows_to_df, calc_atr
 from marketreview.tools.band_analysis import analyze_band
@@ -35,7 +35,7 @@ start = cfg.start_date
 end = None if cfg.end_date in ("", "now") else cfg.end_date
 
 # 分阶段累计计时
-t_filter = t_band = t_detect = t_sim = t_atr = t_wave33 = 0.0
+t_filter = t_band = t_detect = t_sim = t_atr = 0.0
 n_days = 0
 n_filtered_out = 0
 t0 = time.time()
@@ -76,12 +76,6 @@ while i < n - 1:
         t_sim += time.time() - s
         if tr is None:
             continue
-        s = time.time()
-        w33 = _wave33_state(dp.cache, tr.signal_date)
-        tr.wave33_direction = w33["direction"]
-        tr.wave33_streak = w33["streak"]
-        tr.wave33_label = w33["label"]
-        t_wave33 += time.time() - s
     i += 1
 
 total = time.time() - t0
@@ -94,4 +88,3 @@ print(f"  analyze_band: {t_band:.2f}s ({t_band/total*100:.0f}%)", flush=True)
 print(f"  detect_buy_points: {t_detect:.2f}s ({t_detect/total*100:.0f}%)", flush=True)
 print(f"  calc_atr: {t_atr:.2f}s ({t_atr/total*100:.0f}%)", flush=True)
 print(f"  simulate_trade: {t_sim:.2f}s ({t_sim/total*100:.0f}%)", flush=True)
-print(f"  wave33_state(每笔): {t_wave33:.2f}s ({t_wave33/total*100:.0f}%)", flush=True)

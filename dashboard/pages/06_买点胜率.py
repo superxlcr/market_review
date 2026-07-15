@@ -91,50 +91,30 @@ prep_start, prep_end = _prep_range(start_date, cfg.end_date)
 st.caption(f"📦 数据准备范围：`{prep_start}` ~ `{prep_end}` "
            f"（扫描窗前推 {_PREP_LOOKBACK_CAL} 日历日预热）")
 
-# 就绪状态：缓存 + 范围一致性（K线 + wave33 双门禁）
+# 就绪状态：缓存 + 范围一致性（K线门禁）
 _cov_range = st.session_state.get("wr_cov_range")
 _cov_cache = st.session_state.get("wr_cov_cache")
 _range_match = (_cov_range == (prep_start, prep_end))
 _kline = (_cov_cache or {}).get("kline", {}) if _range_match else {}
-_wave33 = (_cov_cache or {}).get("wave33", {}) if _range_match else {}
-_kd80 = (_cov_cache or {}).get("kd80", {}) if _range_match else {}
-_ind_kd80 = (_cov_cache or {}).get("ind_kd80", {}) if _range_match else {}
 _kline_ready = bool(_kline.get("ready"))
-_wave33_ready = bool(_wave33.get("ready"))
-_kd80_ready = bool(_kd80.get("ready"))
-_ind_kd80_ready = bool(_ind_kd80.get("ready"))
-_data_ready = _kline_ready and _wave33_ready and _kd80_ready and _ind_kd80_ready
+_data_ready = _kline_ready
 
 # 状态条
 if not _cov_cache:
-    st.info("⏳ 数据未准备：请先点「数据准备」拉取扫描范围内的日 K + 3浪3 + KD80 + 行业KD80 数据。")
+    st.info("⏳ 数据未准备：请先点「数据准备」拉取扫描范围内的日 K + 概念标签数据。")
 elif not _range_match:
     st.warning("⚠️ 扫描日期已变更，数据准备结果失效，请重新点「数据准备」。")
-elif _kline.get("error") or _wave33.get("error") or _kd80.get("error") or _ind_kd80.get("error"):
-    errs = [e for e in [_kline.get("error"), _wave33.get("error"),
-                        _kd80.get("error"), _ind_kd80.get("error")] if e]
-    st.error(f"❌ 校验失败：{' / '.join(errs)}，请重试「数据准备」。")
+elif _kline.get("error"):
+    st.error(f"❌ 校验失败：{_kline.get('error')}，请重试「数据准备」。")
 elif _data_ready:
     kline_n = _kline.get("total_dates", 0)
-    st.success(f"✅ 数据就绪：K线覆盖 {kline_n} 个交易日，3浪3 + KD80 + 行业KD80 全覆盖。")
+    st.success(f"✅ 数据就绪：K线覆盖 {kline_n} 个交易日。")
 else:
     kline_miss = _kline.get("missing_dates", [])
-    w33_miss = _wave33.get("missing_dates", [])
-    kd80_miss = _kd80.get("missing_dates", [])
-    ind_kd80_miss = _ind_kd80.get("missing_dates", [])
     msgs = []
     if kline_miss:
         msgs.append(f"K线缺口 {len(kline_miss)} 天"
                     + (f"（{', '.join(kline_miss[:5])}…）" if kline_miss else ""))
-    if w33_miss:
-        msgs.append(f"3浪3 缺算 {len(w33_miss)} 天"
-                    + (f"（{', '.join(w33_miss[:5])}…）" if w33_miss else ""))
-    if kd80_miss:
-        msgs.append(f"KD80 缺算 {len(kd80_miss)} 天"
-                    + (f"（{', '.join(kd80_miss[:5])}…）" if kd80_miss else ""))
-    if ind_kd80_miss:
-        msgs.append(f"行业KD80 缺算 {len(ind_kd80_miss)} 天"
-                    + (f"（{', '.join(ind_kd80_miss[:5])}…）" if ind_kd80_miss else ""))
     st.warning("⚠️ 数据未就绪：" + "，".join(msgs) + "。请重试「数据准备」补齐。")
 
 col_prep, _ = st.columns([1, 3])

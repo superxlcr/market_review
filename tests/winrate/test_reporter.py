@@ -52,8 +52,8 @@ def test_export_csv_writes_config_header(tmp_path):
     assert "A.SH" in text
 
 
-def test_export_fields_include_wave33():
-    """CSV 导出字段含 wave33 三列。"""
-    assert "wave33_direction" in R._EXPORT_FIELDS
-    assert "wave33_streak" in R._EXPORT_FIELDS
-    assert "wave33_label" in R._EXPORT_FIELDS
+def test_export_fields_include_classification():
+    """CSV 导出字段含 L3 + 概念标签列。"""
+    assert "industry_l3" in R._EXPORT_FIELDS
+    assert "concept_i" in R._EXPORT_FIELDS
+    assert "concept_n" in R._EXPORT_FIELDS

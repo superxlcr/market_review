@@ -1122,6 +1122,95 @@ class DataProvider:
                  len(rows))
         return len(rows)
 
+    # ── Concept (同花顺概念) ──
+
+    def _ensure_concepts(self, progress_cb=None) -> int:
+        """Lazy-init: fetch concept indices + members from tushare ths_* APIs,
+        cache to concept_index + concept_member tables.
+        Returns total concept count loaded.
+        """
+        if self.cache.has_concepts():
+            log.info("_ensure_concepts: already cached, skip")
+            return len(self.cache.get_concept_index())
+
+        log.info("_ensure_concepts: fetching concept index list ...")
+        df_idx = self._api.ths_index()
+        if df_idx is None or df_idx.empty:
+            log.warning("_ensure_concepts: ths_index returned empty")
+            return 0
+
+        # filter out regional (R), ST, BB, TH types — keep I + N
+        keep_types = {"I", "N"}
+        df_idx = df_idx[df_idx["type"].isin(keep_types)]
+        log.info("_ensure_concepts: %d concepts (I+N) to load", len(df_idx))
+
+        # 1) Upsert concept indices
+        idx_rows = []
+        for _, r in df_idx.iterrows():
+            idx_rows.append({
+                "ts_code": r["ts_code"],
+                "name": r["name"],
+                "type": r["type"],
+                "list_date": str(r.get("list_date", "")) if r.get("list_date") and str(r["list_date"]) != "nan" else "",
+                "count": int(r["count"]) if r.get("count") and str(r["count"]) != "nan" else 0,
+            })
+        self.cache.upsert_concept_index(idx_rows)
+
+        # 2) Fetch members for each concept (parallel)
+        import time
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        concept_list = [(r["ts_code"], r["name"]) for _, r in df_idx.iterrows()]
+        total = len(concept_list)
+        done = 0
+
+        def _fetch_one(ts_code: str, name: str) -> tuple[str, int]:
+            nonlocal done
+            try:
+                mdf = self._api.ths_member(ts_code=ts_code)
+                done += 1
+                if progress_cb and done % 50 == 0:
+                    progress_cb("concept_members", done, total,
+                                f"概念成分股 {done}/{total}")
+                if mdf is None or mdf.empty:
+                    return (ts_code, 0)
+                rows = [{"stock_code": r["con_code"],
+                         "stock_name": r.get("con_name", "")}
+                        for _, r in mdf.iterrows()]
+                self.cache.upsert_concept_members(ts_code, rows)
+                return (ts_code, len(rows))
+            except Exception as e:
+                done += 1
+                log.debug("_ensure_concepts: %s (%s) failed: %s", name, ts_code, e)
+                return (ts_code, 0)
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(_fetch_one, code, name): code
+                    for code, name in concept_list}
+            for fut in as_completed(futs):
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+
+        if progress_cb:
+            progress_cb("concept_members", total, total, "概念标签加载完成")
+        log.info("_ensure_concepts: loaded %d concepts", len(idx_rows))
+        return len(idx_rows)
+
+    def _get_or_build_concept_map(self, stock_codes: list[str]) -> dict[str, dict]:
+        """Return {code: {concept_i: str, concept_n: str}} for winrate scan tagging.
+        concept_n is comma-separated N-type concept names.
+        """
+        raw = self.cache.get_stock_concepts(stock_codes)
+        return {
+            code: {
+                "concept_i": info["i_concept"],
+                "concept_n": ",".join(info["n_concepts"]) if info["n_concepts"] else "",
+            }
+            for code, info in raw.items()
+        }
+
     def _get_display_industry_codes(self) -> list[str]:
         """
         Compute the display industry index_codes using SPLIT_L1/SPLIT_L2

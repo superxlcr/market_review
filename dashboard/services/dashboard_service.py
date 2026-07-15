@@ -1867,7 +1867,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "9.14.1"
+    _AI_VERSION = "9.15.0"
 
     def run_winrate_scan(self, cfg, progress_cb=None, timing_sink=None):
         """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。
@@ -1879,45 +1879,25 @@ class DashboardService:
         return stats, trades
 
     def prepare_winrate_data(self, start: str, end: str, progress_cb=None) -> dict:
-        """拉取/校验 [start,end] 全市场 K线+复权因子 + 预算 wave33/KD80/行业KD80。
+        """拉取/校验 [start,end] 全市场 K线+复权因子 + 概念标签。
         阶段1: ensure_data_loaded（K线+复权，min_fetch_start=预热缓冲）。
-        阶段2: scan_wave33 + scan_kd80 + scan_ind_kd80（幂等，已算日期跳过）。"""
+        阶段2: _ensure_concepts（概念标签，幂等）。"""
         log.info("[AI v%s] prepare_winrate_data(%s~%s)", self._AI_VERSION, start, end)
         # 阶段1: K线 + 复权因子
         res = self._dp.ensure_data_loaded(end, progress_cb=progress_cb,
                                           min_fetch_start=start)
-        # 阶段2: wave33 + KD80 + 行业KD80 预算（幂等）
-        trade_dates = self._dp.cache.get_daily_dates_in_range(start, end)
-        if trade_dates:
-            trade_dates = list(reversed(trade_dates))  # DESC for scan
-            from marketreview.tools.wave33 import scan_wave33, scan_kd80, scan_ind_kd80
-            # wave33
-            log.info("prepare_winrate_data: 阶段2A wave33 [%s~%s]", start, end)
-            scan_wave33(trade_dates, self._dp, progress_cb=progress_cb)
-            # KD80
-            log.info("prepare_winrate_data: 阶段2B KD80 [%s~%s]", start, end)
-            scan_kd80(trade_dates, self._dp, progress_cb=progress_cb)
-            # 行业 KD80
-            log.info("prepare_winrate_data: 阶段2C 行业KD80 [%s~%s]", start, end)
-            scan_ind_kd80(trade_dates, self._dp, progress_cb=progress_cb)
-            log.info("prepare_winrate_data: 全部预算完成 %d 天", len(trade_dates))
-        else:
-            log.warning("prepare_winrate_data: [%s~%s] 无交易日，跳过", start, end)
+        # 阶段2: 概念标签（幂等，已缓存跳过）
+        log.info("prepare_winrate_data: 阶段2 概念标签加载")
+        self._dp._ensure_concepts(progress_cb=progress_cb)
         return res
 
     def check_winrate_coverage(self, start: str, end: str) -> dict:
-        """返回数据就绪状态（K线 + wave33 + KD80 + 行业KD80 四门禁），供页面用。"""
+        """返回数据就绪状态（K线门禁），供页面用。"""
         kline = self._dp.check_kline_coverage(start, end)
-        wave33 = self._dp.check_wave33_coverage(start, end)
-        kd80 = self._dp.check_kd80_coverage(start, end)
-        ind_kd80 = self._dp.check_ind_kd80_coverage(start, end)
-        ready = bool(kline.get("ready") and wave33.get("ready")
-                     and kd80.get("ready") and ind_kd80.get("ready"))
-        log.info("check_winrate_coverage(%s~%s): kline=%s w33=%s kd80=%s ind_kd80=%s → %s",
-                 start, end, kline.get("ready"), wave33.get("ready"),
-                 kd80.get("ready"), ind_kd80.get("ready"), ready)
-        return {"ready": ready, "kline": kline, "wave33": wave33,
-                "kd80": kd80, "ind_kd80": ind_kd80}
+        ready = bool(kline.get("ready"))
+        log.info("check_winrate_coverage(%s~%s): kline=%s → %s",
+                 start, end, kline.get("ready"), ready)
+        return {"ready": ready, "kline": kline}
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """

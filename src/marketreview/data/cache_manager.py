@@ -70,6 +70,12 @@ class CacheManager:
             "open", "high", "low", "close",
             "vol", "amount", "pct_change",
         },
+        "concept_index": {
+            "ts_code", "name", "type", "list_date", "count",
+        },
+        "concept_member": {
+            "con_code", "stock_code", "stock_name",
+        },
     }
 
     def _init_schema(self):
@@ -883,3 +889,82 @@ class CacheManager:
                 (trade_date, summary_type, guide_key, content, model),
             )
             conn.commit()
+
+    # ------- concept data -------
+
+    def has_concepts(self) -> bool:
+        """Return True if concept_index table has data (lazy-init guard)."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM concept_index LIMIT 1"
+            ).fetchone()
+        return row is not None
+
+    def upsert_concept_index(self, rows: list[dict]):
+        """Batch upsert concept index rows.
+        Each row: {ts_code, name, type, list_date, count}."""
+        with self._get_conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO concept_index "
+                "(ts_code, name, type, list_date, count) "
+                "VALUES (:ts_code, :name, :type, :list_date, :count)",
+                rows,
+            )
+            conn.commit()
+        log.info("upsert_concept_index: %d rows", len(rows))
+
+    def upsert_concept_members(self, con_code: str, rows: list[dict]):
+        """Batch upsert members for one concept.
+        Each row: {stock_code, stock_name}."""
+        with self._get_conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO concept_member "
+                "(con_code, stock_code, stock_name) "
+                "VALUES (?, ?, ?)",
+                [(con_code, r["stock_code"], r.get("stock_name", ""))
+                 for r in rows],
+            )
+            conn.commit()
+
+    def get_concept_index(self, type_filter: str | None = None) -> list[dict]:
+        """Return concept index rows, optionally filtered by type (I/N)."""
+        with self._get_conn() as conn:
+            if type_filter:
+                rows = conn.execute(
+                    "SELECT ts_code, name, type, list_date, count "
+                    "FROM concept_index WHERE type = ? ORDER BY name",
+                    [type_filter],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT ts_code, name, type, list_date, count "
+                    "FROM concept_index ORDER BY type, name",
+                ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_stock_concepts(self, stock_codes: list[str]) -> dict[str, dict]:
+        """Return {stock_code: {i_concept: str, n_concepts: list[str]}}."""
+        if not stock_codes:
+            return {}
+        placeholders = ",".join(["?" for _ in stock_codes])
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                f"""SELECT cm.stock_code, ci.name, ci.type
+                    FROM concept_member cm
+                    JOIN concept_index ci ON cm.con_code = ci.ts_code
+                    WHERE cm.stock_code IN ({placeholders})
+                    ORDER BY ci.type, ci.name""",
+                stock_codes,
+            ).fetchall()
+
+        result: dict[str, dict] = {c: {"i_concept": "", "n_concepts": []}
+                                    for c in stock_codes}
+        for r in rows:
+            code = r["stock_code"]
+            if code not in result:
+                continue
+            if r["type"] == "I" and not result[code]["i_concept"]:
+                result[code]["i_concept"] = r["name"]
+            elif r["type"] == "N":
+                result[code]["n_concepts"].append(r["name"])
+        return result

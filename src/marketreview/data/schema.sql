@@ -132,3 +132,20 @@ CREATE TABLE IF NOT EXISTS industry_daily (
 
 CREATE INDEX IF NOT EXISTS idx_ind_daily_date
     ON industry_daily(trade_date);
+
+-- ── Concept (同花顺概念) data ──
+
+CREATE TABLE IF NOT EXISTS concept_index (
+    ts_code   TEXT PRIMARY KEY,   -- 概念指数代码 (885710.TI ...)
+    name      TEXT NOT NULL,      -- 概念名称
+    type      TEXT NOT NULL,      -- I (行业) / N (概念)
+    list_date TEXT,               -- 上市日期
+    count     INTEGER             -- 成分股数量
+);
+
+CREATE TABLE IF NOT EXISTS concept_member (
+    con_code   TEXT NOT NULL,     -- 概念指数代码
+    stock_code TEXT NOT NULL,     -- 成分股代码
+    stock_name TEXT,              -- 成分股名称
+    PRIMARY KEY (con_code, stock_code)
+);

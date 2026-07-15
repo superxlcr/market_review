@@ -40,9 +40,10 @@ def prepare_klines(rows_desc: list[dict]) -> list[dict]:
 
 
 def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
-               industry_l1: str, industry_l2: str, list_date: str,
-               mv_series: dict[str, float], band_lookback: int = 300,
-               cache=None) -> list[TradeResult]:
+               industry_l1: str, industry_l2: str, industry_l3: str,
+               list_date: str, mv_series: dict[str, float],
+               concept_info: dict | None = None,
+               band_lookback: int = 300) -> list[TradeResult]:
     klines = prepare_klines(rows_desc)
     n = len(klines)
     if n < 60:
@@ -110,7 +111,8 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
             tr = simulate_trade(sig, i, klines, cfg, code, name, atr_T)
             if tr is None:
                 continue
-            _tag(tr, df_upto, mv_yi, industry_l1, industry_l2, cache)
+            _tag(tr, df_upto, mv_yi, industry_l1, industry_l2, industry_l3,
+                 concept_info)
             results.append(tr)
             # 该买点跳过自己的持仓期：下次可建仓 = 出场日之后（不影响其它买点）
             exit_next = _date_idx(dates, tr.exit_date) + 1
@@ -128,99 +130,18 @@ def _date_idx(dates: list[str], d: str) -> int:
         return len(dates) - 1
 
 
-def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2, cache=None):
+def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2, l3,
+         concept_info: dict | None = None):
     tr.short_ma_state = ma_group_state(df_upto, [5, 10, 20])
     tr.long_ma_state = ma_group_state(df_upto, [60, 120, 240])
     tr.market_cap_yi = round(mv_yi, 1)
     tr.cap_bucket = cap_bucket(mv_yi) if mv_yi > 0 else ""
     tr.industry_l1 = l1
     tr.industry_l2 = l2
-    # wave33: 保留旧字段 + 新增 SMA3
-    w33 = _wave33_state(cache, tr.signal_date)
-    tr.wave33_direction = w33["direction"]
-    tr.wave33_streak = w33["streak"]
-    tr.wave33_label = w33["label"]
-    tr.wave33_sma3 = w33["sma3"]
-    tr.wave33_sma3_dir = w33["sma3_dir"]
-    # KD80: 简化版市场广度
-    kd = _kd80_state(cache, tr.signal_date)
-    tr.kd80_count = kd["count"]
-    tr.kd80_sma3 = kd["sma3"]
-    tr.kd80_sma3_dir = kd["sma3_dir"]
-    # 行业 KD80 (L1 + L2)
-    ind_l1 = _ind_kd80_state(cache, tr.signal_date, "L1", tr.industry_l1)
-    tr.ind_l1_kd80_count = ind_l1["count"]
-    tr.ind_l1_kd80_sma3 = ind_l1["sma3"]
-    tr.ind_l1_kd80_sma3_dir = ind_l1["direction"]
-    tr.ind_l1_kd80_streak = ind_l1["streak"]
-    ind_l2 = _ind_kd80_state(cache, tr.signal_date, "L2", tr.industry_l2)
-    tr.ind_l2_kd80_count = ind_l2["count"]
-    tr.ind_l2_kd80_sma3 = ind_l2["sma3"]
-    tr.ind_l2_kd80_sma3_dir = ind_l2["direction"]
-    tr.ind_l2_kd80_streak = ind_l2["streak"]
-
-
-def _wave33_state(cache, signal_date: str) -> dict:
-    """取 signal_date 及之前 wave33 count 序列，返回旧滞回标签 + 新 SMA3 方向。
-    signal_date = 条件单当天。"""
-    from marketreview.tools.wave33 import compute_trend, sma3_direction
-    if cache is None:
-        return {"direction": "", "streak": 0, "label": "",
-                "sma3": 0.0, "sma3_dir": ""}
-    rows = cache.get_wave33_range(limit=6, end_date=signal_date)  # DESC，4天够SMA3
-    if len(rows) < 2:
-        return {"direction": "", "streak": 0, "label": "",
-                "sma3": 0.0, "sma3_dir": ""}
-    counts = [r["count"] for r in rows]
-    # 旧滞回逻辑（保持向后兼容）
-    old = compute_trend(counts)
-    # 新 SMA3 方向
-    sma3_info = sma3_direction(counts)
-    return {
-        "direction": old["direction"], "streak": old["streak"], "label": old["label"],
-        "sma3": sma3_info["sma3"], "sma3_dir": sma3_info["direction"],
-    }
-
-
-def _kd80_state(cache, signal_date: str) -> dict:
-    """取 signal_date 及之前 KD80 count 序列，返回 SMA3 平滑值 + 方向。
-    signal_date = 条件单当天。"""
-    from marketreview.tools.wave33 import sma3_direction
-    if cache is None:
-        return {"count": 0, "sma3": 0.0, "sma3_dir": ""}
-    rows = cache.get_kd80_range(limit=6, end_date=signal_date)  # DESC
-    if len(rows) < 4:
-        return {"count": rows[0]["count"] if rows else 0,
-                "sma3": 0.0, "sma3_dir": ""}
-    counts = [r["count"] for r in rows]
-    sma3_info = sma3_direction(counts)
-    return {
-        "count": counts[0],
-        "sma3": sma3_info["sma3"],
-        "sma3_dir": sma3_info["direction"],
-    }
-
-
-def _ind_kd80_state(cache, signal_date: str, industry_type: str,
-                    industry_name: str) -> dict:
-    """取某行业在 signal_date 的 KD80 状态（count/sma3/方向/持续天数）。
-    行业名为空时返回空状态。"""
-    from marketreview.tools.wave33 import sma3_streak
-    if cache is None or not industry_name:
-        return {"count": 0, "sma3": 0.0, "direction": "", "streak": 0}
-    rows = cache.get_ind_kd80_range(industry_type, industry_name,
-                                    limit=15, end_date=signal_date)  # DESC
-    if len(rows) < 4:
-        c = rows[0]["count"] if rows else 0
-        return {"count": c, "sma3": 0.0, "direction": "", "streak": 0}
-    counts = [r["count"] for r in rows]
-    info = sma3_streak(counts)
-    return {
-        "count": counts[0],
-        "sma3": info["sma3"],
-        "direction": info["direction"],
-        "streak": info["streak"],
-    }
+    tr.industry_l3 = l3
+    if concept_info:
+        tr.concept_i = concept_info.get("concept_i", "")
+        tr.concept_n = concept_info.get("concept_n", "")
 
 
 def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,
@@ -242,7 +163,8 @@ def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,
     else:
         universe = [b for b in basics if not b.get("is_st")]
     codes = [b["ts_code"] for b in universe]
-    ind_map = dp.cache.get_stock_industries(codes)  # {code:{l1_name,l2_name,...}}
+    ind_map = dp.cache.get_stock_industries(codes)  # {code:{l1_name,l2_name,l3_name}}
+    concept_map = dp._get_or_build_concept_map(codes) if dp.cache.has_concepts() else {}
 
     def _one(b: dict) -> list[TradeResult]:
         code = b["ts_code"]
@@ -258,11 +180,13 @@ def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,
         mv_rows = dp.cache.get_daily_basic_for_code(code)  # Task 6 新增
         mv_series = {r["trade_date"]: float(r["total_mv"]) / 1e4 for r in mv_rows}
         ind = ind_map.get(code, {})
+        ci = concept_map.get(code, {})
         trades = scan_stock(
             code, b.get("name", ""), rows_desc, cfg,
             ind.get("l1_name", ""), ind.get("l2_name", ""),
+            ind.get("l3_name", ""),
             b.get("list_date", ""), mv_series,
-            cache=dp.cache,
+            concept_info=ci,
         )
         if timing_sink is not None:
             timing_sink.append({"code": code, "name": b.get("name", ""),
