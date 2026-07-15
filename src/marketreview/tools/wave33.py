@@ -357,3 +357,147 @@ def compute_trend(counts: List[int]) -> dict:
             label = "下跌第1天"
 
     return {"direction": raw_direction, "streak": raw_streak, "label": label}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# KD80 — 简化版市场广度指标 (K>80 连续3天 → 日度量 → SMA3)
+# ═══════════════════════════════════════════════════════════════════
+
+def scan_kd80(
+    dates: list[str],
+    dp,
+    progress_cb=None,
+) -> dict[str, dict]:
+    """
+    Scan all A-shares for KD80 on each date in `dates`.
+
+    Condition: KD K-value > 80 for 3 consecutive trading days.
+    Counts qualifying stocks per date → stores in kd80_cache.
+
+    Args:
+        dates: Trading dates (YYYYMMDD), most-recent-first.
+        dp: DataProvider instance.
+        progress_cb: Optional callable(phase, current, total, date_str).
+
+    Returns:
+        {date: {count}, ...} for newly scanned dates.
+    """
+    dates_to_scan = [d for d in dates if not dp.cache.has_kd80_date(d)]
+    if not dates_to_scan:
+        return {}
+
+    latest_date = dates_to_scan[0]
+    earliest_date = dates_to_scan[-1]
+
+    latest_dt = datetime.strptime(latest_date, "%Y%m%d")
+    earliest_dt = datetime.strptime(earliest_date, "%Y%m%d")
+    full_start_dt = earliest_dt - timedelta(days=90)  # KD only needs ~20 bars
+    full_lookback = (latest_dt - full_start_dt).days
+
+    log.info("scan_kd80: %d dates to scan (%s..%s), lookback=%d days",
+             len(dates_to_scan), earliest_date, latest_date, full_lookback)
+
+    results: dict[str, dict] = {}
+    total_dates = len(dates_to_scan)
+
+    stocks = dp.get_stock_list(latest_date)
+    if not stocks:
+        log.warning("scan_kd80: no qualifying stocks for date=%s", latest_date)
+        return {}
+
+    total_stocks = len(stocks)
+    if progress_cb:
+        progress_cb("kd80_init", total_stocks, total_dates, latest_date)
+
+    # Phase 1 — Load K-line + compute KD once per stock
+    stock_k_arr: dict[str, tuple] = {}  # code → (df, k_arr)
+
+    for si, stock in enumerate(stocks):
+        code = stock["ts_code"]
+        if progress_cb and si > 0 and si % 50 == 0:
+            progress_cb("kd80_load", si, total_stocks, str(total_dates))
+
+        rows = dp.get_daily(code, end_date=latest_date,
+                            lookback_days=full_lookback)
+        if len(rows) < 25:
+            continue
+        df = rows_to_df(rows)
+        if len(df) < 21:
+            continue
+        df = DataProvider.raw_to_qfq(df)
+        kd = calc_kd_standard(df)
+        stock_k_arr[code] = (df, np.array(kd["K"]))
+
+    loaded = len(stock_k_arr)
+    log.info("scan_kd80 Phase 1 done: %d/%d stocks loaded", loaded, total_stocks)
+    if progress_cb:
+        progress_cb("kd80_scan", loaded, total_stocks, str(total_dates))
+
+    # Phase 2 — Per-date check (pure in-memory slices)
+    for di, trade_date in enumerate(dates_to_scan):
+        qualifying_count = 0
+
+        for code, (df, k_arr) in stock_k_arr.items():
+            date_mask = df["date"] <= trade_date
+            n_rows = date_mask.sum()
+            if n_rows < 3:
+                continue
+            end_idx = n_rows - 1
+
+            # Check K > 80 for last 3 trading days (end_idx-2, end_idx-1, end_idx)
+            k0 = k_arr[end_idx]
+            k1 = k_arr[end_idx - 1]
+            k2 = k_arr[end_idx - 2]
+            if np.isnan(k0) or np.isnan(k1) or np.isnan(k2):
+                continue
+            if k0 > 80 and k1 > 80 and k2 > 80:
+                qualifying_count += 1
+
+        dp.cache.upsert_kd80(trade_date=trade_date, count=qualifying_count)
+        results[trade_date] = {"count": qualifying_count}
+
+        if progress_cb:
+            progress_cb("kd80_date", di + 1, total_dates, trade_date)
+
+    return results
+
+
+def sma3_direction(counts: list[int]) -> dict:
+    """
+    Compute SMA(3) direction from count series (most-recent-first).
+
+    Args:
+        counts: list of daily counts, most-recent-first. Needs ≥4 entries.
+
+    Returns:
+        {sma3: float, direction: "up"|"down"|"flat", prev_sma3: float}
+    """
+    if len(counts) < 4:
+        return {"sma3": 0.0, "direction": "flat", "prev_sma3": 0.0}
+
+    today = (counts[0] + counts[1] + counts[2]) / 3
+    yesterday = (counts[1] + counts[2] + counts[3]) / 3
+
+    if today > yesterday:
+        direction = "up"
+    elif today < yesterday:
+        direction = "down"
+    else:
+        direction = "flat"
+
+    return {"sma3": round(today, 1), "direction": direction,
+            "prev_sma3": round(yesterday, 1)}
+
+
+def compute_sma3_series(counts: list[int]) -> list[float]:
+    """Compute SMA(3) on a count series (most-recent-first → same order output)."""
+    n = len(counts)
+    result = []
+    for i in range(n):
+        if i + 2 < n:
+            result.append(round((counts[i] + counts[i+1] + counts[i+2]) / 3, 1))
+        elif i + 1 < n:
+            result.append(round((counts[i] + counts[i+1]) / 2, 1))
+        else:
+            result.append(float(counts[i]))
+    return result

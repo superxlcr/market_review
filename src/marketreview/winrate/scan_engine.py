@@ -135,25 +135,59 @@ def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2, cache=None):
     tr.cap_bucket = cap_bucket(mv_yi) if mv_yi > 0 else ""
     tr.industry_l1 = l1
     tr.industry_l2 = l2
+    # wave33: 保留旧字段 + 新增 SMA3
     w33 = _wave33_state(cache, tr.signal_date)
     tr.wave33_direction = w33["direction"]
     tr.wave33_streak = w33["streak"]
     tr.wave33_label = w33["label"]
+    tr.wave33_sma3 = w33["sma3"]
+    tr.wave33_sma3_dir = w33["sma3_dir"]
+    # KD80: 简化版市场广度
+    kd = _kd80_state(cache, tr.signal_date)
+    tr.kd80_count = kd["count"]
+    tr.kd80_sma3 = kd["sma3"]
+    tr.kd80_sma3_dir = kd["sma3_dir"]
 
 
 def _wave33_state(cache, signal_date: str) -> dict:
-    """取 signal_date 及之前 21 天 wave33 count 序列，算趋势状态。
-    缺数据 → 空状态（门禁已保证就绪；此处防御性返回空）。"""
-    from marketreview.tools.wave33 import compute_trend
+    """取 signal_date 及之前 wave33 count 序列，返回旧滞回标签 + 新 SMA3 方向。
+    signal_date = 条件单当天。"""
+    from marketreview.tools.wave33 import compute_trend, sma3_direction
     if cache is None:
-        return {"direction": "", "streak": 0, "label": ""}
-    rows = cache.get_wave33_range(limit=21, end_date=signal_date)  # DESC
+        return {"direction": "", "streak": 0, "label": "",
+                "sma3": 0.0, "sma3_dir": ""}
+    rows = cache.get_wave33_range(limit=6, end_date=signal_date)  # DESC，4天够SMA3
     if len(rows) < 2:
-        log.warning("_wave33_state: signal_date=%s wave33 序列不足(%d)，留空",
-                    signal_date, len(rows))
-        return {"direction": "", "streak": 0, "label": ""}
-    counts = [r["count"] for r in rows]   # most-recent-first（compute_trend 要求）
-    return compute_trend(counts)
+        return {"direction": "", "streak": 0, "label": "",
+                "sma3": 0.0, "sma3_dir": ""}
+    counts = [r["count"] for r in rows]
+    # 旧滞回逻辑（保持向后兼容）
+    old = compute_trend(counts)
+    # 新 SMA3 方向
+    sma3_info = sma3_direction(counts)
+    return {
+        "direction": old["direction"], "streak": old["streak"], "label": old["label"],
+        "sma3": sma3_info["sma3"], "sma3_dir": sma3_info["direction"],
+    }
+
+
+def _kd80_state(cache, signal_date: str) -> dict:
+    """取 signal_date 及之前 KD80 count 序列，返回 SMA3 平滑值 + 方向。
+    signal_date = 条件单当天。"""
+    from marketreview.tools.wave33 import sma3_direction
+    if cache is None:
+        return {"count": 0, "sma3": 0.0, "sma3_dir": ""}
+    rows = cache.get_kd80_range(limit=6, end_date=signal_date)  # DESC
+    if len(rows) < 4:
+        return {"count": rows[0]["count"] if rows else 0,
+                "sma3": 0.0, "sma3_dir": ""}
+    counts = [r["count"] for r in rows]
+    sma3_info = sma3_direction(counts)
+    return {
+        "count": counts[0],
+        "sma3": sma3_info["sma3"],
+        "sma3_dir": sma3_info["direction"],
+    }
 
 
 def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,

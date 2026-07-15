@@ -53,6 +53,8 @@ _EXPORT_FIELDS = [
     "success", "short_ma_state", "long_ma_state", "market_cap_yi", "cap_bucket",
     "industry_l1", "industry_l2",
     "wave33_direction", "wave33_streak", "wave33_label",
+    "wave33_sma3", "wave33_sma3_dir",
+    "kd80_count", "kd80_sma3", "kd80_sma3_dir",
 ]
 
 

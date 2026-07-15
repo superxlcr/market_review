@@ -44,6 +44,9 @@ class CacheManager:
             "trade_date", "count", "profit_count", "profit_pct",
             "stock_codes", "updated_at",
         },
+        "kd80_cache": {
+            "trade_date", "count", "updated_at",
+        },
         "index_contribution_cache": {
             "index_code", "trade_date", "top_n",
             "weight_type", "data", "created_at",
@@ -573,6 +576,44 @@ class CacheManager:
         with self._get_conn() as conn:
             conn.execute(sql, [stock_codes, trade_date])
             conn.commit()
+
+    # ------- kd80_cache -------
+
+    def upsert_kd80(self, trade_date: str, count: int):
+        """Insert or replace one KD80 daily result."""
+        sql = """
+            INSERT OR REPLACE INTO kd80_cache
+                (trade_date, count, updated_at)
+            VALUES (?, ?, datetime('now'))
+        """
+        with self._get_conn() as conn:
+            conn.execute(sql, [trade_date, count])
+            conn.commit()
+
+    def get_kd80_range(self, limit: int = 15, end_date: str | None = None) -> list[dict]:
+        """Return last N rows from kd80_cache (trade_date DESC), <= end_date."""
+        from datetime import datetime
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y%m%d")
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT trade_date, count
+                   FROM kd80_cache
+                   WHERE trade_date <= ?
+                   ORDER BY trade_date DESC
+                   LIMIT ?""",
+                [end_date, limit],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def has_kd80_date(self, trade_date: str) -> bool:
+        """Return True if kd80_cache has this date."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM kd80_cache WHERE trade_date = ?",
+                [trade_date],
+            ).fetchone()
+        return row is not None
 
     # ------- index_contribution_cache -------
 

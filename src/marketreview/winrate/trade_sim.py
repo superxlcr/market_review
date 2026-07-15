@@ -52,6 +52,12 @@ class TradeResult:
     wave33_direction: str = ""   # "up" | "down" | "flat"
     wave33_streak: int = 0       # 连续天数
     wave33_label: str = ""       # "确认上升，连续上升 5 天" 等
+    wave33_sma3: float = 0.0     # SMA(3) 平滑后的 count
+    wave33_sma3_dir: str = ""    # SMA3 方向 "up"|"down"|"flat" (t vs t-1)
+    # KD80 市场广度趋势（简化版 3浪3，K>80 连续3天 → 日度量 → SMA3）
+    kd80_count: int = 0          # signal_date 当天 KD80 raw count
+    kd80_sma3: float = 0.0       # KD80 SMA(3) 平滑值
+    kd80_sma3_dir: str = ""      # SMA3 方向 "up"|"down"|"flat" (t vs t-1)
 
 
 def _f(v) -> float:
