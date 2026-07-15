@@ -55,6 +55,8 @@ _EXPORT_FIELDS = [
     "wave33_direction", "wave33_streak", "wave33_label",
     "wave33_sma3", "wave33_sma3_dir",
     "kd80_count", "kd80_sma3", "kd80_sma3_dir",
+    "ind_l1_kd80_count", "ind_l1_kd80_sma3", "ind_l1_kd80_sma3_dir", "ind_l1_kd80_streak",
+    "ind_l2_kd80_count", "ind_l2_kd80_sma3", "ind_l2_kd80_sma3_dir", "ind_l2_kd80_streak",
 ]
 
 

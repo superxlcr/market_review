@@ -501,3 +501,148 @@ def compute_sma3_series(counts: list[int]) -> list[float]:
         else:
             result.append(float(counts[i]))
     return result
+
+
+def scan_ind_kd80(
+    dates: list[str],
+    dp,
+    progress_cb=None,
+) -> dict[str, dict]:
+    """
+    Scan all A-shares for industry-level KD80 (L1 + L2) on each date.
+
+    Same condition as market KD80 (K>80 for 3 consecutive days), but
+    grouped by industry classification instead of aggregated globally.
+
+    Returns:
+        {date: {count: int, l1: {name: count}, l2: {name: count}}, ...}
+    """
+    dates_to_scan = [d for d in dates if not dp.cache.has_ind_kd80_date(d)]
+    if not dates_to_scan:
+        return {}
+
+    latest_date = dates_to_scan[0]
+    earliest_date = dates_to_scan[-1]
+
+    latest_dt = datetime.strptime(latest_date, "%Y%m%d")
+    earliest_dt = datetime.strptime(earliest_date, "%Y%m%d")
+    full_start_dt = earliest_dt - timedelta(days=90)
+    full_lookback = (latest_dt - full_start_dt).days
+
+    log.info("scan_ind_kd80: %d dates to scan, lookback=%d days",
+             len(dates_to_scan), full_lookback)
+
+    results: dict[str, dict] = {}
+    total_dates = len(dates_to_scan)
+
+    stocks = dp.get_stock_list(latest_date)
+    if not stocks:
+        log.warning("scan_ind_kd80: no qualifying stocks")
+        return {}
+
+    total_stocks = len(stocks)
+
+    # Phase 1 — Load K-line + KD; batch-fetch industry classification
+    all_codes = [s["ts_code"] for s in stocks]
+    ind_map = dp.cache.get_stock_industries(all_codes)  # {code: {l1_name, l2_name, ...}}
+
+    stock_info: dict[str, tuple] = {}
+
+    for si, stock in enumerate(stocks):
+        code = stock["ts_code"]
+        if progress_cb and si > 0 and si % 50 == 0:
+            progress_cb("ind_kd80_load", si, total_stocks, str(total_dates))
+
+        ind = ind_map.get(code, {})
+        l1 = ind.get("l1_name", "")
+        l2 = ind.get("l2_name", "")
+        if not l1 and not l2:
+            continue  # skip unclassified stocks
+
+        rows = dp.get_daily(code, end_date=latest_date,
+                            lookback_days=full_lookback)
+        if len(rows) < 25:
+            continue
+        df = rows_to_df(rows)
+        if len(df) < 21:
+            continue
+        df = DataProvider.raw_to_qfq(df)
+        kd = calc_kd_standard(df)
+        stock_info[code] = (df, np.array(kd["K"]), l1, l2)
+
+    loaded = len(stock_info)
+    log.info("scan_ind_kd80 Phase 1 done: %d/%d stocks", loaded, total_stocks)
+    if progress_cb:
+        progress_cb("ind_kd80_scan", loaded, total_stocks, str(total_dates))
+
+    # Phase 2 — Per-date aggregation by industry
+    for di, trade_date in enumerate(dates_to_scan):
+        l1_counts: dict[str, int] = {}
+        l2_counts: dict[str, int] = {}
+
+        for code, (df, k_arr, l1, l2) in stock_info.items():
+            date_mask = df["date"] <= trade_date
+            n_rows = date_mask.sum()
+            if n_rows < 3:
+                continue
+            end_idx = n_rows - 1
+
+            k0 = k_arr[end_idx]
+            k1 = k_arr[end_idx - 1]
+            k2 = k_arr[end_idx - 2]
+            if np.isnan(k0) or np.isnan(k1) or np.isnan(k2):
+                continue
+            if k0 > 80 and k1 > 80 and k2 > 80:
+                if l1:
+                    l1_counts[l1] = l1_counts.get(l1, 0) + 1
+                if l2:
+                    l2_counts[l2] = l2_counts.get(l2, 0) + 1
+
+        # Write to cache
+        for l1_name, cnt in l1_counts.items():
+            dp.cache.upsert_ind_kd80(trade_date, "L1", l1_name, cnt)
+        for l2_name, cnt in l2_counts.items():
+            dp.cache.upsert_ind_kd80(trade_date, "L2", l2_name, cnt)
+
+        results[trade_date] = {
+            "count": sum(l1_counts.values()),
+            "l1": dict(l1_counts),
+            "l2": dict(l2_counts),
+        }
+
+        if progress_cb:
+            progress_cb("ind_kd80_date", di + 1, total_dates, trade_date)
+
+    return results
+
+
+def sma3_streak(counts: list[int]) -> dict:
+    """
+    Compute SMA3 direction + consecutive streak from count series.
+
+    Args:
+        counts: most-recent-first, needs ≥6 entries for reliable streak.
+
+    Returns:
+        {sma3, direction, streak}
+        streak = consecutive days in current SMA3 direction (≥1).
+    """
+    info = sma3_direction(counts)
+    direction = info["direction"]
+    sma3_val = info["sma3"]
+
+    if direction == "flat" or len(counts) < 5:
+        return {"sma3": sma3_val, "direction": direction, "streak": 1 if direction != "flat" else 0}
+
+    # Walk back to count consecutive days in same direction
+    streak = 1
+    for offset in range(1, len(counts) - 3):
+        # Compute SMA3 direction at offset days back
+        window = counts[offset:offset + 4]
+        prev_info = sma3_direction(window)
+        if prev_info["direction"] == direction:
+            streak += 1
+        else:
+            break
+
+    return {"sma3": sma3_val, "direction": direction, "streak": streak}

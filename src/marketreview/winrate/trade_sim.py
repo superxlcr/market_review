@@ -58,6 +58,16 @@ class TradeResult:
     kd80_count: int = 0          # signal_date 当天 KD80 raw count
     kd80_sma3: float = 0.0       # KD80 SMA(3) 平滑值
     kd80_sma3_dir: str = ""      # SMA3 方向 "up"|"down"|"flat" (t vs t-1)
+    # 行业 KD80 — L1
+    ind_l1_kd80_count: int = 0
+    ind_l1_kd80_sma3: float = 0.0
+    ind_l1_kd80_sma3_dir: str = ""
+    ind_l1_kd80_streak: int = 0
+    # 行业 KD80 — L2
+    ind_l2_kd80_count: int = 0
+    ind_l2_kd80_sma3: float = 0.0
+    ind_l2_kd80_sma3_dir: str = ""
+    ind_l2_kd80_streak: int = 0
 
 
 def _f(v) -> float:

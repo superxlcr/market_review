@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS kd80_cache (
     updated_at   TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS ind_kd80_cache (
+    trade_date    TEXT NOT NULL,
+    industry_type TEXT NOT NULL,   -- 'L1' | 'L2'
+    industry_name TEXT NOT NULL,
+    count         INTEGER NOT NULL,
+    updated_at    TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (trade_date, industry_type, industry_name)
+);
+
 CREATE TABLE IF NOT EXISTS index_contribution_cache (
     index_code   TEXT NOT NULL,
     trade_date   TEXT NOT NULL,

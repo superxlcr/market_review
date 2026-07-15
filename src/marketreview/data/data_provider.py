@@ -1621,6 +1621,24 @@ class DataProvider:
             "error": None,
         }
 
+    def check_ind_kd80_coverage(self, start: str, end: str) -> dict:
+        """检查 [start,end] 每个交易日是否都有行业 KD80 数据。"""
+        start = start.replace("-", "")
+        end = end.replace("-", "")
+        trade_dates = self.cache.get_daily_dates_in_range(start, end)
+        if not trade_dates:
+            return {"ready": False, "total_dates": 0, "missing_dates": [],
+                    "error": f"[{start},{end}] 无 K线交易日"}
+        missing = [d for d in trade_dates if not self.cache.has_ind_kd80_date(d)]
+        log.info("check_ind_kd80_coverage [%s~%s]: total_dates=%d missing=%d",
+                 start, end, len(trade_dates), len(missing))
+        return {
+            "ready": len(missing) == 0,
+            "total_dates": len(trade_dates),
+            "missing_dates": missing[:50],
+            "error": None,
+        }
+
 
 # ═══════════════════════════════════════════════════════════════
 #  Module-private helpers

@@ -18,4 +18,4 @@ from .technical import (
     detect_rsi_divergence,
     calc_wr,
 )
-from .wave33 import scan_wave33, compute_trend, compute_trend_series, scan_kd80, sma3_direction
+from .wave33 import scan_wave33, compute_trend, compute_trend_series, scan_kd80, sma3_direction, scan_ind_kd80, sma3_streak

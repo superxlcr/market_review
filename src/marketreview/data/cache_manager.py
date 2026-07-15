@@ -47,6 +47,9 @@ class CacheManager:
         "kd80_cache": {
             "trade_date", "count", "updated_at",
         },
+        "ind_kd80_cache": {
+            "trade_date", "industry_type", "industry_name", "count", "updated_at",
+        },
         "index_contribution_cache": {
             "index_code", "trade_date", "top_n",
             "weight_type", "data", "created_at",
@@ -611,6 +614,47 @@ class CacheManager:
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT 1 FROM kd80_cache WHERE trade_date = ?",
+                [trade_date],
+            ).fetchone()
+        return row is not None
+
+    # ------- ind_kd80_cache -------
+
+    def upsert_ind_kd80(self, trade_date: str, industry_type: str,
+                        industry_name: str, count: int):
+        """Insert or replace one industry KD80 daily result."""
+        sql = """
+            INSERT OR REPLACE INTO ind_kd80_cache
+                (trade_date, industry_type, industry_name, count, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+        """
+        with self._get_conn() as conn:
+            conn.execute(sql, [trade_date, industry_type, industry_name, count])
+            conn.commit()
+
+    def get_ind_kd80_range(self, industry_type: str, industry_name: str,
+                           limit: int = 15, end_date: str | None = None) -> list[dict]:
+        """Return last N rows for a specific industry (trade_date DESC, <= end_date)."""
+        from datetime import datetime
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y%m%d")
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT trade_date, count
+                   FROM ind_kd80_cache
+                   WHERE industry_type = ? AND industry_name = ?
+                     AND trade_date <= ?
+                   ORDER BY trade_date DESC
+                   LIMIT ?""",
+                [industry_type, industry_name, end_date, limit],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def has_ind_kd80_date(self, trade_date: str) -> bool:
+        """Return True if ind_kd80_cache has at least one row for this date."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM ind_kd80_cache WHERE trade_date = ?",
                 [trade_date],
             ).fetchone()
         return row is not None

@@ -147,6 +147,17 @@ def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2, cache=None):
     tr.kd80_count = kd["count"]
     tr.kd80_sma3 = kd["sma3"]
     tr.kd80_sma3_dir = kd["sma3_dir"]
+    # 行业 KD80 (L1 + L2)
+    ind_l1 = _ind_kd80_state(cache, tr.signal_date, "L1", tr.industry_l1)
+    tr.ind_l1_kd80_count = ind_l1["count"]
+    tr.ind_l1_kd80_sma3 = ind_l1["sma3"]
+    tr.ind_l1_kd80_sma3_dir = ind_l1["direction"]
+    tr.ind_l1_kd80_streak = ind_l1["streak"]
+    ind_l2 = _ind_kd80_state(cache, tr.signal_date, "L2", tr.industry_l2)
+    tr.ind_l2_kd80_count = ind_l2["count"]
+    tr.ind_l2_kd80_sma3 = ind_l2["sma3"]
+    tr.ind_l2_kd80_sma3_dir = ind_l2["direction"]
+    tr.ind_l2_kd80_streak = ind_l2["streak"]
 
 
 def _wave33_state(cache, signal_date: str) -> dict:
@@ -187,6 +198,28 @@ def _kd80_state(cache, signal_date: str) -> dict:
         "count": counts[0],
         "sma3": sma3_info["sma3"],
         "sma3_dir": sma3_info["direction"],
+    }
+
+
+def _ind_kd80_state(cache, signal_date: str, industry_type: str,
+                    industry_name: str) -> dict:
+    """取某行业在 signal_date 的 KD80 状态（count/sma3/方向/持续天数）。
+    行业名为空时返回空状态。"""
+    from marketreview.tools.wave33 import sma3_streak
+    if cache is None or not industry_name:
+        return {"count": 0, "sma3": 0.0, "direction": "", "streak": 0}
+    rows = cache.get_ind_kd80_range(industry_type, industry_name,
+                                    limit=15, end_date=signal_date)  # DESC
+    if len(rows) < 4:
+        c = rows[0]["count"] if rows else 0
+        return {"count": c, "sma3": 0.0, "direction": "", "streak": 0}
+    counts = [r["count"] for r in rows]
+    info = sma3_streak(counts)
+    return {
+        "count": counts[0],
+        "sma3": info["sma3"],
+        "direction": info["direction"],
+        "streak": info["streak"],
     }
 
 
