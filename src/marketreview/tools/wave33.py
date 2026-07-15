@@ -598,11 +598,15 @@ def scan_ind_kd80(
                 if l2:
                     l2_counts[l2] = l2_counts.get(l2, 0) + 1
 
-        # Write to cache
-        for l1_name, cnt in l1_counts.items():
-            dp.cache.upsert_ind_kd80(trade_date, "L1", l1_name, cnt)
-        for l2_name, cnt in l2_counts.items():
-            dp.cache.upsert_ind_kd80(trade_date, "L2", l2_name, cnt)
+        # Write to cache (always write at least a sentinel so coverage
+        # check passes even on dates where zero industries had KD80).
+        if not l1_counts and not l2_counts:
+            dp.cache.upsert_ind_kd80(trade_date, "__sentinel__", "__sentinel__", 0)
+        else:
+            for l1_name, cnt in l1_counts.items():
+                dp.cache.upsert_ind_kd80(trade_date, "L1", l1_name, cnt)
+            for l2_name, cnt in l2_counts.items():
+                dp.cache.upsert_ind_kd80(trade_date, "L2", l2_name, cnt)
 
         results[trade_date] = {
             "count": sum(l1_counts.values()),
