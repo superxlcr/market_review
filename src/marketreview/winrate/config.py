@@ -7,7 +7,7 @@ from pathlib import Path
 #   live=启用（个股页+胜率）  trial=实验中（仅胜率）  disabled=停用（不出现）
 # 实盘侧（tools/buy_points.py 的 find_all_buy_points）另有一份 checker.STAGE，需与此保持一致。
 BUY_POINT_STAGE = {
-    "回调一半": "disabled",         # → 被严格版替代
+    "回调一半": "trial",            # 普通版（非严格），与严格版一起 trial 对比
     "回调一半严格": "live",           # 严格条件，5%过滤不成立（被砍信号胜率更高31%→保留）
     "回调一半严格5%": "trial",        # 分析结论：5%过滤砍掉的反而是高弹性反弹（胜率31.3% vs 25.5%）
     "波段50%": "live",
