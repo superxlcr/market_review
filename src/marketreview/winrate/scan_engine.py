@@ -28,6 +28,12 @@ def prepare_klines(rows_desc: list[dict], asset_class: str = "stock") -> list[di
     if asset_class == "stock":
         df = DataProvider.raw_to_qfq(df)   # 个股需前复权
     # index: 不 qfq（adj_factor=1.0，指数本身连续；调了是 no-op 但语义误导）
+    # 指数 tushare API 只返回 close，open/high/low 为 NULL → 用 close 填充，
+    # 保证波段分析/买点检测有完整的 OHLC 数据可用
+    if asset_class == "index":
+        for col in ("open", "high", "low"):
+            if col in df.columns:
+                df[col] = df[col].fillna(df["close"])
     mas = calc_ma(df, _MA_PERIODS)
     out: list[dict] = []
     for i, (_, r) in enumerate(df.iterrows()):

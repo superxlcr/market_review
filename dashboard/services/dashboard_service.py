@@ -1867,7 +1867,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "9.16.0"
+    _AI_VERSION = "9.17.0"
 
     def run_winrate_scan(self, cfg, progress_cb=None, timing_sink=None):
         """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。
@@ -1899,49 +1899,161 @@ class DashboardService:
                  start, end, kline.get("ready"), ready)
         return {"ready": ready, "kline": kline}
 
+    # ── ETF/行业指数 黑名单 ──
+
+    _ETF_BLACKLIST: set[str] | None = None  # lazy loaded
+
+    @classmethod
+    def load_etf_blacklist(cls) -> set[str]:
+        """加载 ETF 指数黑名单（tushare 不支持 / 已停更 / 特殊指数）。
+        文件：config/etf_blacklist.txt，格式：# 注释 + ts_code。
+        结果缓存到类变量，首次调用后不再读文件。"""
+        if cls._ETF_BLACKLIST is not None:
+            return cls._ETF_BLACKLIST
+        blacklist: set[str] = set()
+        path = "config/etf_blacklist.txt"
+        if not os.path.exists(path):
+            log.warning("etf_blacklist.txt not found at %s", path)
+            cls._ETF_BLACKLIST = blacklist
+            return blacklist
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                code = line.split("#")[0].strip()
+                if code:
+                    blacklist.add(code)
+        log.info("etf_blacklist loaded: %d codes", len(blacklist))
+        cls._ETF_BLACKLIST = blacklist
+        return blacklist
+
+    @staticmethod
+    def _export_filtered_list(filepath: str, codes: list[str], reason: str):
+        """导出被过滤的指数列表到文件，带分类说明。批量 review 后可合并进黑名单。"""
+        if not codes:
+            return
+        import os as _os
+        if _os.path.exists(filepath):
+            return  # 已存在则不覆盖，避免覆盖用户手工编辑
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# {reason}\n")
+            f.write(f"# 共 {len(codes)} 个，review 后可合并到 config/etf_blacklist.txt\n")
+            f.write(f"# 格式：CODE.CSI  # 分类 / 原因\n")
+            f.write("\n")
+            for code in sorted(codes):
+                f.write(f"{code}\n")
+        log.info("Exported %d filtered codes → %s", len(codes), filepath)
+
     # ── ETF/行业指数 买点胜率 ──
 
     def prepare_winrate_data_etf(self, start: str, end: str,
                                   index_pool: list[str], progress_cb=None) -> dict:
         """ETF 数据准备：① ensure_csi_pool（标的池缓存）② ensure_index_pool_loaded（K线）。
-        index_pool: UI 选中的指数 ts_code 列表。"""
-        log.info("[AI v%s] prepare_winrate_data_etf(%s~%s, %d indices)",
-                 self._AI_VERSION, start, end, len(index_pool))
+        index_pool: UI 选中的指数 ts_code 列表。黑名单指数自动跳过。
+        返回 {"status": "ok", "fetched": N, "failed": [...], "blacklisted": N}。"""
+        blacklist = self.load_etf_blacklist()
+        clean_pool = [c for c in index_pool if c not in blacklist]
+        n_skipped = len(index_pool) - len(clean_pool)
+        if n_skipped:
+            log.info("prepare_winrate_data_etf: %d blacklisted indices skipped", n_skipped)
+        log.info("[AI v%s] prepare_winrate_data_etf(%s~%s, %d indices, %d after blacklist)",
+                 self._AI_VERSION, start, end, len(index_pool), len(clean_pool))
         # 阶段1: 标的池缓存（幂等）
         self._dp.ensure_csi_pool(progress_cb=progress_cb)
         # 阶段2: 选中指数的 K 线
         end_clean = end if end not in ("", "now") else \
             (self._dp.cache.get_latest_date("000001.SZ") or start).replace("-", "")
         start_clean = start.replace("-", "")
-        self._dp.ensure_index_pool_loaded(index_pool, start_clean, end_clean,
-                                          progress_cb=progress_cb)
-        return {"status": "ok"}
+        fetched, failed = self._dp.ensure_index_pool_loaded(
+            clean_pool, start_clean, end_clean, progress_cb=progress_cb)
+        if failed:
+            log.warning("prepare_winrate_data_etf: %d indices failed: %s",
+                        len(failed), failed[:20])
+        return {"status": "ok", "fetched": fetched, "failed": failed,
+                "blacklisted": n_skipped}
+
+    # 新指数最少需要 ~1 年数据才纳入回测
+    _MIN_ETF_ROWS = 250
 
     def check_winrate_coverage_etf(self, start: str, end: str,
-                                    index_pool: list[str]) -> dict:
-        """返回 ETF 数据就绪状态（选中指数 K线门禁）。"""
-        start_clean = start.replace("-", "")
+                                    index_pool: list[str],
+                                    scan_start: str = "",
+                                    stale_days: int = 3) -> dict:
+        """返回 ETF 数据就绪状态（选中指数 K线门禁）。
+
+        校验规则（按优先级）：
+        1. 黑名单 → 跳过
+        2. 无数据 → unavailable
+        3. 全部 open=NULL → no_ohlc（无OHLC数据，无法波段分析）
+        4. latest < end_bound（容差 stale_days 天）→ missing（数据过期）
+        5. latest OK + earliest <= scan_start → ready（完整覆盖）
+        6. latest OK + earliest > scan_start + rows >= 250 → ready（新指数，部分覆盖）
+        7. latest OK + earliest > scan_start + rows < 250 → missing（历史数据不足）
+        """
+        from datetime import datetime as _dt, timedelta as _td
+        blacklist = self.load_etf_blacklist()
         end_clean = end if end not in ("", "now") else \
             (self._dp.cache.get_latest_date("000001.SZ") or start).replace("-", "")
-        # 每个选中指数都要覆盖 [start, end]
+        end_bound = (_dt.strptime(end_clean, "%Y%m%d") -
+                     _td(days=stale_days)).strftime("%Y%m%d")
+        scan_bound = scan_start.replace("-", "") if scan_start else \
+                     start.replace("-", "")
         missing = []
+        unavailable = []
+        no_ohlc = []       # 有 close 但 100% 无 OHLC，波段分析不可用
+        late_starters = []  # 新指数，部分覆盖扫描窗口
         ready_count = 0
+        n_blacklisted = 0
         for code in index_pool:
-            latest = self._dp.cache.get_latest_date(code)
-            earliest = self._dp.cache.get_earliest_date(code)
-            if latest and earliest:
-                if latest.replace("-", "") >= end_clean and \
-                   earliest.replace("-", "") <= start_clean:
-                    ready_count += 1
-                    continue
-            missing.append(code)
-        ready = len(missing) == 0 and len(index_pool) > 0
-        log.info("check_winrate_coverage_etf(%s~%s): %d/%d ready, missing=%d",
-                 start, end, ready_count, len(index_pool), len(missing))
+            if code in blacklist:
+                n_blacklisted += 1
+                continue
+            earliest, latest, rows, null_open = self._dp.cache.get_code_coverage(code)
+            if not latest:
+                unavailable.append(code)
+                continue
+            # 全部 open=NULL → 无 OHLC，无法波段分析/买点检测
+            if null_open == rows:
+                no_ohlc.append(code)
+                continue
+            if latest.replace("-", "") < end_bound:
+                missing.append(code)
+                continue
+            # latest OK — 检查数据是否够覆盖扫描窗口
+            if earliest and earliest.replace("-", "") <= scan_bound:
+                ready_count += 1  # 完整覆盖
+            elif rows >= self._MIN_ETF_ROWS:
+                ready_count += 1  # 新指数，部分覆盖但数据够
+                late_starters.append(code)
+            else:
+                missing.append(code)  # 数据太少，不可靠
+        scannable = len(index_pool) - len(unavailable) - len(no_ohlc) - n_blacklisted
+        ready = len(missing) == 0 and scannable > 0
+        # 导出不可用/无OHLC列表到 config/，方便 review 后合并进黑名单
+        self._export_filtered_list("config/etf_unavailable.txt", unavailable,
+                                   "tushare index_daily 无返回（API 不支持或已下架）")
+        self._export_filtered_list("config/etf_no_ohlc.txt", no_ohlc,
+                                   "仅返回 close，无 open/high/low（无法波段分析）")
+        log.info("check_winrate_coverage_etf(end_bound=%s, scan=%s): "
+                 "%d/%d ready, missing=%d, unavailable=%d, blacklisted=%d, "
+                 "no_ohlc=%d, late=%d",
+                 end_bound, scan_bound, ready_count, scannable,
+                 len(missing), len(unavailable), n_blacklisted, len(no_ohlc),
+                 len(late_starters))
         return {"ready": ready,
-                "kline": {"ready": ready, "total": len(index_pool),
+                "kline": {"ready": ready, "total": scannable,
                           "ready_count": ready_count,
-                          "missing_dates": missing[:20]}}
+                          "missing_count": len(missing),
+                          "missing_samples": missing[:20],
+                          "missing_dates": missing[:20],
+                          "unavailable_count": len(unavailable),
+                          "unavailable_samples": unavailable[:10],
+                          "blacklisted_count": n_blacklisted,
+                          "no_ohlc_count": len(no_ohlc),
+                          "no_ohlc_samples": no_ohlc[:10],
+                          "no_ohlc_codes": no_ohlc,  # 完整列表，供扫描前过滤
+                          "late_starter_count": len(late_starters)}}
 
     def run_winrate_scan_etf(self, cfg, progress_cb=None, timing_sink=None):
         """ETF 买点胜率扫描（复用 run_scan，cfg.asset_class 已是 index）。"""

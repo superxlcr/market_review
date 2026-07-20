@@ -14,11 +14,11 @@ from services.dashboard_service import DashboardService
 from marketreview.winrate.config import parse_winrate_config, ETF_BUY_POINTS
 from marketreview.winrate.reporter import save_run
 
-st.set_page_config(page_title="ETF买点胜率", page_icon="📈", layout="wide")
+st.set_page_config(page_title="ETF胜率", page_icon="📈", layout="wide")
 st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
 svc = DashboardService()
-st.title("📈 ETF/行业指数 买点胜率回测")
+st.title("📈 ETF/行业指数 胜率回测")
 st.caption(f"中证行业/主题指数 · 单买点胜率 ｜ AI v{DashboardService._AI_VERSION}")
 
 base = parse_winrate_config("config/winrate_config_etf.txt", asset_class="index")
@@ -100,10 +100,41 @@ elif not _range_match:
 elif _kline.get("error"):
     st.error(f"❌ 校验失败：{_kline.get('error')}，请重试「数据准备」。")
 elif _data_ready:
-    st.success(f"✅ 数据就绪：{len(cfg.index_pool)} 个指数 K线覆盖。")
+    bl = _kline.get("blacklisted_count", 0)
+    unavail = _kline.get("unavailable_count", 0)
+    no_ohlc = _kline.get("no_ohlc_count", 0)
+    late = _kline.get("late_starter_count", 0)
+    notes = []
+    if bl:
+        notes.append(f"{bl} 个黑名单跳过")
+    if unavail:
+        notes.append(f"{unavail} 个 tushare 无数据")
+    if no_ohlc:
+        notes.append(f"{no_ohlc} 个无OHLC（无法波段分析）")
+    if late:
+        notes.append(f"{late} 个新指数（上市晚，部分覆盖）")
+    extra = f"（{'，'.join(notes)}）" if notes else ""
+    st.success(f"✅ 数据就绪：{_kline.get('total', len(cfg.index_pool))} 个指数 K线覆盖。{extra}")
 else:
-    miss = _kline.get("missing_dates", [])
-    st.warning(f"⚠️ 数据未就绪：{len(miss)} 个指数 K线缺口。请重试「数据准备」补齐。")
+    miss_cnt = _kline.get("missing_count", len(_kline.get("missing_dates", [])))
+    bl = _kline.get("blacklisted_count", 0)
+    unavail = _kline.get("unavailable_count", 0)
+    no_ohlc = _kline.get("no_ohlc_count", 0)
+    late = _kline.get("late_starter_count", 0)
+    parts = [f"⚠️ 数据未就绪：{miss_cnt} 个指数 K线缺口"]
+    skip_parts = []
+    if bl:
+        skip_parts.append(f"{bl} 个黑名单跳过")
+    if unavail:
+        skip_parts.append(f"{unavail} 个 tushare 无数据")
+    if no_ohlc:
+        skip_parts.append(f"{no_ohlc} 个无OHLC（无法波段分析）")
+    if late:
+        skip_parts.append(f"{late} 个新指数（部分覆盖）")
+    if skip_parts:
+        parts.append(f"（{'，'.join(skip_parts)}）")
+    parts.append("。请重试「数据准备」补齐。")
+    st.warning("".join(parts))
 
 col_prep, _ = st.columns([1, 3])
 with col_prep:
@@ -128,7 +159,9 @@ with col_prep:
         except Exception as e:
             st.error(f"数据准备出错：{e}")
         else:
-            st.session_state.etf_cov_cache = svc.check_winrate_coverage_etf(prep_start, prep_end, cfg.index_pool)
+            st.session_state.etf_cov_cache = svc.check_winrate_coverage_etf(
+                prep_start, prep_end, cfg.index_pool,
+                scan_start=start_date.replace("-", ""))
             st.session_state.etf_cov_range = (prep_start, prep_end)
         prog.progress(1.0)
         status.empty()
@@ -141,47 +174,65 @@ if st.button("▶ 运行扫描", type="primary",
     prog = st.progress(0.0)
     status = st.empty()
 
-    def cb(done, total):
-        prog.progress(done / total)
-        status.text(f"已扫描 {done}/{total} 个指数")
+    # 过滤黑名单 + 无OHLC指数，避免空数据干扰扫描
+    from services.dashboard_service import DashboardService
+    blacklist = DashboardService.load_etf_blacklist()
+    no_ohlc_codes = set(_kline.get("no_ohlc_codes", []))
+    scan_pool = [c for c in cfg.index_pool if c not in blacklist and c not in no_ohlc_codes]
+    if not scan_pool:
+        st.error("选中的指数全部在黑名单中，无可扫描标的。")
+    else:
+        cfg_clean = replace(cfg, index_pool=scan_pool)
 
-    timing_sink = []
-    import time as _time
-    _t0 = _time.perf_counter()
-    with st.spinner("ETF 指数扫描中..."):
-        stats, trades = svc.run_winrate_scan_etf(cfg, progress_cb=cb, timing_sink=timing_sink)
-    _elapsed = _time.perf_counter() - _t0
-    scan_meta = {"elapsed": round(_elapsed, 1),
-                 "total_indices": len(cfg.index_pool),
-                 "max_workers": cfg.max_workers, "trades_n": len(trades)}
-    saved_dir = save_run(trades, cfg, scan_meta=scan_meta)
-    prog.progress(1.0)
-    status.empty()
-    st.session_state.etf_stats = stats
-    st.session_state.etf_saved_dir = saved_dir
+        def cb(done, total):
+            prog.progress(done / total)
+            status.text(f"已扫描 {done}/{total} 个指数")
+
+        timing_sink = []
+        import time as _time
+        _t0 = _time.perf_counter()
+        with st.spinner(f"ETF 指数扫描中（{len(scan_pool)} 个）..."):
+            stats, trades = svc.run_winrate_scan_etf(cfg_clean, progress_cb=cb, timing_sink=timing_sink)
+        _elapsed = _time.perf_counter() - _t0
+        scan_meta = {"elapsed": round(_elapsed, 1),
+                     "total_indices": len(scan_pool),
+                     "max_workers": cfg_clean.max_workers, "trades_n": len(trades)}
+        saved_dir = save_run(trades, cfg_clean, scan_meta=scan_meta,
+                             base_dir=".winrate_data_etf")
+        prog.progress(1.0)
+        status.empty()
+        st.session_state.etf_stats = stats
+        st.session_state.etf_saved_dir = saved_dir
 
 # ── 结果 ──
-if st.session_state.get("etf_stats"):
+if "etf_stats" in st.session_state:
     stats = st.session_state.etf_stats
     saved_dir = st.session_state.get("etf_saved_dir", "")
     if saved_dir:
-        st.success(f"✅ 明细已保存到 `{saved_dir}`（每买点一个 CSV + config_snapshot.txt）。")
-    st.subheader("📊 买点对比汇总")
-    st.dataframe([{
-        "买点": s.buy_point, "触发次数": s.n,
-        "胜率": f"{s.win_rate:.1%}",
-        "大胜利率": f"{(s.big_win_n / s.n if s.n else 0):.1%}",
-        "小胜利率": f"{(s.small_win_n / s.n if s.n else 0):.1%}",
-        "止损率": f"{(s.stop_n / s.n if s.n else 0):.1%}",
-        "亏损率": f"{(s.loss_n / s.n if s.n else 0):.1%}",
-        "平均持有天": f"{s.avg_hold_days:.1f}",
-        "期望收益": f"{s.expectancy_pct:+.2f}%",
-    } for s in stats.values()], use_container_width=True, hide_index=True)
+        if stats:
+            st.success(f"✅ ETF 明细已保存到 `{saved_dir}`（每买点一个 CSV + config_snapshot.txt）。")
+        else:
+            st.info(f"ℹ️ 扫描完成，但未触发任何买点。配置已保存到 `{saved_dir}`。")
+    if not stats:
+        st.warning("当前买点/参数组合在 %s~%s 期间无触发记录，尝试放宽 MA 筛选或调整买点。" %
+                   (start_date, cfg.end_date))
+    else:
+        st.subheader("📊 买点对比汇总")
+        st.dataframe([{
+            "买点": s.buy_point, "触发次数": s.n,
+            "胜率": f"{s.win_rate:.1%}",
+            "大胜利率": f"{(s.big_win_n / s.n if s.n else 0):.1%}",
+            "小胜利率": f"{(s.small_win_n / s.n if s.n else 0):.1%}",
+            "止损率": f"{(s.stop_n / s.n if s.n else 0):.1%}",
+            "亏损率": f"{(s.loss_n / s.n if s.n else 0):.1%}",
+            "平均持有天": f"{s.avg_hold_days:.1f}",
+            "期望收益": f"{s.expectancy_pct:+.2f}%",
+        } for s in stats.values()], use_container_width=True, hide_index=True)
 
-    for bp, s in stats.items():
-        st.markdown(f"### 🎯 {bp} — {s.n}次 胜率{s.win_rate:.1%}")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("大胜利", s.big_win_n)
-        m2.metric("小胜利", s.small_win_n)
-        m3.metric("盘中止损", s.stop_n)
-        m4.metric("亏损", s.loss_n)
+        for bp, s in stats.items():
+            st.markdown(f"### 🎯 {bp} — {s.n}次 胜率{s.win_rate:.1%}")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("大胜利", s.big_win_n)
+            m2.metric("小胜利", s.small_win_n)
+            m3.metric("盘中止损", s.stop_n)
+            m4.metric("亏损", s.loss_n)

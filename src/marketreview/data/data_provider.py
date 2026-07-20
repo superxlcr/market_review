@@ -1256,13 +1256,15 @@ class DataProvider:
         return len(rows)
 
     def ensure_index_pool_loaded(self, codes: list[str], start_date: str,
-                                  end_date: str, progress_cb=None) -> int:
+                                  end_date: str, progress_cb=None) -> tuple[int, list[str]]:
         """抓取选中指数的 K 线，存 tushare_cache（asset_type='index'）。
         逻辑仿 _ensure_indices_loaded：覆盖检查 + 增量抓取。
-        返回抓取的指数数（非 index-days）。"""
+        返回 (fetched_count, failed_codes)。"""
+        import time as _time
         start_date = start_date.replace("-", "")
         end_date = end_date.replace("-", "")
         fetched = 0
+        failed = []
         total = len(codes)
         for ii, idx_code in enumerate(codes):
             # 覆盖检查：latest>=end 且 earliest<=start → 跳过
@@ -1282,6 +1284,7 @@ class DataProvider:
                 )
             except Exception as e:
                 log.warning("index_daily(%s) failed: %s", idx_code, e)
+                failed.append(f"{idx_code}(exception)")
                 if progress_cb:
                     progress_cb("etf_index", ii + 1, total)
                 continue
@@ -1290,10 +1293,15 @@ class DataProvider:
                 if rows:
                     self.cache.upsert_daily_bulk(rows)
                 fetched += 1
+            else:
+                failed.append(f"{idx_code}(empty)")
             if progress_cb:
                 progress_cb("etf_index", ii + 1, total)
-        log.info("ensure_index_pool_loaded: fetched %d/%d indices", fetched, total)
-        return fetched
+            _time.sleep(0.3)  # 减轻 tushare 限流
+        log.info("ensure_index_pool_loaded: fetched %d/%d indices, failed=%d%s",
+                 fetched, total, len(failed),
+                 f": {failed[:10]}" if failed else "")
+        return fetched, failed
 
     def _get_display_industry_codes(self) -> list[str]:
         """
@@ -1841,6 +1849,10 @@ def _normalize_index_batch(df) -> list[dict]:
     df["date"] = df["date"].astype(str)
     df["adj_factor"] = 1.0
     df["asset_type"] = "index"
+    # tushare index_daily 多数只返回 close，open/high/low 为 NaN → 用 close 填充
+    for col in ("open", "high", "low"):
+        if col in df.columns:
+            df[col] = df[col].fillna(df["close"])
     keep = ["code", "date", "open", "high", "low", "close",
             "vol", "amount", "adj_factor", "asset_type"]
     return df[[c for c in keep if c in df.columns]].to_dict(orient="records")

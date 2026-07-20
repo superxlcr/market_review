@@ -13,3 +13,4 @@ config/watchlist_stocks.txt
 config/buy_point_config.txt
 .temp/
 .winrate_data/
+.winrate_data_etf/

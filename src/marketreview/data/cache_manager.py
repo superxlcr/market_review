@@ -188,6 +188,21 @@ class CacheManager:
             ).fetchone()
         return row["d"] if row and row["d"] else None
 
+    def get_code_coverage(self, code: str) -> tuple[str | None, str | None, int, int]:
+        """Return (earliest, latest, row_count, null_open_count) for a code in one query.
+        null_open_count: rows where open IS NULL — used to detect indices without OHLC data."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT MIN(date) as earliest, MAX(date) as latest, "
+                "COUNT(*) as cnt, "
+                "SUM(CASE WHEN open IS NULL THEN 1 ELSE 0 END) as null_open "
+                "FROM tushare_cache WHERE code = ?",
+                [code]
+            ).fetchone()
+        if row and row["cnt"]:
+            return row["earliest"], row["latest"], row["cnt"], row["null_open"] or 0
+        return None, None, 0, 0
+
     def code_has_data(self, code: str) -> bool:
         with self._get_conn() as conn:
             row = conn.execute(

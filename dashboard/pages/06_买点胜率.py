@@ -171,7 +171,8 @@ if st.button("▶ 运行扫描", type="primary",
     total_stocks = len([t for t in timing_sink if t.get("code") != "__TOTAL__"])
     scan_meta = {"elapsed": round(_elapsed, 1), "total_stocks": total_stocks,
                  "max_workers": cfg.max_workers, "trades_n": len(trades)}
-    saved_dir = save_run(trades, cfg, scan_meta=scan_meta)
+    saved_dir = save_run(trades, cfg, scan_meta=scan_meta,
+                         base_dir=".winrate_data")
     # 写 scan_timing.csv：每只标的 code/name/elapsed/thread/完成时间戳/笔数
     if timing_sink:
         import csv as _csv

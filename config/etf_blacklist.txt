@@ -1,0 +1,330 @@
+# ETF 胜率回测 — 指数黑名单
+# tushare index_daily API 不支持这些指数，拉取永远返回空，列入黑名单避免无效重试。
+# 格式：ts_code  # 名称 / 分类 / 原因
+#
+# ============================================================
+# 一、SAC 申万行业定制指数（12 个）
+# 申万宏源自定义行业分类，指数代码 H 系列，tushare 无覆盖。
+# ============================================================
+H11032.CSI  # SAC食品 / 申万行业 / tushare 不支持
+H11033.CSI  # SAC纺织 / 申万行业 / tushare 不支持
+H11034.CSI  # SAC木材 / 申万行业 / tushare 不支持
+H11035.CSI  # SAC造纸 / 申万行业 / tushare 不支持
+H11036.CSI  # SAC石化 / 申万行业 / tushare 不支持
+H11037.CSI  # SAC电子 / 申万行业 / tushare 不支持
+H11038.CSI  # SAC有色 / 申万行业 / tushare 不支持
+H11039.CSI  # SAC机械 / 申万行业 / tushare 不支持
+H11040.CSI  # SAC医药 / 申万行业 / tushare 不支持
+H11048.CSI  # SAC电力 / 申万行业 / tushare 不支持
+H30181.CSI  # 综合金融 / 申万行业 / tushare 不支持
+
+# ============================================================
+# 二、GTJA 国泰君安国际定制指数（2 个）
+# ============================================================
+H20912.CSI  # GTJA Intl中国影子RI / 国泰君安国际 / tushare 不支持
+H20913.CSI  # GTJA Intl中国影子HRI / 国泰君安国际 / tushare 不支持
+
+# ============================================================
+# 三、鑫拓（Xintuo）定制指数（6 个）→ CU 前缀
+# ============================================================
+CU0008.CSI  # 鑫拓300能源 / 定制指数 / tushare 不支持
+CU0009.CSI  # 鑫拓300原材料 / 定制指数 / tushare 不支持
+CU0010.CSI  # 鑫拓300金融地产 / 定制指数 / tushare 不支持
+CU0011.CSI  # 鑫拓300消费 / 定制指数 / tushare 不支持
+CU0012.CSI  # 鑫拓300精选消费 / 定制指数 / tushare 不支持
+CU0013.CSI  # 鑫拓300主要消费 / 定制指数 / tushare 不支持
+
+# ============================================================
+# 四、中证定制/停更/特殊指数（19 个）
+# 中证公司发行的主题/策略指数，tushare index_daily 无数据或已停更。
+# ============================================================
+000817.CSI  # 证金持股 / 中证 / tushare 无数据
+000976.CSI  # 新华金牛 / 中证 / tushare 无数据
+930623.CSI  # CS休闲 / 中证定制 / tushare 无数据
+930624.CSI  # CS医药 / 中证定制 / tushare 无数据
+930699.CSI  # 港股通红利 / 中证定制 / tushare 无数据
+930705.CSI  # 港股通成长 / 中证定制 / tushare 无数据
+930730.CSI  # 港股通高息 / 中证定制 / tushare 无数据
+930739.CSI  # 港股100 / 中证定制 / tushare 无数据
+930759.CSI  # 雪球100 / 中证定制 / tushare 无数据
+930760.CSI  # 雪球精选 / 中证定制 / tushare 无数据
+930762.CSI  # 雪球优选 / 中证定制 / tushare 无数据
+930763.CSI  # CS长三角 / 中证定制 / tushare 无数据
+930764.CSI  # 港股通中国红利 / 中证定制 / tushare 无数据
+930769.CSI  # 财富100 / 中证定制 / tushare 无数据
+930770.CSI  # 财富188 / 中证定制 / tushare 无数据
+930778.CSI  # CS高端制 / 中证定制 / tushare 无数据
+930779.CSI  # 港股通精选 / 中证定制 / tushare 无数据
+931126.CSI  # 港股通红利(欧元) / 中证定制 / tushare 无数据
+931176.CSI  # 台州综指 / 中证 / tushare 无数据
+931179.CSI  # 台州制造30 / 中证 / tushare 无数据
+
+# ============================================================
+# 五、已停更/退市指数（15 个）
+# 中证指数已停止维护或合并，tushare 数据停在历史日期不再更新。
+# ============================================================
+000983.CSI  # 保险资产 / 停更 / latest=20220829
+930663.CSI  # 证保投资 / 停更 / latest=20240614
+930744.CSI  # 证保增利 / 停更 / latest=20211201
+930745.CSI  # CSWD数据 / 停更 / latest=20251212
+930822.CSI  # CS院系 / 停更 / latest=20250619
+930835.CSI  # 军工专精 / 停更 / latest=20240614
+930904.CSI  # 证保PPP / 停更 / latest=20250529
+930983.CSI  # MG200 / 停更 / latest=20240920
+930984.CSI  # MG新经济 / 停更 / latest=20240920
+931011.CSI  # 医药健康 / 停更 / latest=20240614
+931065.CSI  # 港股通30 / 停更 / latest=20240614
+931086.CSI  # MG新经济AUD / 停更 / latest=20240920
+931478.CSI  # 沪深绿色 / 停更 / latest=20251017
+931513.CSI  # 沪深科技 / 停更 / latest=20260508
+931598.CSI  # 沪深300ESG / 停更 / latest=20260508
+# ============================================================
+# 六、仅返回close，无OHLC数据（245 个）
+# tushare index_daily 对这些中证指数只返回 close，open/high/low 均为 NULL，
+# 无法进行波段分析/买点检测。导出自 check_winrate_coverage_etf() 自动扫描。
+# ============================================================
+930607.CSI  # 无OHLC / tushare仅返回close
+930611.CSI  # 无OHLC / tushare仅返回close
+930612.CSI  # 无OHLC / tushare仅返回close
+930616.CSI  # 无OHLC / tushare仅返回close
+930617.CSI  # 无OHLC / tushare仅返回close
+930618.CSI  # 无OHLC / tushare仅返回close
+930619.CSI  # 无OHLC / tushare仅返回close
+930634.CSI  # 无OHLC / tushare仅返回close
+930635.CSI  # 无OHLC / tushare仅返回close
+930642.CSI  # 无OHLC / tushare仅返回close
+930643.CSI  # 无OHLC / tushare仅返回close
+930649.CSI  # 无OHLC / tushare仅返回close
+930650.CSI  # 无OHLC / tushare仅返回close
+930654.CSI  # 无OHLC / tushare仅返回close
+930698.CSI  # 无OHLC / tushare仅返回close
+930700.CSI  # 无OHLC / tushare仅返回close
+930702.CSI  # 无OHLC / tushare仅返回close
+930704.CSI  # 无OHLC / tushare仅返回close
+930706.CSI  # 无OHLC / tushare仅返回close
+930711.CSI  # 无OHLC / tushare仅返回close
+930718.CSI  # 无OHLC / tushare仅返回close
+930722.CSI  # 无OHLC / tushare仅返回close
+930727.CSI  # 无OHLC / tushare仅返回close
+930728.CSI  # 无OHLC / tushare仅返回close
+930732.CSI  # 无OHLC / tushare仅返回close
+930733.CSI  # 无OHLC / tushare仅返回close
+930741.CSI  # 无OHLC / tushare仅返回close
+930742.CSI  # 无OHLC / tushare仅返回close
+930771.CSI  # 无OHLC / tushare仅返回close
+930783.CSI  # 无OHLC / tushare仅返回close
+930845.CSI  # 无OHLC / tushare仅返回close
+930853.CSI  # 无OHLC / tushare仅返回close
+930854.CSI  # 无OHLC / tushare仅返回close
+930883.CSI  # 无OHLC / tushare仅返回close
+930911.CSI  # 无OHLC / tushare仅返回close
+930923.CSI  # 无OHLC / tushare仅返回close
+930956.CSI  # 无OHLC / tushare仅返回close
+930981.CSI  # 无OHLC / tushare仅返回close
+931004.CSI  # 无OHLC / tushare仅返回close
+931005.CSI  # 无OHLC / tushare仅返回close
+931006.CSI  # 无OHLC / tushare仅返回close
+931020.CSI  # 无OHLC / tushare仅返回close
+931022.CSI  # 无OHLC / tushare仅返回close
+931032.CSI  # 无OHLC / tushare仅返回close
+931037.CSI  # 无OHLC / tushare仅返回close
+931057.CSI  # 无OHLC / tushare仅返回close
+931058.CSI  # 无OHLC / tushare仅返回close
+931063.CSI  # 无OHLC / tushare仅返回close
+931131.CSI  # 无OHLC / tushare仅返回close
+931148.CSI  # 无OHLC / tushare仅返回close
+931169.CSI  # 无OHLC / tushare仅返回close
+931225.CSI  # 无OHLC / tushare仅返回close
+931229.CSI  # 无OHLC / tushare仅返回close
+931237.CSI  # 无OHLC / tushare仅返回close
+931246.CSI  # 无OHLC / tushare仅返回close
+931252.CSI  # 无OHLC / tushare仅返回close
+931253.CSI  # 无OHLC / tushare仅返回close
+931257.CSI  # 无OHLC / tushare仅返回close
+931260.CSI  # 无OHLC / tushare仅返回close
+931273.CSI  # 无OHLC / tushare仅返回close
+931353.CSI  # 无OHLC / tushare仅返回close
+931354.CSI  # 无OHLC / tushare仅返回close
+931355.CSI  # 无OHLC / tushare仅返回close
+931383.CSI  # 无OHLC / tushare仅返回close
+931397.CSI  # 无OHLC / tushare仅返回close
+931398.CSI  # 无OHLC / tushare仅返回close
+931450.CSI  # 无OHLC / tushare仅返回close
+931451.CSI  # 无OHLC / tushare仅返回close
+931467.CSI  # 无OHLC / tushare仅返回close
+931483.CSI  # 无OHLC / tushare仅返回close
+931491.CSI  # 无OHLC / tushare仅返回close
+931512.CSI  # 无OHLC / tushare仅返回close
+931525.CSI  # 无OHLC / tushare仅返回close
+931555.CSI  # 无OHLC / tushare仅返回close
+931557.CSI  # 无OHLC / tushare仅返回close
+931558.CSI  # 无OHLC / tushare仅返回close
+931592.CSI  # 无OHLC / tushare仅返回close
+931639.CSI  # 无OHLC / tushare仅返回close
+931664.CSI  # 无OHLC / tushare仅返回close
+931665.CSI  # 无OHLC / tushare仅返回close
+931666.CSI  # 无OHLC / tushare仅返回close
+931670.CSI  # 无OHLC / tushare仅返回close
+931671.CSI  # 无OHLC / tushare仅返回close
+931682.CSI  # 无OHLC / tushare仅返回close
+931688.CSI  # 无OHLC / tushare仅返回close
+931717.CSI  # 无OHLC / tushare仅返回close
+931723.CSI  # 无OHLC / tushare仅返回close
+931728.CSI  # 无OHLC / tushare仅返回close
+931735.CSI  # 无OHLC / tushare仅返回close
+931747.CSI  # 无OHLC / tushare仅返回close
+931750.CSI  # 无OHLC / tushare仅返回close
+931753.CSI  # 无OHLC / tushare仅返回close
+931761.CSI  # 无OHLC / tushare仅返回close
+931776.CSI  # 无OHLC / tushare仅返回close
+931777.CSI  # 无OHLC / tushare仅返回close
+931783.CSI  # 无OHLC / tushare仅返回close
+931784.CSI  # 无OHLC / tushare仅返回close
+931800.CSI  # 无OHLC / tushare仅返回close
+931801.CSI  # 无OHLC / tushare仅返回close
+931803.CSI  # 无OHLC / tushare仅返回close
+931811.CSI  # 无OHLC / tushare仅返回close
+931826.CSI  # 无OHLC / tushare仅返回close
+931835.CSI  # 无OHLC / tushare仅返回close
+931838.CSI  # 无OHLC / tushare仅返回close
+931845.CSI  # 无OHLC / tushare仅返回close
+931851.CSI  # 无OHLC / tushare仅返回close
+931857.CSI  # 无OHLC / tushare仅返回close
+931858.CSI  # 无OHLC / tushare仅返回close
+931867.CSI  # 无OHLC / tushare仅返回close
+931893.CSI  # 无OHLC / tushare仅返回close
+931895.CSI  # 无OHLC / tushare仅返回close
+931922.CSI  # 无OHLC / tushare仅返回close
+931944.CSI  # 无OHLC / tushare仅返回close
+931945.CSI  # 无OHLC / tushare仅返回close
+931989.CSI  # 无OHLC / tushare仅返回close
+931990.CSI  # 无OHLC / tushare仅返回close
+931991.CSI  # 无OHLC / tushare仅返回close
+931996.CSI  # 无OHLC / tushare仅返回close
+932024.CSI  # 无OHLC / tushare仅返回close
+932025.CSI  # 无OHLC / tushare仅返回close
+932026.CSI  # 无OHLC / tushare仅返回close
+932040.CSI  # 无OHLC / tushare仅返回close
+932044.CSI  # 无OHLC / tushare仅返回close
+932050.CSI  # 无OHLC / tushare仅返回close
+932057.CSI  # 无OHLC / tushare仅返回close
+932062.CSI  # 无OHLC / tushare仅返回close
+932065.CSI  # 无OHLC / tushare仅返回close
+932067.CSI  # 无OHLC / tushare仅返回close
+932071.CSI  # 无OHLC / tushare仅返回close
+932073.CSI  # 无OHLC / tushare仅返回close
+932074.CSI  # 无OHLC / tushare仅返回close
+932156.CSI  # 无OHLC / tushare仅返回close
+932157.CSI  # 无OHLC / tushare仅返回close
+932215.CSI  # 无OHLC / tushare仅返回close
+932224.CSI  # 无OHLC / tushare仅返回close
+932246.CSI  # 无OHLC / tushare仅返回close
+932256.CSI  # 无OHLC / tushare仅返回close
+932265.CSI  # 无OHLC / tushare仅返回close
+932358.CSI  # 无OHLC / tushare仅返回close
+932360.CSI  # 无OHLC / tushare仅返回close
+932386.CSI  # 无OHLC / tushare仅返回close
+932391.CSI  # 无OHLC / tushare仅返回close
+932417.CSI  # 无OHLC / tushare仅返回close
+932424.CSI  # 无OHLC / tushare仅返回close
+932425.CSI  # 无OHLC / tushare仅返回close
+932438.CSI  # 无OHLC / tushare仅返回close
+932440.CSI  # 无OHLC / tushare仅返回close
+932448.CSI  # 无OHLC / tushare仅返回close
+932452.CSI  # 无OHLC / tushare仅返回close
+932458.CSI  # 无OHLC / tushare仅返回close
+932461.CSI  # 无OHLC / tushare仅返回close
+932545.CSI  # 无OHLC / tushare仅返回close
+932553.CSI  # 无OHLC / tushare仅返回close
+932611.CSI  # 无OHLC / tushare仅返回close
+932666.CSI  # 无OHLC / tushare仅返回close
+950048.CSI  # 无OHLC / tushare仅返回close
+950070.CSI  # 无OHLC / tushare仅返回close
+950071.CSI  # 无OHLC / tushare仅返回close
+950073.CSI  # 无OHLC / tushare仅返回close
+950074.CSI  # 无OHLC / tushare仅返回close
+950075.CSI  # 无OHLC / tushare仅返回close
+950079.CSI  # 无OHLC / tushare仅返回close
+950080.CSI  # 无OHLC / tushare仅返回close
+950085.CSI  # 无OHLC / tushare仅返回close
+950086.CSI  # 无OHLC / tushare仅返回close
+950087.CSI  # 无OHLC / tushare仅返回close
+950088.CSI  # 无OHLC / tushare仅返回close
+950089.CSI  # 无OHLC / tushare仅返回close
+950097.CSI  # 无OHLC / tushare仅返回close
+950101.CSI  # 无OHLC / tushare仅返回close
+950103.CSI  # 无OHLC / tushare仅返回close
+950189.CSI  # 无OHLC / tushare仅返回close
+950194.CSI  # 无OHLC / tushare仅返回close
+950217.CSI  # 无OHLC / tushare仅返回close
+950220.CSI  # 无OHLC / tushare仅返回close
+950238.CSI  # 无OHLC / tushare仅返回close
+950239.CSI  # 无OHLC / tushare仅返回close
+H00019.CSI  # 无OHLC / tushare仅返回close
+H00901.CSI  # 无OHLC / tushare仅返回close
+H00909.CSI  # 无OHLC / tushare仅返回close
+H00910.CSI  # 无OHLC / tushare仅返回close
+H00911.CSI  # 无OHLC / tushare仅返回close
+H00912.CSI  # 无OHLC / tushare仅返回close
+H00913.CSI  # 无OHLC / tushare仅返回close
+H00915.CSI  # 无OHLC / tushare仅返回close
+H00917.CSI  # 无OHLC / tushare仅返回close
+H01051.CSI  # 无OHLC / tushare仅返回close
+H01053.CSI  # 无OHLC / tushare仅返回close
+H01054.CSI  # 无OHLC / tushare仅返回close
+H01057.CSI  # 无OHLC / tushare仅返回close
+H01058.CSI  # 无OHLC / tushare仅返回close
+H01060.CSI  # 无OHLC / tushare仅返回close
+H11051.CSI  # 无OHLC / tushare仅返回close
+H11053.CSI  # 无OHLC / tushare仅返回close
+H11055.CSI  # 无OHLC / tushare仅返回close
+H11058.CSI  # 无OHLC / tushare仅返回close
+H11060.CSI  # 无OHLC / tushare仅返回close
+H30001.CSI  # 无OHLC / tushare仅返回close
+H30004.CSI  # 无OHLC / tushare仅返回close
+H30005.CSI  # 无OHLC / tushare仅返回close
+H30006.CSI  # 无OHLC / tushare仅返回close
+H30074.CSI  # 无OHLC / tushare仅返回close
+H30141.CSI  # 无OHLC / tushare仅返回close
+H30143.CSI  # 无OHLC / tushare仅返回close
+H30164.CSI  # 无OHLC / tushare仅返回close
+H30166.CSI  # 无OHLC / tushare仅返回close
+H30169.CSI  # 无OHLC / tushare仅返回close
+H30170.CSI  # 无OHLC / tushare仅返回close
+H30172.CSI  # 无OHLC / tushare仅返回close
+H30173.CSI  # 无OHLC / tushare仅返回close
+H30174.CSI  # 无OHLC / tushare仅返回close
+H30175.CSI  # 无OHLC / tushare仅返回close
+H30176.CSI  # 无OHLC / tushare仅返回close
+H30179.CSI  # 无OHLC / tushare仅返回close
+H30183.CSI  # 无OHLC / tushare仅返回close
+H30186.CSI  # 无OHLC / tushare仅返回close
+H30190.CSI  # 无OHLC / tushare仅返回close
+H30193.CSI  # 无OHLC / tushare仅返回close
+H30195.CSI  # 无OHLC / tushare仅返回close
+H30196.CSI  # 无OHLC / tushare仅返回close
+H30197.CSI  # 无OHLC / tushare仅返回close
+H30200.CSI  # 无OHLC / tushare仅返回close
+H30201.CSI  # 无OHLC / tushare仅返回close
+H30203.CSI  # 无OHLC / tushare仅返回close
+H30204.CSI  # 无OHLC / tushare仅返回close
+H30206.CSI  # 无OHLC / tushare仅返回close
+H30207.CSI  # 无OHLC / tushare仅返回close
+H30208.CSI  # 无OHLC / tushare仅返回close
+H30209.CSI  # 无OHLC / tushare仅返回close
+H30211.CSI  # 无OHLC / tushare仅返回close
+H30213.CSI  # 无OHLC / tushare仅返回close
+H30214.CSI  # 无OHLC / tushare仅返回close
+H30215.CSI  # 无OHLC / tushare仅返回close
+H30216.CSI  # 无OHLC / tushare仅返回close
+H30218.CSI  # 无OHLC / tushare仅返回close
+H30219.CSI  # 无OHLC / tushare仅返回close
+H30220.CSI  # 无OHLC / tushare仅返回close
+H30221.CSI  # 无OHLC / tushare仅返回close
+H30222.CSI  # 无OHLC / tushare仅返回close
+H30223.CSI  # 无OHLC / tushare仅返回close
+H30368.CSI  # 无OHLC / tushare仅返回close
+H30532.CSI  # 无OHLC / tushare仅返回close
+H50043.CSI  # 无OHLC / tushare仅返回close
+H50044.CSI  # 无OHLC / tushare仅返回close
+H50056.CSI  # 无OHLC / tushare仅返回close
