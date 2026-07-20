@@ -156,14 +156,16 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
         hold_days = i - entry_idx
         if hold_days >= cfg.time_stop_days:
             return _mk(i, cc, "时间止损")
-        if signal.close_stop_kind == "ma":
-            cs = _f(row.get(f"ma{signal.close_stop_period}"))
-        elif signal.close_stop_kind == "fixed":
-            cs = signal.intraday_stop_price   # 量价节点：收盘也看节点成本
-        else:
-            cs = entry_price
-        if cs > 0 and cc < cs:
-            return _mk(i, cc, "收盘止损")
+        # 指数不设收盘止损：指数只有盘中跌破止损价/时间止损/止盈，无"跌破MA/成本"收盘止损
+        if asset_class != "index":
+            if signal.close_stop_kind == "ma":
+                cs = _f(row.get(f"ma{signal.close_stop_period}"))
+            elif signal.close_stop_kind == "fixed":
+                cs = signal.intraday_stop_price   # 量价节点：收盘也看节点成本
+            else:
+                cs = entry_price
+            if cs > 0 and cc < cs:
+                return _mk(i, cc, "收盘止损")
 
     # 数据到底仍未触发任何出场 → 右删失（观察期被截断），不计样本
     return None
