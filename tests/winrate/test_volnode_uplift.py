@@ -37,12 +37,15 @@ def _band():
     return b
 
 
-def test_stage_live_vs_trial():
-    # 默认(1.04)=live；上浮2%(1.02)=trial
-    assert VolPriceNodeChecker().STAGE == "live"
+def test_stage_trial_vs_live():
+    # 默认(1.04, 非严格)=trial（原版4%不严格被 2%严格版替代）
+    # 上浮2%(1.02, 非严格)=trial（被 2%严格版替代）
+    # 2%严格=live（盈亏比2.35，最优量价变体）
+    assert VolPriceNodeChecker().STAGE == "trial"
     assert VolPriceNodeChecker().ENTRY_PREMIUM == 1.04
     assert VolPriceNodeChecker(entry_premium=1.02).STAGE == "trial"
     assert VolPriceNodeChecker(entry_premium=1.02).ENTRY_PREMIUM == 1.02
+    assert VolPriceNodeChecker(entry_premium=1.02, strict=True).STAGE == "live"
 
 
 def test_uplift_target_is_cost_times_1_02():

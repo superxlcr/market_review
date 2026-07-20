@@ -24,13 +24,14 @@ def test_defaults():
 
 
 def test_buy_point_three_state():
-    # 均线家族已从 disabled 调为 trial（跑长数据看效果），均进扫描集
+    # MA 家族经个股长数据验证胜率仅比随机高 0.6~3.5pp → 全 disabled（不进扫描集）
+    # （ETF 版需测 MA 时走 ETF_BUY_POINTS 绕过此门槛，见 test_etf_config）
     for name in ["无量均线支撑", "5日均量均线支撑", "扣抵量均线支撑",
-                 "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑"]:
-        assert BUY_POINT_STAGE[name] == "trial"
-        assert name in ALL_BUY_POINTS
+                 "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑", "MA240支撑"]:
+        assert BUY_POINT_STAGE[name] == "disabled"
+        assert name not in ALL_BUY_POINTS
     # live + trial 均在扫描集
-    for name in ["回调一半", "波段50%", "量价节点", "MA240支撑",
+    for name in ["回调一半", "波段50%", "量价节点",
                  "回调一半严格", "量价节点上浮2%", "量价节点严格",
                  "量价节点严格上浮2%", "随机基准"]:
         assert name in ALL_BUY_POINTS

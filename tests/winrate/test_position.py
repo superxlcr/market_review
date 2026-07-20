@@ -53,7 +53,7 @@ def test_same_buypoint_no_overlap(monkeypatch):
     )
     cfg = WinrateConfig(min_list_days=0, long_ma_states=[], short_ma_states=[],
                         time_stop_days=15)
-    trades = SE.scan_stock("600000.SH", "x", rows_desc, cfg, "电子", "半导体",
+    trades = SE.scan_stock("600000.SH", "x", rows_desc, cfg, "电子", "半导体", "",
                            "20200101", mv_series=_mv(rows_desc))
     assert len(trades) >= 2
     ts = sorted(trades, key=lambda t: t.entry_date)
@@ -77,7 +77,7 @@ def test_different_buypoints_independent(monkeypatch):
     )
     cfg = WinrateConfig(min_list_days=0, long_ma_states=[], short_ma_states=[],
                         time_stop_days=15)
-    trades = SE.scan_stock("600000.SH", "x", rows_desc, cfg, "电子", "半导体",
+    trades = SE.scan_stock("600000.SH", "x", rows_desc, cfg, "电子", "半导体", "",
                            "20200101", mv_series=_mv(rows_desc))
     assert {t.buy_point for t in trades} == {"回调一半", "波段50%"}   # 两买点都在跑
     half = [t for t in trades if t.buy_point == "回调一半"]

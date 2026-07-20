@@ -22,6 +22,6 @@ def test_scan_stock_no_signal_when_flat_series():
                         short_ma_states=[])
     rows_desc = [_row(f"202401{d:02d}", 10, 10, 10, 10) for d in range(1, 29)][::-1]
     trades = SE.scan_stock("600000.SH", "测试", rows_desc, cfg,
-                           "电子", "半导体", "20200101",
+                           "电子", "半导体", "", "20200101",
                            mv_series={r["date"]: 150.0 for r in rows_desc})
     assert isinstance(trades, list)

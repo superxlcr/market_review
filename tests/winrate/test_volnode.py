@@ -119,10 +119,11 @@ def test_volnode_strict_keeps_node_above_line50():
     assert pts[0].price == 104.0
 
 
-def test_volnode_strict_stage_is_trial():
-    """strict 实例 STAGE=trial（不论 entry_premium）。"""
+def test_volnode_strict_stage():
+    """strict 实例 STAGE 随 entry_premium 分流：
+    1.04+strict = trial（被 2% 版替代）；1.02+strict = live（盈亏比2.35，最优量价变体）。"""
     assert VolPriceNodeChecker(entry_premium=1.04, strict=True).STAGE == "trial"
-    assert VolPriceNodeChecker(entry_premium=1.02, strict=True).STAGE == "trial"
+    assert VolPriceNodeChecker(entry_premium=1.02, strict=True).STAGE == "live"
 
 
 def test_volnode_non_strict_ignores_line50():

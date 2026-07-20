@@ -63,10 +63,13 @@ def _band_hr():
 
 
 def test_find_all_hides_trial_by_default(monkeypatch):
+    # 回调一半严格（无5%过滤）= live → 默认显示（reason 含 [严格]）
+    # 回调一半严格5% = trial → 默认隐藏（reason 含 [严格≤5%]）
     df = _rising()
-    monkeypatch.setattr(BP, "load_buy_point_config", lambda: {})  # 无 显示试验买点 → 默认隐藏
+    monkeypatch.setattr(BP, "load_buy_point_config", lambda: {})  # 无 显示试验买点 → 默认隐藏 trial
     pts = find_all_buy_points(df, _band_hr())
-    assert all("[严格]" not in p.reason for p in pts)   # 回调一半严格（trial）默认隐藏
+    assert any("[严格]" in p.reason for p in pts)             # 严格版 live，默认显示
+    assert all("[严格≤5%]" not in p.reason for p in pts)      # 5%过滤版 trial，默认隐藏
 
 
 def test_find_all_shows_trial_when_enabled(monkeypatch):

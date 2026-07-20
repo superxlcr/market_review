@@ -44,9 +44,13 @@ def test_lenient_ignores_50_line():
     assert "[严格]" not in pts[0].reason
 
 
-def test_strict_stage_is_trial_lenient_is_live():
-    assert HalfRetraceChecker(strict=True).STAGE == "trial"
-    assert HalfRetraceChecker(strict=False).STAGE == "live"
+def test_strict_stage_is_live_lenient_is_trial():
+    # 严格版（无5%过滤）= live：5%过滤砍掉的反而是高弹性反弹，被砍信号胜率更高→保留 live
+    # 宽松版（非严格）= trial：被严格版替代
+    # 5%过滤版 = trial：5%过滤不成立
+    assert HalfRetraceChecker(strict=True).STAGE == "live"
+    assert HalfRetraceChecker(strict=False).STAGE == "trial"
+    assert HalfRetraceChecker(strict=True, close_below_max_pct=5.0).STAGE == "trial"
 
 
 def test_volnode_keeps_own_cost_stop():
