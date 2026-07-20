@@ -67,13 +67,15 @@ def passes_list_age(list_date: str, on_date: str, min_days: int) -> bool:
 
 def passes_all(df_asc: pd.DataFrame, cfg: WinrateConfig, mv_yi: float,
                l1: str, l2: str, list_date: str, on_date: str) -> bool:
-    """便宜的先算：上市时长 → 市值 → 行业 → 均线（最贵）。"""
+    """便宜的先算：上市时长 → 均线（最贵）。
+    stock 模式额外过滤市值 + 行业白名单；index 模式跳过这两项（指数无市值、本身就是行业）。"""
     if not passes_list_age(list_date, on_date, cfg.min_list_days):
         return False
-    if not passes_market_cap(mv_yi, cfg):
-        return False
-    if not passes_industry(l1, l2, cfg.industry_whitelist):
-        return False
+    if cfg.asset_class == "stock":
+        if not passes_market_cap(mv_yi, cfg):
+            return False
+        if not passes_industry(l1, l2, cfg.industry_whitelist):
+            return False
     if not passes_ma_arrange(df_asc, cfg.short_ma_states, [5, 10, 20]):
         return False
     if not passes_ma_arrange(df_asc, cfg.long_ma_states, [60, 120, 240]):
