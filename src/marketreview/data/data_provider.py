@@ -1228,6 +1228,73 @@ class DataProvider:
             for code, info in raw.items()
         }
 
+    # ── CSI 指数池（ETF 回测标的池）──
+
+    def ensure_csi_pool(self, progress_cb=None) -> int:
+        """Lazy-init: 拉 index_basic(market='CSI') → 6 条过滤 → 缓存到 csi_index_pool。
+        幂等：已缓存则跳过。返回缓存指数数。"""
+        if self.cache.has_csi_pool():
+            n = len(self.cache.get_csi_pool())
+            log.info("ensure_csi_pool: already cached (%d), skip", n)
+            return n
+
+        log.info("ensure_csi_pool: fetching index_basic(market=CSI) ...")
+        try:
+            df = self._api.index_basic(market="CSI")
+        except Exception as e:
+            log.warning("ensure_csi_pool: index_basic failed: %s", e)
+            return 0
+        if df is None or df.empty:
+            log.warning("ensure_csi_pool: index_basic returned empty")
+            return 0
+
+        rows = _filter_csi_index_pool(df)
+        log.info("ensure_csi_pool: %d indices after filter (raw=%d)",
+                 len(rows), len(df))
+        if rows:
+            self.cache.upsert_csi_pool(rows)
+        return len(rows)
+
+    def ensure_index_pool_loaded(self, codes: list[str], start_date: str,
+                                  end_date: str, progress_cb=None) -> int:
+        """抓取选中指数的 K 线，存 tushare_cache（asset_type='index'）。
+        逻辑仿 _ensure_indices_loaded：覆盖检查 + 增量抓取。
+        返回抓取的指数数（非 index-days）。"""
+        start_date = start_date.replace("-", "")
+        end_date = end_date.replace("-", "")
+        fetched = 0
+        total = len(codes)
+        for ii, idx_code in enumerate(codes):
+            # 覆盖检查：latest>=end 且 earliest<=start → 跳过
+            latest_cached = self.cache.get_latest_date(idx_code)
+            if latest_cached and latest_cached.replace("-", "") >= end_date:
+                earliest_cached = self.cache.get_earliest_date(idx_code)
+                if earliest_cached and earliest_cached.replace("-", "") <= start_date:
+                    if progress_cb:
+                        progress_cb("etf_index", ii + 1, total)
+                    continue
+            try:
+                df = self._api.index_daily(
+                    ts_code=idx_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    limit=_PAGE_SIZE,
+                )
+            except Exception as e:
+                log.warning("index_daily(%s) failed: %s", idx_code, e)
+                if progress_cb:
+                    progress_cb("etf_index", ii + 1, total)
+                continue
+            if df is not None and not df.empty:
+                rows = _normalize_index_batch(df)
+                if rows:
+                    self.cache.upsert_daily_bulk(rows)
+                fetched += 1
+            if progress_cb:
+                progress_cb("etf_index", ii + 1, total)
+        log.info("ensure_index_pool_loaded: fetched %d/%d indices", fetched, total)
+        return fetched
+
     def _get_display_industry_codes(self) -> list[str]:
         """
         Compute the display industry index_codes using SPLIT_L1/SPLIT_L2
@@ -1777,6 +1844,45 @@ def _normalize_index_batch(df) -> list[dict]:
     keep = ["code", "date", "open", "high", "low", "close",
             "vol", "amount", "adj_factor", "asset_type"]
     return df[[c for c in keep if c in df.columns]].to_dict(orient="records")
+
+
+def _filter_csi_index_pool(df) -> list:
+    """过滤 index_basic(CSI) 返回的 DataFrame → 可回测指数行列表。
+
+    6 条规则（见 spec §2.2）：
+    1. 只留主题/行业两类
+    2. ts_code 不含币种后缀
+    3. name 不含全收益/净收益/(全)/(净) + 币种字样
+    4. name 不含港股/海外/跨市/三板/H300/HKT/港股通
+    5. name 不以纯数字规模前缀开头 + 不含企业属性/产业链/地域关键词
+    6. name 不含策略型残留
+    """
+    import re
+    d = df[df["category"].isin(["主题指数", "行业指数"])].copy()
+    d = d[~d["ts_code"].str.contains(r"(?:CNY|HKD|USD|EUR|JPY)", regex=True)]
+    d = d[~d["name"].str.contains(
+        r"全收益|净收益|（全）|(?:全)|(?:净)|（净）|USD|CNY|HKD|港元|人民币|美元|港币",
+        na=False, regex=True)]
+    d = d[~d["name"].str.contains(
+        r"港股|香港|HK|SHS|海外|沪港|深港|沪通|深通|港通|AH|三板|H300|HKT|港股通",
+        na=False, regex=True)]
+    d = d[~d["name"].str.match(
+        r"^(?:1000|500|300|180|380|800|700|200|50|100)", na=False)]
+    d = d[~d["name"].str.contains(
+        r"央企|民企|国企|地企|上游|中游|下游|长三角|珠三角|京津冀|湾区|城镇",
+        na=False, regex=True)]
+    d = d[~d["name"].str.contains(
+        r"收$|红利|分红|低波|动量|高贝|价值|成长$", na=False, regex=True)]
+    rows = []
+    for _, r in d.iterrows():
+        ld = r.get("list_date")
+        rows.append({
+            "ts_code": str(r["ts_code"]),
+            "name": str(r["name"]),
+            "category": str(r["category"]),
+            "list_date": str(ld) if ld is not None and str(ld) != "nan" else "",
+        })
+    return rows
 
 
 def _upsert_adj_factors(cache: CacheManager, df) -> None:

@@ -76,6 +76,9 @@ class CacheManager:
         "concept_member": {
             "con_code", "stock_code", "stock_name",
         },
+        "csi_index_pool": {
+            "ts_code", "name", "category", "list_date",
+        },
     }
 
     def _init_schema(self):
@@ -953,6 +956,42 @@ class CacheManager:
                     "FROM concept_index ORDER BY type, name",
                 ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------- csi_index_pool (ETF 回测标的池) -------
+
+    def has_csi_pool(self) -> bool:
+        """Return True if csi_index_pool table has data (lazy-init guard)."""
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT 1 FROM csi_index_pool LIMIT 1").fetchone()
+        return row is not None
+
+    def upsert_csi_pool(self, rows: list[dict]):
+        """Batch upsert CSI index pool rows.
+        Each row: {ts_code, name, category, list_date}."""
+        with self._get_conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO csi_index_pool "
+                "(ts_code, name, category, list_date) "
+                "VALUES (:ts_code, :name, :category, :list_date)",
+                rows,
+            )
+            conn.commit()
+        log.info("upsert_csi_pool: %d rows", len(rows))
+
+    def get_csi_pool(self) -> list[dict]:
+        """Return all CSI index pool rows ordered by category, name."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT ts_code, name, category, list_date "
+                "FROM csi_index_pool ORDER BY category, name"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def clear_csi_pool(self):
+        """Delete all csi_index_pool rows to force re-fetch."""
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM csi_index_pool")
+            conn.commit()
 
     def get_stock_concepts(self, stock_codes: list[str]) -> dict[str, dict]:
         """Return {stock_code: {i_concept: str, n_concepts: list[str]}}."""

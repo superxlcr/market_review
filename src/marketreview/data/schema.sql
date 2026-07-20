@@ -149,3 +149,12 @@ CREATE TABLE IF NOT EXISTS concept_member (
     stock_name TEXT,              -- 成分股名称
     PRIMARY KEY (con_code, stock_code)
 );
+
+-- ── CSI (中证) 可回测指数池 ──
+
+CREATE TABLE IF NOT EXISTS csi_index_pool (
+    ts_code    TEXT PRIMARY KEY,   -- 指数代码 (931719.CSI ...)
+    name       TEXT NOT NULL,      -- 简称
+    category   TEXT NOT NULL,      -- 主题指数 / 行业指数
+    list_date  TEXT                -- 发布日期 YYYYMMDD
+);
