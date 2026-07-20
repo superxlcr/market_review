@@ -20,12 +20,14 @@ log = get_logger(__name__)
 _MA_PERIODS = [5, 10, 20, 55, 60, 120, 144, 240]
 
 
-def prepare_klines(rows_desc: list[dict]) -> list[dict]:
-    """rows_desc(date DESC, raw) → date ASC、qfq、每行带 ma5..ma240 与 date 字符串。"""
+def prepare_klines(rows_desc: list[dict], asset_class: str = "stock") -> list[dict]:
+    """rows_desc(date DESC, raw) → date ASC、（stock:qfq / index:raw）、每行带 ma5..ma240 与 date 字符串。"""
     df = rows_to_df(rows_desc)
     if df.empty:
         return []
-    df = DataProvider.raw_to_qfq(df)
+    if asset_class == "stock":
+        df = DataProvider.raw_to_qfq(df)   # 个股需前复权
+    # index: 不 qfq（adj_factor=1.0，指数本身连续；调了是 no-op 但语义误导）
     mas = calc_ma(df, _MA_PERIODS)
     out: list[dict] = []
     for i, (_, r) in enumerate(df.iterrows()):
@@ -43,8 +45,9 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
                industry_l1: str, industry_l2: str, industry_l3: str,
                list_date: str, mv_series: dict[str, float],
                concept_info: dict | None = None,
-               band_lookback: int = 300) -> list[TradeResult]:
-    klines = prepare_klines(rows_desc)
+               band_lookback: int = 300,
+               asset_class: str = "stock") -> list[TradeResult]:
+    klines = prepare_klines(rows_desc, asset_class=asset_class)
     n = len(klines)
     if n < 60:
         return []
@@ -108,7 +111,8 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
             atr_T = 0.0
 
         for sig in signals:
-            tr = simulate_trade(sig, i, klines, cfg, code, name, atr_T)
+            tr = simulate_trade(sig, i, klines, cfg, code, name, atr_T,
+                                asset_class=asset_class)
             if tr is None:
                 continue
             _tag(tr, df_upto, mv_yi, industry_l1, industry_l2, industry_l3,
@@ -151,20 +155,26 @@ def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,
     timing_sink: 传入空 list，每只标的的耗时/线程名/笔数会 append 进去，
                  末尾追加一行 __TOTAL__ 总耗时。供页面写 scan_timing.csv 观测并发效果。
     """
-    basics = dp.cache.get_stock_basic()   # [{ts_code,name,list_date,is_st}]
-    if cfg.debug_code:
-        want = cfg.debug_code.strip().upper()
-        universe = [b for b in basics
-                    if b["ts_code"].upper() == want or b["ts_code"].split(".")[0] == want]
-        if not universe:
-            log.warning("调试标的 %s 未在 stock_basic 中找到，返回空", cfg.debug_code)
-            return []
-        log.info("调试模式：只扫描 %s（绕过 is_st 过滤）", universe[0]["ts_code"])
+    if cfg.asset_class == "index":
+        # ETF 模式：标的池来自 cfg.index_pool（UI 选中的指数），无 is_st/行业/概念
+        universe = [{"ts_code": c, "name": c, "list_date": ""} for c in cfg.index_pool]
+        ind_map = {}
+        concept_map = {}
     else:
-        universe = [b for b in basics if not b.get("is_st")]
-    codes = [b["ts_code"] for b in universe]
-    ind_map = dp.cache.get_stock_industries(codes)  # {code:{l1_name,l2_name,l3_name}}
-    concept_map = dp._get_or_build_concept_map(codes) if dp.cache.has_concepts() else {}
+        basics = dp.cache.get_stock_basic()   # [{ts_code,name,list_date,is_st}]
+        if cfg.debug_code:
+            want = cfg.debug_code.strip().upper()
+            universe = [b for b in basics
+                        if b["ts_code"].upper() == want or b["ts_code"].split(".")[0] == want]
+            if not universe:
+                log.warning("调试标的 %s 未在 stock_basic 中找到，返回空", cfg.debug_code)
+                return []
+            log.info("调试模式：只扫描 %s（绕过 is_st 过滤）", universe[0]["ts_code"])
+        else:
+            universe = [b for b in basics if not b.get("is_st")]
+        codes = [b["ts_code"] for b in universe]
+        ind_map = dp.cache.get_stock_industries(codes)  # {code:{l1_name,l2_name,l3_name}}
+        concept_map = dp._get_or_build_concept_map(codes) if dp.cache.has_concepts() else {}
 
     def _one(b: dict) -> list[TradeResult]:
         code = b["ts_code"]
@@ -177,8 +187,12 @@ def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,
                                      "thread": threading.current_thread().name,
                                      "completed_at": time.time(), "trades_n": 0})
             return []
-        mv_rows = dp.cache.get_daily_basic_for_code(code)  # Task 6 新增
-        mv_series = {r["trade_date"]: float(r["total_mv"]) / 1e4 for r in mv_rows}
+        # index 模式无市值/行业/概念 → 空 dict（指数无这些概念）
+        if cfg.asset_class == "stock":
+            mv_rows = dp.cache.get_daily_basic_for_code(code)
+            mv_series = {r["trade_date"]: float(r["total_mv"]) / 1e4 for r in mv_rows}
+        else:
+            mv_series = {}
         ind = ind_map.get(code, {})
         ci = concept_map.get(code, {})
         trades = scan_stock(
@@ -187,6 +201,7 @@ def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,
             ind.get("l3_name", ""),
             b.get("list_date", ""), mv_series,
             concept_info=ci,
+            asset_class=cfg.asset_class,
         )
         if timing_sink is not None:
             timing_sink.append({"code": code, "name": b.get("name", ""),
