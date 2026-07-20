@@ -27,6 +27,7 @@ class BuyPointSignal:
     close_stop_period: int = 0       # ma 时用（60/120/240）
     intraday_stop_price: float = 0.0  # >0 时：绝对盘中止损价（量价节点=节点成本），覆盖全局空间/ATR止损
     reason: str = ""
+    entry_mode: str = "limit"        # "limit"=条件单次日等回踩 | "close"=信号日收盘价成交（权重K）
 
 
 @dataclass
@@ -48,6 +49,16 @@ class TradeResult:
     # 上下文标签（由 scan_engine 回填）
     short_ma_state: str = ""
     long_ma_state: str = ""
+    # 进场日均线位置（收盘价 vs MA），index 模式填充，stock 留空
+    ma20_pos: str = ""
+    ma20_dist: float = 0.0
+    ma60_pos: str = ""
+    ma60_dist: float = 0.0
+    ma120_pos: str = ""
+    ma120_dist: float = 0.0
+    ma240_pos: str = ""
+    ma240_dist: float = 0.0
+    # 以下仅 stock 模式填充，index 留空
     market_cap_yi: float = 0.0
     cap_bucket: str = ""
     industry_l1: str = ""
@@ -77,26 +88,32 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
         return None
 
     # ⑤ 挂单前涨跌停可达性：目标价必须落在次日涨跌停幅度内
-    limit = board_limit_pct(code, asset_class=asset_class)
-    if target < sig_close * (1 - limit) or target > sig_close * (1 + limit):
-        return None
-
-    entry_idx = signal_idx + 1
-    if entry_idx >= len(klines_asc):
-        return None
+    # 收盘模式跳过可达性检查（直接以收盘价成交，无需次日挂单）
+    if signal.entry_mode != "close":
+        limit = board_limit_pct(code, asset_class=asset_class)
+        if target < sig_close * (1 - limit) or target > sig_close * (1 + limit):
+            return None
 
     # ② / ③ 成交
-    er = klines_asc[entry_idx]
-    o, h, l = _f(er.get("open")), _f(er.get("high")), _f(er.get("low"))
-    cap_price = target * cfg.open_chase_cap_pct / 100.0
-    if o > target and o <= cap_price:
-        entry_price = o
-    elif l <= target <= h:
-        entry_price = target
+    if signal.entry_mode == "close":
+        # 权重K战法：信号当天以收盘价直接成交，不等次日
+        entry_idx = signal_idx
+        entry_price = sig_close
+        entry_date = str(sig_row.get("date"))
     else:
-        return None  # 未成交/跳空过上限
-
-    entry_date = str(er.get("date"))
+        entry_idx = signal_idx + 1
+        if entry_idx >= len(klines_asc):
+            return None
+        er = klines_asc[entry_idx]
+        o, h, l = _f(er.get("open")), _f(er.get("high")), _f(er.get("low"))
+        cap_price = target * cfg.open_chase_cap_pct / 100.0
+        if o > target and o <= cap_price:
+            entry_price = o
+        elif l <= target <= h:
+            entry_price = target
+        else:
+            return None  # 未成交/跳空过上限
+        entry_date = str(er.get("date"))
     # 空间止损价
     if signal.intraday_stop_price > 0:
         stop_price = signal.intraday_stop_price           # 量价节点：绝对止损价=节点成本
@@ -108,7 +125,11 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
     small_price = entry_price * (1 + cfg.small_win_floor_pct / 100.0)
 
     # MFP 从建仓当日起（含 entry day high），但出场从 entry_idx+1 起（T+1）
-    mfp = max(0.0, (h - entry_price) / entry_price * 100.0)
+    if signal.entry_mode == "close":
+        entry_day_high = sig_row_high = _f(sig_row.get("high"))
+    else:
+        entry_day_high = h
+    mfp = max(0.0, (entry_day_high - entry_price) / entry_price * 100.0)
     armed = mfp >= cfg.win_threshold_pct
 
     def _mk(exit_idx, exit_price, reason):

@@ -630,6 +630,72 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
         return results
 
 
+# ── 权重K战法（ETF 收盘价成交）──────────────────────────────────
+
+class WeightKCandleChecker(BaseBuyPointChecker):
+    """权重K战法（ETF 专用，收盘价成交）.
+
+    与量价节点的 K 线检测逻辑相同（涨幅>2% + 放量>1.2 + 前日非涨跌停），
+    但不依赖波段结构：每天独立判断，当天发现权重K即以收盘价买入。
+
+    与量价节点的区别:
+      ① 不依赖波段（无需 V/P/75%线）—— 纯日线扫描；
+      ② 买入价 = 信号日收盘价（当天成交，不等次日）；
+      ③ 止损价一致：min(low[k], low[k-1]) - 0.01。
+    """
+
+    STAGE = "trial"
+    PRICE_RATIO = 1.02
+    VOL_RATIO = 1.2
+
+    def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
+        """只看今天这根K线是不是权重K。是→返回一个收盘价买点；否→空。"""
+        if df.empty:
+            return []
+        n = len(df)
+        if n < 3:
+            return []
+
+        low = df["low"].to_numpy(dtype=float)
+        close = df["close"].to_numpy(dtype=float)
+        amount = df["amount"].to_numpy(dtype=float)
+        dates = df["date"].tolist()
+        k = n - 1  # 只看今天
+
+        c0, c1 = close[k], close[k - 1]
+        a0, a1 = amount[k], amount[k - 1]
+        if c1 <= 0 or a1 <= 0:
+            return []
+        if c0 / c1 <= self.PRICE_RATIO:               # 涨幅 > 2%
+            return []
+        if a0 / a1 <= self.VOL_RATIO:                  # 量比 > 1.2
+            return []
+
+        # 前一日涨跌停 → 弃
+        c2 = close[k - 2]
+        limit = _get_board_threshold(code) / 2.0 / 100.0
+        if c2 > 0 and abs(c1 / c2 - 1.0) >= limit - 1e-4:
+            return []
+
+        cost = min(low[k], low[k - 1])
+        if cost <= 0:
+            return []
+
+        cost_r = round(cost, 2)
+        entry_price = round(c0, 2)                     # 收盘价买入
+        stop_price = round(cost_r - 0.01, 2)            # 跌破成本 = 成本低一分钱
+        cur = float(close[k])
+
+        return [BuyPoint(
+            type="权重K",
+            position="权重K",
+            price=entry_price,
+            distance_pct=0.0,                           # 收盘价 = 现价
+            reason=f"权重K@{dates[k]} 收盘{c0:.2f} 成本{cost_r}(两日最低) 止损{stop_price}",
+            intraday_stop=stop_price,
+        )]
+
+
 # ── 随机基准买点（无技能对照）──────────────────────────────────
 
 class RandomBaselineChecker(BaseBuyPointChecker):

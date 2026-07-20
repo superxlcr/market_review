@@ -5,7 +5,7 @@ import pandas as pd
 from marketreview.tools.band_analysis import BandResult
 from marketreview.tools.buy_points import (
     HalfRetraceChecker, Band50Checker, MAChecker, VolPriceNodeChecker,
-    RandomBaselineChecker,
+    WeightKCandleChecker, RandomBaselineChecker,
 )
 from marketreview.tools.technical import calc_ma
 from .trade_sim import BuyPointSignal
@@ -31,6 +31,7 @@ _NAME_MAP = {
     "量价节点上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02)),
     "量价节点严格": ("volnode", VolPriceNodeChecker(entry_premium=1.04, strict=True)),
     "量价节点严格上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02, strict=True)),
+    "权重K": ("weightk", WeightKCandleChecker()),
     "随机基准": ("random", RandomBaselineChecker()),
 }
 
@@ -51,7 +52,7 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
             continue
         kind, checker = entry
         # 量价节点/随机基准需要 code（判涨跌停 / 随机种子），其余 checker 签名统一 (df, band)
-        if kind == "volnode" or kind == "random":
+        if kind == "volnode" or kind == "random" or kind == "weightk":
             bps = checker.check(df_asc, band, code=code)
         elif kind == "ma":
             bps = checker.check(df_asc, band, pre_mas=pre_mas)
@@ -76,6 +77,15 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
                     close_stop_kind="fixed", close_stop_period=0,
                     intraday_stop_price=bp.intraday_stop,
                     reason=bp.reason,
+                ))
+            elif kind == "weightk":
+                # 权重K：信号当天收盘价成交；盘中止损 = min(low[k],low[k-1])-0.01
+                out.append(BuyPointSignal(
+                    buy_point=name, target_price=bp.price,
+                    close_stop_kind="fixed", close_stop_period=0,
+                    intraday_stop_price=bp.intraday_stop,
+                    reason=bp.reason,
+                    entry_mode="close",
                 ))
             else:
                 # 回调一半 / 波段50% / 随机基准：收盘止损 = 跌破买入价；吃全局空间/ATR止损

@@ -122,7 +122,8 @@ def scan_stock(code: str, name: str, rows_desc: list[dict], cfg: WinrateConfig,
             if tr is None:
                 continue
             _tag(tr, df_upto, mv_yi, industry_l1, industry_l2, industry_l3,
-                 concept_info)
+                 concept_info, asset_class=asset_class)
+            _entry_ma_pos(tr, klines)
             results.append(tr)
             # 该买点跳过自己的持仓期：下次可建仓 = 出场日之后（不影响其它买点）
             exit_next = _date_idx(dates, tr.exit_date) + 1
@@ -141,17 +142,39 @@ def _date_idx(dates: list[str], d: str) -> int:
 
 
 def _tag(tr: TradeResult, df_upto, mv_yi, l1, l2, l3,
-         concept_info: dict | None = None):
+         concept_info: dict | None = None, asset_class: str = "stock"):
     tr.short_ma_state = ma_group_state(df_upto, [5, 10, 20])
     tr.long_ma_state = ma_group_state(df_upto, [60, 120, 240])
-    tr.market_cap_yi = round(mv_yi, 1)
-    tr.cap_bucket = cap_bucket(mv_yi) if mv_yi > 0 else ""
-    tr.industry_l1 = l1
-    tr.industry_l2 = l2
-    tr.industry_l3 = l3
-    if concept_info:
-        tr.concept_i = concept_info.get("concept_i", "")
-        tr.concept_n = concept_info.get("concept_n", "")
+    if asset_class == "stock":
+        tr.market_cap_yi = round(mv_yi, 1)
+        tr.cap_bucket = cap_bucket(mv_yi) if mv_yi > 0 else ""
+        tr.industry_l1 = l1
+        tr.industry_l2 = l2
+        tr.industry_l3 = l3
+        if concept_info:
+            tr.concept_i = concept_info.get("concept_i", "")
+            tr.concept_n = concept_info.get("concept_n", "")
+
+
+def _entry_ma_pos(tr: TradeResult, klines: list[dict]):
+    """填入进场日收盘价相对 MA20/60/120/240 的位置与偏离幅度。"""
+    ep = tr.entry_price
+    for row in klines:
+        if str(row.get("date")) == tr.entry_date:
+            for p in (20, 60, 120, 240):
+                ma_val = float(row.get(f"ma{p}", 0) or 0)
+                if ma_val > 0 and ep > 0:
+                    dist = round((ep / ma_val - 1) * 100, 1)
+                    pos = "上方" if ep > ma_val else ("下方" if ep < ma_val else "—")
+                else:
+                    pos, dist = "—", 0.0
+                setattr(tr, f"ma{p}_pos", pos)
+                setattr(tr, f"ma{p}_dist", dist)
+            return
+    # 未找到进场日行
+    for p in (20, 60, 120, 240):
+        setattr(tr, f"ma{p}_pos", "—")
+        setattr(tr, f"ma{p}_dist", 0.0)
 
 
 def run_scan(dp: DataProvider, cfg: WinrateConfig, progress_cb=None,
