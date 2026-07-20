@@ -28,6 +28,15 @@ BUY_POINT_STAGE = {
     "MA144支撑": "disabled",
 }
 
+# ETF/行业指数 版可测买点（绕过 BUY_POINT_STAGE 的 disabled 门槛）。
+# MA 家族在个股版被 disabled（胜率仅比随机高 0.6~3.5pp），ETF 版要测必须绕过门槛。
+# 共 12 个：3 非MA + 9 MA变体。
+ETF_BUY_POINTS = [
+    "回调一半", "波段50%", "量价节点",
+    "MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑", "MA240支撑",
+    "扣抵量均线支撑", "5日均量均线支撑", "无量均线支撑",
+]
+
 # 展示/扫描顺序（含全部；disabled 会被 ALL_BUY_POINTS 过滤掉，改状态即可重新启用）
 _BUY_POINT_ORDER = [
     "回调一半", "回调一半严格", "回调一半严格5%", "波段50%",
@@ -69,10 +78,17 @@ class WinrateConfig:
     max_workers: int = 1
     # 调试：填 ts_code 只跑单只（绕过 is_st），留空=全市场
     debug_code: str = ""
+    # 标的类型 / ETF 模式专用
+    asset_class: str = "stock"       # "stock" | "index"
+    index_pool: list[str] = field(default_factory=list)  # ETF 模式选中的指数 ts_code
+    entry_mode: str = "limit"        # "limit"=条件单等回踩 | "close"=收盘价进场（预留，第一版不实现）
 
 
-def default_winrate_config() -> WinrateConfig:
-    return WinrateConfig()
+def default_winrate_config(asset_class: str = "stock") -> WinrateConfig:
+    cfg = WinrateConfig()
+    if asset_class == "index":
+        cfg = replace(cfg, asset_class="index", buy_points=list(ETF_BUY_POINTS))
+    return cfg
 
 
 def cap_bucket(mv_yi: float) -> str:
@@ -119,9 +135,9 @@ def _coerce(kind, val: str):
     return val.strip()
 
 
-def parse_winrate_config(path: str | Path) -> WinrateConfig:
+def parse_winrate_config(path: str | Path, asset_class: str = "stock") -> WinrateConfig:
     path = Path(path)
-    cfg = default_winrate_config()
+    cfg = default_winrate_config(asset_class)
     if not path.exists():
         return cfg
     updates = {}
