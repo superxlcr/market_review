@@ -1507,4 +1507,5 @@ git push origin feature/trading-system-v2
 
 **已知风险:**
 - Task 6 的 `run_scan` 改动较大（标的池分流 + `_one` 内 mv_series 分流），需重点跑 `test_scan_engine.py` 回归。
-- `test_config.py` 现有断言 `BUY_POINT_STAGE["MA20支撑"] == "trial"` 但 config.py 实际是 `"disabled"`——这是**预先存在**的测试与代码不一致（不是本计划引入），若 Task 2 跑回归时该测试 FAIL，是历史问题，不在本计划修复范围（除非用户要求）。Task 2 Step 8 跑该测试时如遇此 FAIL，记录但不修。
+- `test_config.py::test_buy_point_three_state` **已在当前代码库上 FAIL**（已验证）——它断言 `BUY_POINT_STAGE["MA20支撑"] == "trial"`，但 config.py 实际是 `"disabled"`（MA 家族后来被禁用、测试没同步更新）。这是**预先存在**的历史问题，不是本计划引入。Task 2 Step 8 跑回归时会看到这 1 个 FAIL（4 passed/1 failed），**记录但不修**，除非用户明确要求修。Task 2 的回归目标只是确认"我的改动没新增 FAIL"，而非让整个文件变绿。
+- Task 5 Step 6 的 `test_trade_sim.py` 回归同理：若有个股版测试因 `simulate_trade` 新增 `asset_class` 默认参数而 FAIL，要修；但因 `asset_class="stock"` 默认走原路径，理论上不应有新 FAIL。
