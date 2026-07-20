@@ -5,8 +5,12 @@ from dataclasses import dataclass
 from .config import WinrateConfig, cap_bucket  # noqa: F401  (cap_bucket 由 scan 用)
 
 
-def board_limit_pct(code: str) -> float:
-    """次日涨跌停幅度。"""
+def board_limit_pct(code: str, asset_class: str = "stock") -> float:
+    """次日涨跌停幅度。
+    stock: 按板块（300/301/688→20%, 8/4北交所→30%, 其余10%）。
+    index: 指数无涨跌停，返回 1.0（100%）= 条件单可达性恒通过。"""
+    if asset_class == "index":
+        return 1.0
     c = code.split(".")[0]
     if c.startswith(("300", "301", "688")):
         return 0.20
@@ -62,7 +66,8 @@ def _f(v) -> float:
 
 def simulate_trade(signal: BuyPointSignal, signal_idx: int,
                    klines_asc: list[dict], cfg: WinrateConfig,
-                   code: str, name: str, atr_at_signal: float) -> TradeResult | None:
+                   code: str, name: str, atr_at_signal: float,
+                   asset_class: str = "stock") -> TradeResult | None:
     target = signal.target_price
     if target <= 0:
         return None
@@ -72,7 +77,7 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
         return None
 
     # ⑤ 挂单前涨跌停可达性：目标价必须落在次日涨跌停幅度内
-    limit = board_limit_pct(code)
+    limit = board_limit_pct(code, asset_class=asset_class)
     if target < sig_close * (1 - limit) or target > sig_close * (1 + limit):
         return None
 
