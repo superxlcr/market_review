@@ -1867,7 +1867,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "9.15.2"
+    _AI_VERSION = "9.16.0"
 
     def run_winrate_scan(self, cfg, progress_cb=None, timing_sink=None):
         """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。
@@ -1898,6 +1898,58 @@ class DashboardService:
         log.info("check_winrate_coverage(%s~%s): kline=%s → %s",
                  start, end, kline.get("ready"), ready)
         return {"ready": ready, "kline": kline}
+
+    # ── ETF/行业指数 买点胜率 ──
+
+    def prepare_winrate_data_etf(self, start: str, end: str,
+                                  index_pool: list[str], progress_cb=None) -> dict:
+        """ETF 数据准备：① ensure_csi_pool（标的池缓存）② ensure_index_pool_loaded（K线）。
+        index_pool: UI 选中的指数 ts_code 列表。"""
+        log.info("[AI v%s] prepare_winrate_data_etf(%s~%s, %d indices)",
+                 self._AI_VERSION, start, end, len(index_pool))
+        # 阶段1: 标的池缓存（幂等）
+        self._dp.ensure_csi_pool(progress_cb=progress_cb)
+        # 阶段2: 选中指数的 K 线
+        end_clean = end if end not in ("", "now") else \
+            (self._dp.cache.get_latest_date("000001.SZ") or start).replace("-", "")
+        start_clean = start.replace("-", "")
+        self._dp.ensure_index_pool_loaded(index_pool, start_clean, end_clean,
+                                          progress_cb=progress_cb)
+        return {"status": "ok"}
+
+    def check_winrate_coverage_etf(self, start: str, end: str,
+                                    index_pool: list[str]) -> dict:
+        """返回 ETF 数据就绪状态（选中指数 K线门禁）。"""
+        start_clean = start.replace("-", "")
+        end_clean = end if end not in ("", "now") else \
+            (self._dp.cache.get_latest_date("000001.SZ") or start).replace("-", "")
+        # 每个选中指数都要覆盖 [start, end]
+        missing = []
+        ready_count = 0
+        for code in index_pool:
+            latest = self._dp.cache.get_latest_date(code)
+            earliest = self._dp.cache.get_earliest_date(code)
+            if latest and earliest:
+                if latest.replace("-", "") >= end_clean and \
+                   earliest.replace("-", "") <= start_clean:
+                    ready_count += 1
+                    continue
+            missing.append(code)
+        ready = len(missing) == 0 and len(index_pool) > 0
+        log.info("check_winrate_coverage_etf(%s~%s): %d/%d ready, missing=%d",
+                 start, end, ready_count, len(index_pool), len(missing))
+        return {"ready": ready,
+                "kline": {"ready": ready, "total": len(index_pool),
+                          "ready_count": ready_count,
+                          "missing_dates": missing[:20]}}
+
+    def run_winrate_scan_etf(self, cfg, progress_cb=None, timing_sink=None):
+        """ETF 买点胜率扫描（复用 run_scan，cfg.asset_class 已是 index）。"""
+        from marketreview.winrate.scan_engine import run_scan
+        from marketreview.winrate.reporter import aggregate
+        trades = run_scan(self._dp, cfg, progress_cb=progress_cb, timing_sink=timing_sink)
+        stats = aggregate(trades)
+        return stats, trades
 
     def generate_ai_summary(self, trade_date: str, progress_cb=None) -> dict:
         """
