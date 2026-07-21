@@ -153,13 +153,30 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
         row = klines_asc[i]
         oo, hh, ll, cc = _f(row.get("open")), _f(row.get("high")), _f(row.get("low")), _f(row.get("close"))
 
-        # 通道突破策略：收盘 < 20日低点 → 离场（无止损/止盈，纯通道跟随）
-        if signal.strategy == "channel20":
-            lo = max(entry_idx + 1, i - 19)  # 最近20个交易日的起点
-            low20 = min(_f(klines_asc[j].get("low") or 0) for j in range(lo, i + 1))
-            if low20 > 0 and cc < low20:
-                return _mk(i, cc, "通道下轨跌破")
-            continue  # 不检查止损/止盈——通道策略只等反向信号
+        # 通道突破策略族：纯通道跟随，无止损/止盈，只等反向信号
+        # 退出规则：收盘 < 过去N日最低价（不含今天），即跌破N日Donchian下轨
+        if signal.strategy in ("channel20", "turtle_s1", "turtle_s2"):
+            if signal.strategy == "channel20":
+                sell_n = 20
+                exit_label = "通道下轨跌破"
+            elif signal.strategy == "turtle_s1":
+                sell_n = 10
+                exit_label = "海龟S1下轨跌破"
+            else:  # turtle_s2
+                sell_n = 20
+                exit_label = "海龟S2下轨跌破"
+            # 更新 MFP（通道策略也需追踪浮盈，否则 mfp_final 只算进出两天）
+            cur = (hh - entry_price) / entry_price * 100.0
+            if cur > mfp:
+                mfp = cur
+            if mfp >= cfg.win_threshold_pct:
+                armed = True
+            lo = max(entry_idx + 1, i - sell_n)
+            if lo < i:
+                low_n = min(_f(klines_asc[j].get("low") or 0) for j in range(lo, i))
+                if low_n > 0 and cc < low_n:
+                    return _mk(i, cc, exit_label)
+            continue
 
         # 开盘（先止损）
         if oo <= stop_price:

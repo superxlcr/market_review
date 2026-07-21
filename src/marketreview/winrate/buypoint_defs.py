@@ -6,6 +6,7 @@ from marketreview.tools.band_analysis import BandResult
 from marketreview.tools.buy_points import (
     HalfRetraceChecker, Band50Checker, MAChecker, VolPriceNodeChecker,
     WeightKCandleChecker, Channel20BreakoutChecker, RandomBaselineChecker,
+    TurtleSystem1Checker, TurtleSystem2Checker,
 )
 from marketreview.tools.technical import calc_ma
 from .trade_sim import BuyPointSignal
@@ -33,6 +34,8 @@ _NAME_MAP = {
     "量价节点严格上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02, strict=True)),
     "权重K": ("weightk", WeightKCandleChecker()),
     "20日突破": ("channel20", Channel20BreakoutChecker()),
+    "海龟S1": ("turtle_s1", TurtleSystem1Checker()),
+    "海龟S2": ("turtle_s2", TurtleSystem2Checker()),
     "随机基准": ("random", RandomBaselineChecker()),
 }
 
@@ -96,6 +99,16 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
                     reason=bp.reason,
                     entry_mode="close",
                     strategy="channel20",
+                ))
+            elif kind in ("turtle_s1", "turtle_s2"):
+                # 海龟S1：突破20日高进场，跌破10日低离场
+                # 海龟S2：突破55日高进场，跌破20日低离场
+                out.append(BuyPointSignal(
+                    buy_point=name, target_price=bp.price,
+                    close_stop_kind="entry", close_stop_period=0,
+                    reason=bp.reason,
+                    entry_mode="close",
+                    strategy=kind,  # "turtle_s1" or "turtle_s2"
                 ))
             else:
                 # 回调一半 / 波段50% / 随机基准：收盘止损 = 跌破买入价；吃全局空间/ATR止损

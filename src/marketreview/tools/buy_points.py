@@ -739,6 +739,84 @@ class Channel20BreakoutChecker(BaseBuyPointChecker):
         return []
 
 
+# ── 海龟交易系统 S1/S2（ETF/指数专用）────────────────────────
+
+class TurtleSystem1Checker(BaseBuyPointChecker):
+    """海龟交易系统 S1（ETF/指数专用，收盘价成交）.
+
+    买入: 收盘价 > 过去20日最高价（不含今天）→ 当天收盘进场。
+    卖出: 收盘价 < 过去10日最低价（含今天）→ 当天收盘离场。
+    无止损/止盈 —— 纯通道跟随，吃趋势段。
+    与现有20日突破的区别：卖出通道从20日缩短到10日，更快离场。
+    """
+
+    STAGE = "trial"
+    BUY_LOOKBACK = 20
+
+    def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
+        if df.empty:
+            return []
+        n = len(df)
+        if n < self.BUY_LOOKBACK + 1:
+            return []
+
+        close = df["close"].to_numpy(dtype=float)
+        high = df["high"].to_numpy(dtype=float)
+        dates = df["date"].tolist()
+        k = n - 1  # 今天
+
+        high_20 = float(high[k - self.BUY_LOOKBACK : k].max())
+        close_today = float(close[k])
+
+        if close_today > high_20:
+            return [BuyPoint(
+                type="海龟S1",
+                position="海龟S1",
+                price=round(close_today, 2),
+                distance_pct=0.0,
+                reason=f"海龟S1@{dates[k]} 收盘{close_today:.2f} > 20日高点{high_20:.2f}",
+            )]
+        return []
+
+
+class TurtleSystem2Checker(BaseBuyPointChecker):
+    """海龟交易系统 S2（ETF/指数专用，收盘价成交）.
+
+    买入: 收盘价 > 过去55日最高价（不含今天）→ 当天收盘进场。
+    卖出: 收盘价 < 过去20日最低价（含今天）→ 当天收盘离场。
+    无止损/止盈 —— 纯通道跟随。
+    S2 比 S1 更慢：入场门槛更高（55日通道），持有的趋势更长。
+    """
+
+    STAGE = "trial"
+    BUY_LOOKBACK = 55
+
+    def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
+        if df.empty:
+            return []
+        n = len(df)
+        if n < self.BUY_LOOKBACK + 1:
+            return []
+
+        close = df["close"].to_numpy(dtype=float)
+        high = df["high"].to_numpy(dtype=float)
+        dates = df["date"].tolist()
+        k = n - 1  # 今天
+
+        high_55 = float(high[k - self.BUY_LOOKBACK : k].max())
+        close_today = float(close[k])
+
+        if close_today > high_55:
+            return [BuyPoint(
+                type="海龟S2",
+                position="海龟S2",
+                price=round(close_today, 2),
+                distance_pct=0.0,
+                reason=f"海龟S2@{dates[k]} 收盘{close_today:.2f} > 55日高点{high_55:.2f}",
+            )]
+        return []
+
+
 # ── 随机基准买点（无技能对照）──────────────────────────────────
 
 class RandomBaselineChecker(BaseBuyPointChecker):

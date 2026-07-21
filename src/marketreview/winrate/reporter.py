@@ -23,6 +23,10 @@ class BuyPointStats:
     expectancy_pct: float
 
 
+# 通道策略退出原因（趋势跟随，无止损/止盈，仅跌破通道下轨离场）
+_CHANNEL_EXIT_REASONS = ("通道下轨跌破", "海龟S1下轨跌破", "海龟S2下轨跌破")
+
+
 def aggregate(trades: list[TradeResult]) -> dict[str, BuyPointStats]:
     groups: dict[str, list[TradeResult]] = {}
     for t in trades:
@@ -34,8 +38,14 @@ def aggregate(trades: list[TradeResult]) -> dict[str, BuyPointStats]:
         big = sum(1 for t in ts if t.exit_reason == "大胜利")
         small = sum(1 for t in ts if t.exit_reason == "小胜利")
         stop = sum(1 for t in ts if t.exit_reason == "盘中止损")
+        # 收盘止损 / 时间止损（非通道策略）
         loss = sum(1 for t in ts
                    if t.exit_reason in ("收盘止损", "时间止损") and t.pnl_pct < 0)
+        # 通道策略退出：按盈亏分类（无止损/止盈概念，纯趋势跟随）
+        small += sum(1 for t in ts
+                     if t.exit_reason in _CHANNEL_EXIT_REASONS and t.pnl_pct > 0)
+        loss += sum(1 for t in ts
+                    if t.exit_reason in _CHANNEL_EXIT_REASONS and t.pnl_pct <= 0)
         wins = sum(1 for t in ts if t.success)
         out[bp] = BuyPointStats(
             buy_point=bp, n=n,
