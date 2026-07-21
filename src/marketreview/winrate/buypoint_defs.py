@@ -5,7 +5,7 @@ import pandas as pd
 from marketreview.tools.band_analysis import BandResult
 from marketreview.tools.buy_points import (
     HalfRetraceChecker, Band50Checker, MAChecker, VolPriceNodeChecker,
-    WeightKCandleChecker, RandomBaselineChecker,
+    WeightKCandleChecker, Channel20BreakoutChecker, RandomBaselineChecker,
 )
 from marketreview.tools.technical import calc_ma
 from .trade_sim import BuyPointSignal
@@ -32,6 +32,7 @@ _NAME_MAP = {
     "量价节点严格": ("volnode", VolPriceNodeChecker(entry_premium=1.04, strict=True)),
     "量价节点严格上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02, strict=True)),
     "权重K": ("weightk", WeightKCandleChecker()),
+    "20日突破": ("channel20", Channel20BreakoutChecker()),
     "随机基准": ("random", RandomBaselineChecker()),
 }
 
@@ -86,6 +87,15 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
                     intraday_stop_price=bp.intraday_stop,
                     reason=bp.reason,
                     entry_mode="close",
+                ))
+            elif kind == "channel20":
+                # 20日突破：收盘 > 20日高点进场，收盘 < 20日低点离场，无止损止盈
+                out.append(BuyPointSignal(
+                    buy_point=name, target_price=bp.price,
+                    close_stop_kind="entry", close_stop_period=0,
+                    reason=bp.reason,
+                    entry_mode="close",
+                    strategy="channel20",
                 ))
             else:
                 # 回调一半 / 波段50% / 随机基准：收盘止损 = 跌破买入价；吃全局空间/ATR止损

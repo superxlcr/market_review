@@ -28,6 +28,7 @@ class BuyPointSignal:
     intraday_stop_price: float = 0.0  # >0 时：绝对盘中止损价（量价节点=节点成本），覆盖全局空间/ATR止损
     reason: str = ""
     entry_mode: str = "limit"        # "limit"=条件单次日等回踩 | "close"=信号日收盘价成交（权重K）
+    strategy: str = "default"        # "default"=止损止盈体系 | "channel20"=通道突破（收盘<20日低点离场）
 
 
 @dataclass
@@ -151,6 +152,14 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
     for i in range(entry_idx + 1, len(klines_asc)):
         row = klines_asc[i]
         oo, hh, ll, cc = _f(row.get("open")), _f(row.get("high")), _f(row.get("low")), _f(row.get("close"))
+
+        # 通道突破策略：收盘 < 20日低点 → 离场（无止损/止盈，纯通道跟随）
+        if signal.strategy == "channel20":
+            lo = max(entry_idx + 1, i - 19)  # 最近20个交易日的起点
+            low20 = min(_f(klines_asc[j].get("low") or 0) for j in range(lo, i + 1))
+            if low20 > 0 and cc < low20:
+                return _mk(i, cc, "通道下轨跌破")
+            continue  # 不检查止损/止盈——通道策略只等反向信号
 
         # 开盘（先止损）
         if oo <= stop_price:

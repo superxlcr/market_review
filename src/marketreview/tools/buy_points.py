@@ -696,6 +696,49 @@ class WeightKCandleChecker(BaseBuyPointChecker):
         )]
 
 
+# ── 20日通道突破战法（ETF 收盘价成交，持仓直至反向信号）────────
+
+class Channel20BreakoutChecker(BaseBuyPointChecker):
+    """20日通道突破战法（ETF 专用，收盘价成交，趋势跟踪）.
+
+    买入: 收盘价 > 过去20日最高价（不含今天）→ 当天收盘进场。
+    卖出: 收盘价 < 过去20日最低价（含今天）→ 当天收盘离场。
+    同一品种同时只持有一笔，持仓期间不重复进场。
+
+    无止损/止盈/时间止损 —— 纯通道跟随，吃趋势段。
+    """
+
+    STAGE = "trial"
+    LOOKBACK = 20
+
+    def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
+        """只看今天是否突破上轨。"""
+        if df.empty:
+            return []
+        n = len(df)
+        if n < self.LOOKBACK + 1:
+            return []
+
+        close = df["close"].to_numpy(dtype=float)
+        high = df["high"].to_numpy(dtype=float)
+        dates = df["date"].tolist()
+        k = n - 1  # 今天
+
+        # 过去20日（不含今天）的最高价
+        high_20 = float(high[k - self.LOOKBACK : k].max())
+        close_today = float(close[k])
+
+        if close_today > high_20:
+            return [BuyPoint(
+                type="20日突破",
+                position="20日突破",
+                price=round(close_today, 2),
+                distance_pct=0.0,
+                reason=f"20日突破@{dates[k]} 收盘{close_today:.2f} > 20日高点{high_20:.2f}",
+            )]
+        return []
+
+
 # ── 随机基准买点（无技能对照）──────────────────────────────────
 
 class RandomBaselineChecker(BaseBuyPointChecker):
