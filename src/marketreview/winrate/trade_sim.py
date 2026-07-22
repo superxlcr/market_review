@@ -27,8 +27,12 @@ class BuyPointSignal:
     close_stop_period: int = 0       # ma 时用（60/120/240）
     intraday_stop_price: float = 0.0  # >0 时：绝对盘中止损价（量价节点=节点成本），覆盖全局空间/ATR止损
     reason: str = ""
-    entry_mode: str = "limit"        # "limit"=条件单次日等回踩 | "close"=信号日收盘价成交（权重K）
-    strategy: str = "default"        # "default"=止损止盈体系 | "channel20"=通道突破（收盘<20日低点离场）
+    entry_mode: str = "limit"        # "limit"=条件单次日等回踩 | "close"=信号日收盘价成交（缩转放）
+    strategy: str = "default"        # "default"=止损止盈体系 | "channel20"=通道突破 | "shrink_expand"=缩转放盘中止损 | "shrink_expand_close"=缩转放纯收盘止损
+    # 量能维度（缩转放 checker 填入，供事后过滤"缩转放"强度；其它买点留 0）
+    vol_ratio_20: float = 0.0        # 今日成交额 / 20日均成交额
+    vol_ratio_5: float = 0.0         # 今日成交额 / 5日均成交额
+    vol_shrink: float = 0.0          # 5日均 / 20日均（<1=前期缩量平衡态）
 
 
 @dataclass
@@ -67,6 +71,10 @@ class TradeResult:
     industry_l3: str = ""              # 申万三级行业
     concept_i: str = ""                # 同花顺 I 型行业分类
     concept_n: str = ""                # 同花顺 N 型概念标签（竖线分隔）
+    # 量能维度（仅缩转放填充，供事后过滤"缩转放"强度；其余买点留 0）
+    vol_ratio_20: float = 0.0
+    vol_ratio_5: float = 0.0
+    vol_shrink: float = 0.0
 
 
 def _f(v) -> float:
@@ -147,6 +155,9 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
             pnl_pct=round((exit_price - entry_price) / entry_price * 100.0, 2),
             success=mfp_final >= cfg.win_threshold_pct,
             reason=signal.reason,
+            vol_ratio_20=signal.vol_ratio_20,
+            vol_ratio_5=signal.vol_ratio_5,
+            vol_shrink=signal.vol_shrink,
         )
 
     for i in range(entry_idx + 1, len(klines_asc)):
@@ -176,6 +187,49 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
                 low_n = min(_f(klines_asc[j].get("low") or 0) for j in range(lo, i))
                 if low_n > 0 and cc < low_n:
                     return _mk(i, cc, exit_label)
+            continue
+
+        # 缩转放策略族：量能驱动进场，止损=信号日最低点，跳过时间止损
+        #   shrink_expand（盘中止损版）：盘中跌破 stop_price 即走（走止损止盈体系，仅跳过时间止损）
+        #   shrink_expand_close（纯收盘版）：盘中只判大/小胜利，不判止损；仅收盘 < stop_price 才走
+        if signal.strategy in ("shrink_expand", "shrink_expand_close"):
+            if signal.strategy == "shrink_expand":
+                # 开盘（先止损）
+                if oo <= stop_price:
+                    return _mk(i, oo, "盘中止损")
+                if oo >= big_price:
+                    return _mk(i, oo, "大胜利")
+                if armed and oo <= small_price:
+                    return _mk(i, oo, "小胜利")
+                # 盘中：先更新 MFP，再判（先止损）
+                cur = (hh - entry_price) / entry_price * 100.0
+                if cur > mfp:
+                    mfp = cur
+                if mfp >= cfg.win_threshold_pct:
+                    armed = True
+                if ll <= stop_price:
+                    return _mk(i, stop_price, "盘中止损")
+                if hh >= big_price:
+                    return _mk(i, big_price, "大胜利")
+                if armed and ll <= small_price:
+                    return _mk(i, small_price, "小胜利")
+                # 收盘：仅收盘止损（跌破信号日 low），无时间止损
+                if cc < stop_price:
+                    return _mk(i, cc, "收盘止损")
+            else:  # shrink_expand_close：纯收盘止损，盘中只判大/小胜利
+                # 盘中只更新 MFP + 判止盈（大/小胜利），不判止损
+                cur = (hh - entry_price) / entry_price * 100.0
+                if cur > mfp:
+                    mfp = cur
+                if mfp >= cfg.win_threshold_pct:
+                    armed = True
+                if hh >= big_price:
+                    return _mk(i, big_price, "大胜利")
+                if armed and ll <= small_price:
+                    return _mk(i, small_price, "小胜利")
+                # 收盘：收盘 < 信号日 low 才走，无时间止损
+                if cc < stop_price:
+                    return _mk(i, cc, "收盘止损")
             continue
 
         # 开盘（先止损）

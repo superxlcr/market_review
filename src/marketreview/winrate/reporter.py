@@ -68,6 +68,9 @@ _MA_FIELDS = [
     "ma120_pos", "ma120_dist", "ma240_pos", "ma240_dist",
 ]
 
+# 量能维度（仅缩转放填充，供事后过滤"缩转放"强度；个股导出不含）
+_VOL_FIELDS = ["vol_ratio_20", "vol_ratio_5", "vol_shrink"]
+
 _STOCK_ONLY_FIELDS = [
     "market_cap_yi", "cap_bucket",
     "industry_l1", "industry_l2", "industry_l3",
@@ -75,7 +78,7 @@ _STOCK_ONLY_FIELDS = [
 ]
 
 _EXPORT_FIELDS_STOCK = _EXPORT_FIELDS_BASE + _STOCK_ONLY_FIELDS + _MA_FIELDS
-_EXPORT_FIELDS_INDEX = _EXPORT_FIELDS_BASE + _MA_FIELDS
+_EXPORT_FIELDS_INDEX = _EXPORT_FIELDS_BASE + _MA_FIELDS + _VOL_FIELDS
 
 # 默认兼容旧调用
 _EXPORT_FIELDS = _EXPORT_FIELDS_STOCK

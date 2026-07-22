@@ -630,68 +630,101 @@ class VolPriceNodeChecker(BaseBuyPointChecker):
         return results
 
 
-# ── 权重K战法（ETF 收盘价成交）──────────────────────────────────
+# ── 缩转放战法（ETF 收盘价成交，量能驱动）────────────────────────
 
-class WeightKCandleChecker(BaseBuyPointChecker):
-    """权重K战法（ETF 专用，收盘价成交）.
+class ShrinkToExpandChecker(BaseBuyPointChecker):
+    """缩转放战法（ETF 专用，收盘价成交）.
 
-    与量价节点的 K 线检测逻辑相同（涨幅>2% + 放量>1.2 + 前日非涨跌停），
-    但不依赖波段结构：每天独立判断，当天发现权重K即以收盘价买入。
+    量能哲学：缩量=平衡态（卖方卖完、买方观望），放量=新资金打破平衡。
+    放量上涨参与（regime change），放量下跌避开。指数天然过滤个股的市值假信号，
+    故该买点只在 ETF 侧存在。
 
-    与量价节点的区别:
-      ① 不依赖波段（无需 V/P/75%线）—— 纯日线扫描；
-      ② 买入价 = 信号日收盘价（当天成交，不等次日）；
-      ③ 止损价一致：min(low[k], low[k-1]) - 0.01。
+    触发条件（只看今天这根K线）:
+      ① close[k] > close[k-1]   上涨（去掉权重K的>2%门槛，先多抓信号再维度过滤）
+      ② close[k] > open[k]      阳线（过滤高开低走但收盘仍>昨收的假上涨）
+      ③ amount[k] > MA20_amount 放量（超 20 日均成交额；MA5/MA20 同步算出供导出）
+
+    进场: 信号日收盘价（entry_mode=close，当天成交）。
+    止损: low[k] - 0.01（信号日最低点 —— 今日资金带来行情的假设证伪即走）。
+    量能维度（导出供事后过滤"缩转放"强度）:
+      vol_ratio_20 = amount[k] / MA20_amount   今日放量强度
+      vol_ratio_5  = amount[k] / MA5_amount    今日 vs 近期
+      vol_shrink   = MA5_amount / MA20_amount  前期缩量程度（<1=处于缩量平衡态）
     """
 
     STAGE = "trial"
-    PRICE_RATIO = 1.02
-    VOL_RATIO = 1.2
+
+    def __init__(self):
+        # 每次 check 后暂存当次量能值，供 detect_buy_points 读取传入 BuyPointSignal。
+        # 每个买点名对应独立 checker 实例（_NAME_MAP 各自实例化），无竞争。
+        self._last_vol_ratios: dict = {"vol_ratio_20": 0.0, "vol_ratio_5": 0.0, "vol_shrink": 0.0}
 
     def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
-        """只看今天这根K线是不是权重K。是→返回一个收盘价买点；否→空。"""
+        """只看今天这根K线是不是缩转放。是→返回一个收盘价买点；否→空。"""
         if df.empty:
             return []
         n = len(df)
-        if n < 3:
+        if n < 21:   # MA20 成交额需 20 日数据 + 今日
+            self._last_vol_ratios = {"vol_ratio_20": 0.0, "vol_ratio_5": 0.0, "vol_shrink": 0.0}
             return []
 
-        low = df["low"].to_numpy(dtype=float)
         close = df["close"].to_numpy(dtype=float)
+        open_ = df["open"].to_numpy(dtype=float)
+        low = df["low"].to_numpy(dtype=float)
         amount = df["amount"].to_numpy(dtype=float)
         dates = df["date"].tolist()
         k = n - 1  # 只看今天
 
         c0, c1 = close[k], close[k - 1]
-        a0, a1 = amount[k], amount[k - 1]
-        if c1 <= 0 or a1 <= 0:
-            return []
-        if c0 / c1 <= self.PRICE_RATIO:               # 涨幅 > 2%
-            return []
-        if a0 / a1 <= self.VOL_RATIO:                  # 量比 > 1.2
+        o0 = open_[k]
+        a0 = amount[k]
+        if c1 <= 0 or o0 <= 0 or a0 <= 0:
             return []
 
-        # 前一日涨跌停 → 弃
-        c2 = close[k - 2]
-        limit = _get_board_threshold(code) / 2.0 / 100.0
-        if c2 > 0 and abs(c1 / c2 - 1.0) >= limit - 1e-4:
+        # ① 上涨 ② 阳线
+        if c0 <= c1:
+            log.debug("缩转放: 非上涨 (c0=%.2f c1=%.2f), skip", c0, c1)
+            return []
+        if c0 <= o0:
+            log.debug("缩转放: 非阳线 (c0=%.2f o0=%.2f), skip", c0, o0)
             return []
 
-        cost = min(low[k], low[k - 1])
+        # ③ 放量：今日成交额 > MA20 成交额（含今日的 20 日均，作触发门槛）
+        ma5_amt = float(np.mean(amount[k - 4:k + 1]))    # 含今日的 5 日均
+        ma20_amt = float(np.mean(amount[k - 19:k + 1]))  # 含今日的 20 日均
+        if ma20_amt <= 0:
+            return []
+        if a0 <= ma20_amt:
+            log.debug("缩转放: 量能不足 (a0=%.0f ma20=%.0f), skip", a0, ma20_amt)
+            return []
+
+        # 量能维度（导出供事后过滤"缩转放"强度）
+        vol_ratio_20 = a0 / ma20_amt                              # 今日放量强度
+        vol_ratio_5 = a0 / ma5_amt if ma5_amt > 0 else 0.0        # 今日 vs 近期
+        # vol_shrink = 信号前的缩量度（不含今日的 MA5/MA20）。
+        # 含今日会把今日放量算进 MA5，掩盖前期缩量状态，故用 k-1 及之前。
+        prev_ma5 = float(np.mean(amount[k - 5:k]))               # 不含今日的 5 日均
+        prev_ma20 = float(np.mean(amount[k - 20:k]))             # 不含今日的 20 日均
+        vol_shrink = prev_ma5 / prev_ma20 if prev_ma20 > 0 else 1.0
+        self._last_vol_ratios = {
+            "vol_ratio_20": round(vol_ratio_20, 3),
+            "vol_ratio_5": round(vol_ratio_5, 3),
+            "vol_shrink": round(vol_shrink, 3),
+        }
+
+        cost = low[k]
         if cost <= 0:
             return []
-
-        cost_r = round(cost, 2)
-        entry_price = round(c0, 2)                     # 收盘价买入
-        stop_price = round(cost_r - 0.01, 2)            # 跌破成本 = 成本低一分钱
-        cur = float(close[k])
+        entry_price = round(c0, 2)
+        stop_price = round(cost - 0.01, 2)
 
         return [BuyPoint(
-            type="权重K",
-            position="权重K",
+            type="缩转放",
+            position="缩转放",
             price=entry_price,
             distance_pct=0.0,                           # 收盘价 = 现价
-            reason=f"权重K@{dates[k]} 收盘{c0:.2f} 成本{cost_r}(两日最低) 止损{stop_price}",
+            reason=(f"缩转放@{dates[k]} 收盘{c0:.2f} 量比20日{vol_ratio_20:.2f} "
+                    f"缩量度{vol_shrink:.2f} 止损{stop_price}"),
             intraday_stop=stop_price,
         )]
 

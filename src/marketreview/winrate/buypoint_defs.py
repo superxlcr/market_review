@@ -5,7 +5,7 @@ import pandas as pd
 from marketreview.tools.band_analysis import BandResult
 from marketreview.tools.buy_points import (
     HalfRetraceChecker, Band50Checker, MAChecker, VolPriceNodeChecker,
-    WeightKCandleChecker, Channel20BreakoutChecker, RandomBaselineChecker,
+    ShrinkToExpandChecker, Channel20BreakoutChecker, RandomBaselineChecker,
     TurtleSystem1Checker, TurtleSystem2Checker,
 )
 from marketreview.tools.technical import calc_ma
@@ -32,7 +32,8 @@ _NAME_MAP = {
     "量价节点上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02)),
     "量价节点严格": ("volnode", VolPriceNodeChecker(entry_premium=1.04, strict=True)),
     "量价节点严格上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02, strict=True)),
-    "权重K": ("weightk", WeightKCandleChecker()),
+    "缩转放": ("shrink_expand", ShrinkToExpandChecker()),
+    "缩转放收盘止损": ("shrink_expand_close", ShrinkToExpandChecker()),
     "20日突破": ("channel20", Channel20BreakoutChecker()),
     "海龟S1": ("turtle_s1", TurtleSystem1Checker()),
     "海龟S2": ("turtle_s2", TurtleSystem2Checker()),
@@ -55,8 +56,8 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
         if entry is None:
             continue
         kind, checker = entry
-        # 量价节点/随机基准需要 code（判涨跌停 / 随机种子），其余 checker 签名统一 (df, band)
-        if kind == "volnode" or kind == "random" or kind == "weightk":
+        # 量价节点/随机基准/缩转放需要 code（判涨跌停 / 随机种子），其余 checker 签名统一 (df, band)
+        if kind == "volnode" or kind == "random" or kind in ("shrink_expand", "shrink_expand_close"):
             bps = checker.check(df_asc, band, code=code)
         elif kind == "ma":
             bps = checker.check(df_asc, band, pre_mas=pre_mas)
@@ -82,14 +83,20 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
                     intraday_stop_price=bp.intraday_stop,
                     reason=bp.reason,
                 ))
-            elif kind == "weightk":
-                # 权重K：信号当天收盘价成交；盘中止损 = min(low[k],low[k-1])-0.01
+            elif kind in ("shrink_expand", "shrink_expand_close"):
+                # 缩转放：信号当天收盘价成交；止损 = 信号日 low - 0.01（逻辑止损）
+                # 量能值从 checker 实例属性读取（check 后暂存）
+                vr = getattr(checker, "_last_vol_ratios", {})
                 out.append(BuyPointSignal(
                     buy_point=name, target_price=bp.price,
                     close_stop_kind="fixed", close_stop_period=0,
                     intraday_stop_price=bp.intraday_stop,
                     reason=bp.reason,
                     entry_mode="close",
+                    strategy=kind,
+                    vol_ratio_20=vr.get("vol_ratio_20", 0.0),
+                    vol_ratio_5=vr.get("vol_ratio_5", 0.0),
+                    vol_shrink=vr.get("vol_shrink", 0.0),
                 ))
             elif kind == "channel20":
                 # 20日突破：收盘 > 20日高点进场，收盘 < 20日低点离场，无止损止盈
