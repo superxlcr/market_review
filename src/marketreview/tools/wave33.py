@@ -213,7 +213,7 @@ def compute_trend_series(counts: List[int]) -> List[str]:
     """
     Compute per-bar trend direction with hysteresis — the direction only flips
     after 3 *consecutive* moves in the opposite direction. A flat (equal) day
-    resets the opposite-streak counter.
+    does NOT reset the opposite-streak counter (neutral, not a reversal).
 
     This matches the intuition behind ``compute_trend()`` labels:
       - streak 0‑2 → "维持<方向>，盘整中" (direction unchanged)
@@ -252,8 +252,7 @@ def compute_trend_series(counts: List[int]) -> List[str]:
                 if opposite_streak >= 3:
                     current_dir = "down"
                     opposite_streak = 0
-        else:  # equal → reset streak, maintain direction
-            opposite_streak = 0
+        # equal → neutral, maintain streak (don't reset)
         dirs.append(current_dir)
     return dirs
 
@@ -324,8 +323,7 @@ def compute_trend(counts: List[int]) -> dict:
                 if opposite_streak >= 3:
                     hysteresis_dir = "down"
                     opposite_streak = 0
-        else:
-            opposite_streak = 0
+        # equal → neutral, maintain streak (don't reset)
 
     # ── 3. Determine label ──
     if raw_direction != hysteresis_dir:
