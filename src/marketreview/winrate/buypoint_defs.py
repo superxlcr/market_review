@@ -5,8 +5,8 @@ import pandas as pd
 from marketreview.tools.band_analysis import BandResult
 from marketreview.tools.buy_points import (
     HalfRetraceChecker, Band50Checker, MAChecker, VolPriceNodeChecker,
-    ShrinkToExpandChecker, Channel20BreakoutChecker, RandomBaselineChecker,
-    TurtleSystem1Checker, TurtleSystem2Checker,
+    ShrinkToExpandChecker, RandomBaselineChecker,
+    TurtleChecker,
 )
 from marketreview.tools.technical import calc_ma
 from .trade_sim import BuyPointSignal
@@ -34,9 +34,15 @@ _NAME_MAP = {
     "量价节点严格上浮2%": ("volnode", VolPriceNodeChecker(entry_premium=1.02, strict=True)),
     "缩转放": ("shrink_expand", ShrinkToExpandChecker()),
     "缩转放收盘止损": ("shrink_expand_close", ShrinkToExpandChecker()),
-    "20日突破": ("channel20", Channel20BreakoutChecker()),
-    "海龟S1": ("turtle_s1", TurtleSystem1Checker()),
-    "海龟S2": ("turtle_s2", TurtleSystem2Checker()),
+    # ── 海龟参数化变体 ──────────────────────────────────────────
+    "海龟收盘20-10": ("turtle_close", TurtleChecker(buy_lookback=20, sell_lookback=10, entry_mode="close", type_name="海龟收盘20-10")),
+    "海龟盘中20-10": ("turtle_intraday", TurtleChecker(buy_lookback=20, sell_lookback=10, entry_mode="intraday", type_name="海龟盘中20-10")),
+    "海龟收盘15-10": ("turtle_close", TurtleChecker(buy_lookback=15, sell_lookback=10, entry_mode="close", type_name="海龟收盘15-10")),
+    "海龟盘中15-10": ("turtle_intraday", TurtleChecker(buy_lookback=15, sell_lookback=10, entry_mode="intraday", type_name="海龟盘中15-10")),
+    "海龟收盘15-05": ("turtle_close", TurtleChecker(buy_lookback=15, sell_lookback=5, entry_mode="close", type_name="海龟收盘15-05")),
+    "海龟盘中15-05": ("turtle_intraday", TurtleChecker(buy_lookback=15, sell_lookback=5, entry_mode="intraday", type_name="海龟盘中15-05")),
+    "海龟收盘10-05": ("turtle_close", TurtleChecker(buy_lookback=10, sell_lookback=5, entry_mode="close", type_name="海龟收盘10-05")),
+    "海龟盘中10-05": ("turtle_intraday", TurtleChecker(buy_lookback=10, sell_lookback=5, entry_mode="intraday", type_name="海龟盘中10-05")),
     "随机基准": ("random", RandomBaselineChecker()),
 }
 
@@ -98,24 +104,16 @@ def detect_buy_points(df_asc: pd.DataFrame, band: BandResult,
                     vol_ratio_5=vr.get("vol_ratio_5", 0.0),
                     vol_shrink=vr.get("vol_shrink", 0.0),
                 ))
-            elif kind == "channel20":
-                # 20日突破：收盘 > 20日高点进场，收盘 < 20日低点离场，无止损止盈
+            elif kind in ("turtle_close", "turtle_intraday"):
+                # 海龟参数化变体（收盘突破 / 盘中突破）
+                entry_mode = "close" if kind == "turtle_close" else "intraday"
                 out.append(BuyPointSignal(
                     buy_point=name, target_price=bp.price,
                     close_stop_kind="entry", close_stop_period=0,
                     reason=bp.reason,
-                    entry_mode="close",
-                    strategy="channel20",
-                ))
-            elif kind in ("turtle_s1", "turtle_s2"):
-                # 海龟S1：突破20日高进场，跌破10日低离场
-                # 海龟S2：突破55日高进场，跌破20日低离场
-                out.append(BuyPointSignal(
-                    buy_point=name, target_price=bp.price,
-                    close_stop_kind="entry", close_stop_period=0,
-                    reason=bp.reason,
-                    entry_mode="close",
-                    strategy=kind,  # "turtle_s1" or "turtle_s2"
+                    entry_mode=entry_mode,
+                    strategy=kind,
+                    sell_lookback=checker.sell_lookback,
                 ))
             else:
                 # 回调一半 / 波段50% / 随机基准：收盘止损 = 跌破买入价；吃全局空间/ATR止损

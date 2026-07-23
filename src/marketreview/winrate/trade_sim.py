@@ -28,7 +28,8 @@ class BuyPointSignal:
     intraday_stop_price: float = 0.0  # >0 时：绝对盘中止损价（量价节点=节点成本），覆盖全局空间/ATR止损
     reason: str = ""
     entry_mode: str = "limit"        # "limit"=条件单次日等回踩 | "close"=信号日收盘价成交（缩转放）
-    strategy: str = "default"        # "default"=止损止盈体系 | "channel20"=通道突破 | "shrink_expand"=缩转放盘中止损 | "shrink_expand_close"=缩转放纯收盘止损
+    strategy: str = "default"        # "default"=止损止盈体系 | "channel20"=通道突破 | "shrink_expand"=缩转放盘中止损 | "shrink_expand_close"=缩转放纯收盘止损 | "turtle_close"/"turtle_intraday"=海龟
+    sell_lookback: int = 0           # 海龟通道：出场N2周期（>0时覆盖硬编码），用于 turtle_close/turtle_intraday
     # 量能维度（缩转放 checker 填入，供事后过滤"缩转放"强度；其它买点留 0）
     vol_ratio_20: float = 0.0        # 今日成交额 / 20日均成交额
     vol_ratio_5: float = 0.0         # 今日成交额 / 5日均成交额
@@ -97,17 +98,22 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
         return None
 
     # ⑤ 挂单前涨跌停可达性：目标价必须落在次日涨跌停幅度内
-    # 收盘模式跳过可达性检查（直接以收盘价成交，无需次日挂单）
-    if signal.entry_mode != "close":
+    # 收盘/盘中突破模式跳过可达性检查（直接当天成交，无需次日挂单）
+    if signal.entry_mode not in ("close", "intraday"):
         limit = board_limit_pct(code, asset_class=asset_class)
         if target < sig_close * (1 - limit) or target > sig_close * (1 + limit):
             return None
 
     # ② / ③ 成交
     if signal.entry_mode == "close":
-        # 权重K战法：信号当天以收盘价直接成交，不等次日
+        # 权重K/缩转放/海龟收盘：信号当天以收盘价直接成交，不等次日
         entry_idx = signal_idx
         entry_price = sig_close
+        entry_date = str(sig_row.get("date"))
+    elif signal.entry_mode == "intraday":
+        # 海龟盘中突破：当天盘中突破前N1日高，以突破价成交
+        entry_idx = signal_idx
+        entry_price = target
         entry_date = str(sig_row.get("date"))
     else:
         entry_idx = signal_idx + 1
@@ -134,7 +140,7 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
     small_price = entry_price * (1 + cfg.small_win_floor_pct / 100.0)
 
     # MFP 从建仓当日起（含 entry day high），但出场从 entry_idx+1 起（T+1）
-    if signal.entry_mode == "close":
+    if signal.entry_mode in ("close", "intraday"):
         entry_day_high = sig_row_high = _f(sig_row.get("high"))
     else:
         entry_day_high = h
@@ -164,29 +170,24 @@ def simulate_trade(signal: BuyPointSignal, signal_idx: int,
         row = klines_asc[i]
         oo, hh, ll, cc = _f(row.get("open")), _f(row.get("high")), _f(row.get("low")), _f(row.get("close"))
 
-        # 通道突破策略族：纯通道跟随，无止损/止盈，只等反向信号
-        # 退出规则：收盘 < 过去N日最低价（不含今天），即跌破N日Donchian下轨
-        if signal.strategy in ("channel20", "turtle_s1", "turtle_s2"):
-            if signal.strategy == "channel20":
-                sell_n = 20
-                exit_label = "通道下轨跌破"
-            elif signal.strategy == "turtle_s1":
-                sell_n = 10
-                exit_label = "海龟S1下轨跌破"
-            else:  # turtle_s2
-                sell_n = 20
-                exit_label = "海龟S2下轨跌破"
-            # 更新 MFP（通道策略也需追踪浮盈，否则 mfp_final 只算进出两天）
+        # 海龟通道策略：通道跟随 + 小胜利（4%浮盈保护），无大胜利（16%）、无止损
+        if signal.strategy in ("turtle_close", "turtle_intraday"):
+            sell_n = signal.sell_lookback
+            # 盘中：先更新 MFP
             cur = (hh - entry_price) / entry_price * 100.0
             if cur > mfp:
                 mfp = cur
             if mfp >= cfg.win_threshold_pct:
                 armed = True
+            # 小胜利：浮盈曾到 8%+ 且盘中回落到 4% → 止盈
+            if armed and ll <= small_price:
+                return _mk(i, small_price, "小胜利")
+            # 通道出场：收盘跌破 N2 日最低价
             lo = max(entry_idx + 1, i - sell_n)
             if lo < i:
                 low_n = min(_f(klines_asc[j].get("low") or 0) for j in range(lo, i))
                 if low_n > 0 and cc < low_n:
-                    return _mk(i, cc, exit_label)
+                    return _mk(i, cc, f"海龟{sell_n}日下轨跌破")
             continue
 
         # 缩转放策略族：量能驱动进场，止损=信号日最低点，跳过时间止损

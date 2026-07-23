@@ -5,11 +5,18 @@ from marketreview.winrate.config import (
 
 
 def test_etf_buy_points_has_no_ma():
-    # ETF 实测 MA 家族无效（6个不如随机/2个打平/1个吃beta），已关闭。
-    # 现含：量价节点 + 缩转放两版 + 20日突破 + 海龟S1/S2 + 随机基准
-    assert len(ETF_BUY_POINTS) == 7
-    for n in ["量价节点", "缩转放", "缩转放收盘止损", "20日突破", "海龟S1", "海龟S2", "随机基准"]:
+    # ETF 实测 MA 家族无效，已关闭。
+    # 现含：量价节点 + 缩转放两版 + 海龟参数化8变体 + 随机基准
+    assert len(ETF_BUY_POINTS) == 12
+    expected = ["量价节点", "缩转放", "缩转放收盘止损",
+                "海龟收盘20-10", "海龟盘中20-10",
+                "海龟收盘15-10", "海龟盘中15-10",
+                "海龟收盘15-05", "海龟盘中15-05",
+                "海龟收盘10-05", "海龟盘中10-05",
+                "随机基准"]
+    for n in expected:
         assert n in ETF_BUY_POINTS
+    assert len([n for n in ETF_BUY_POINTS if n not in expected]) == 0
     # MA 家族不应在 ETF 买点里
     for n in ["MA20支撑", "MA55支撑", "MA60支撑", "MA120支撑", "MA144支撑", "MA240支撑",
               "扣抵量均线支撑", "5日均量均线支撑", "无量均线支撑"]:

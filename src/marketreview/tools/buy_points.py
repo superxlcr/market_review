@@ -772,81 +772,68 @@ class Channel20BreakoutChecker(BaseBuyPointChecker):
         return []
 
 
-# ── 海龟交易系统 S1/S2（ETF/指数专用）────────────────────────
+# ── 海龟交易系统（ETF/指数专用，参数化通道）────────────────────
 
-class TurtleSystem1Checker(BaseBuyPointChecker):
-    """海龟交易系统 S1（ETF/指数专用，收盘价成交）.
+class TurtleChecker(BaseBuyPointChecker):
+    """海龟通道突破（ETF/指数专用）.
 
-    买入: 收盘价 > 过去20日最高价（不含今天）→ 当天收盘进场。
-    卖出: 收盘价 < 过去10日最低价（含今天）→ 当天收盘离场。
+    买入: 价格突破过去 N1 日最高价（不含今天）→ 当天进场。
+    卖出: 收盘价 < 过去 N2 日最低价（含今天）→ 当天收盘离场。
     无止损/止盈 —— 纯通道跟随，吃趋势段。
-    与现有20日突破的区别：卖出通道从20日缩短到10日，更快离场。
+
+    entry_mode:
+      "close"     — 收盘 > 前N1日高 → 当天收盘成交（= 旧海龟S1）
+      "intraday"  — 盘中高 > 前N1日高 → 突破价成交（需开盘未跳空越过）
     """
 
     STAGE = "trial"
-    BUY_LOOKBACK = 20
+
+    def __init__(self, buy_lookback: int = 20, sell_lookback: int = 10,
+                 entry_mode: str = "close", type_name: str = "海龟"):
+        self.buy_lookback = buy_lookback
+        self.sell_lookback = sell_lookback
+        self.entry_mode = entry_mode
+        self.type_name = type_name
 
     def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
         if df.empty:
             return []
         n = len(df)
-        if n < self.BUY_LOOKBACK + 1:
+        if n < self.buy_lookback + 1:
             return []
 
         close = df["close"].to_numpy(dtype=float)
         high = df["high"].to_numpy(dtype=float)
+        open_ = df["open"].to_numpy(dtype=float)
         dates = df["date"].tolist()
         k = n - 1  # 今天
 
-        high_20 = float(high[k - self.BUY_LOOKBACK : k].max())
+        prev_high = float(high[k - self.buy_lookback : k].max())
         close_today = float(close[k])
 
-        if close_today > high_20:
-            return [BuyPoint(
-                type="海龟S1",
-                position="海龟S1",
-                price=round(close_today, 2),
-                distance_pct=0.0,
-                reason=f"海龟S1@{dates[k]} 收盘{close_today:.2f} > 20日高点{high_20:.2f}",
-            )]
-        return []
-
-
-class TurtleSystem2Checker(BaseBuyPointChecker):
-    """海龟交易系统 S2（ETF/指数专用，收盘价成交）.
-
-    买入: 收盘价 > 过去55日最高价（不含今天）→ 当天收盘进场。
-    卖出: 收盘价 < 过去20日最低价（含今天）→ 当天收盘离场。
-    无止损/止盈 —— 纯通道跟随。
-    S2 比 S1 更慢：入场门槛更高（55日通道），持有的趋势更长。
-    """
-
-    STAGE = "trial"
-    BUY_LOOKBACK = 55
-
-    def check(self, df, band: BandResult, code: str = "") -> list[BuyPoint]:
-        if df.empty:
-            return []
-        n = len(df)
-        if n < self.BUY_LOOKBACK + 1:
-            return []
-
-        close = df["close"].to_numpy(dtype=float)
-        high = df["high"].to_numpy(dtype=float)
-        dates = df["date"].tolist()
-        k = n - 1  # 今天
-
-        high_55 = float(high[k - self.BUY_LOOKBACK : k].max())
-        close_today = float(close[k])
-
-        if close_today > high_55:
-            return [BuyPoint(
-                type="海龟S2",
-                position="海龟S2",
-                price=round(close_today, 2),
-                distance_pct=0.0,
-                reason=f"海龟S2@{dates[k]} 收盘{close_today:.2f} > 55日高点{high_55:.2f}",
-            )]
+        if self.entry_mode == "close":
+            # 收盘突破 → 当天收盘价成交
+            if close_today > prev_high:
+                return [BuyPoint(
+                    type=self.type_name,
+                    position=self.type_name,
+                    price=round(close_today, 2),
+                    distance_pct=0.0,
+                    reason=f"{self.type_name}@{dates[k]} 收盘{close_today:.2f} > {self.buy_lookback}日高点{prev_high:.2f}",
+                )]
+        else:  # intraday
+            # 盘中突破 → 突破价成交（前N1日高点即为突破价位）
+            high_today = float(high[k])
+            open_today = float(open_[k])
+            if high_today > prev_high and open_today <= prev_high:
+                entry_price = round(prev_high, 2)
+                return [BuyPoint(
+                    type=self.type_name,
+                    position=self.type_name,
+                    price=entry_price,
+                    distance_pct=0.0,
+                    reason=f"{self.type_name}@{dates[k]} 盘中{high_today:.2f} > {self.buy_lookback}日高点{prev_high:.2f}",
+                )]
         return []
 
 
