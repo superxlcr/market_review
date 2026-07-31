@@ -281,6 +281,15 @@ if _pending:
                 _service.generate_ai_sector_analysis(
                     _pending, progress_cb=_ai_sector_progress)
 
+            # ── 生成数据 MD 供 Claude Code 复盘读取 ──
+            _journal_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "journal")
+            try:
+                _service.generate_data_md(_pending, _journal_dir)
+            except Exception as _md_err:
+                # Don't block dashboard for MD generation failure
+                pass
+
             status.update(
                 label=f"✅ 全部就绪！（数据 {result['elapsed']:.0f}秒，"
                       f"K线 {result.get('raw_pages', '?')} 页，"

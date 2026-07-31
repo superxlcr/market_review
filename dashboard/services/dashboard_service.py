@@ -19,8 +19,12 @@ from marketreview.backtest.strategy_base import (
     DayContext, BuySignal, create_strategy, safe_float,
 )
 from marketreview.backtest.reporter import Report
-from marketreview.tools.technical import calc_ma
+from marketreview.tools.technical import calc_ma, calc_atr, calc_kd, calc_rsi, calc_bias
+from marketreview.tools.technical import bias_status, detect_kd_divergence, detect_rsi_divergence
+from marketreview.tools.technical import ma_direction, ma_arrangement, get_ma_role, get_offset_info
+from marketreview.tools.technical import volume_analysis
 from marketreview.log_util import get_logger
+import numpy as np
 
 log = get_logger(__name__)
 
@@ -1860,6 +1864,558 @@ class DashboardService:
                  _time.perf_counter() - _t_total_start, model, len(result))
         return result
 
+    # ── 数据 MD 生成（供 Claude Code 复盘读取）────────────────────
+
+    def generate_data_md(self, trade_date: str, output_dir: str) -> str | None:
+        """Generate structured market data Markdown for Claude Code review.
+
+        Called after ensure_data_loaded + wave33 + AI summaries are all complete.
+        Writes ``journal/data-{trade_date}.md``.
+        """
+        import time as _time
+        _t0 = _time.perf_counter()
+        td = trade_date.replace("-", "")
+        display_date = f"{td[:4]}-{td[4:6]}-{td[6:8]}"
+
+        sections: list[str] = []
+        sections.append(f"# {display_date} 市场数据\n")
+
+        # ── 一、市场概览 ──
+        overview = self.get_market_overview(td)
+        if overview and "error" not in overview:
+            sections.append(self._md_market_overview(overview, td))
+
+        # ── 二/三、指数分析 ──
+        for idx_code, idx_name, section_num in [
+            ("000001.SH", "上证指数", "二"),
+            ("399006.SZ", "创业板指", "三"),
+        ]:
+            try:
+                df = self.get_index_data(idx_code, lookback=360, end_date=td)
+                if df is not None and not df.empty:
+                    sections.append(self._md_index_section(
+                        df, idx_code, idx_name, section_num, td))
+            except Exception as e:
+                log.warning("generate_data_md: index %s failed: %s", idx_code, e)
+                sections.append(f"## {section_num}、{idx_name} ({idx_code})\n\n> ⚠ 数据获取失败: {e}\n")
+
+        # ── 四、3浪3统计 ──
+        try:
+            w33 = self.get_wave33_data(end_date=td)
+            if w33 and w33.get("dates"):
+                sections.append(self._md_wave33(w33))
+        except Exception as e:
+            log.warning("generate_data_md: wave33 failed: %s", e)
+
+        # ── 五、板块分析 ──
+        try:
+            ranking = self.get_industry_ranking(td, lookback=21)
+            if ranking:
+                # Industry frequency for index contributions
+                freq_sh = self.get_industry_frequency("000001.SH", td)
+                freq_cz = self.get_industry_frequency("399006.SZ", td)
+                sections.append(self._md_sector_section(ranking, freq_sh, freq_cz))
+        except Exception as e:
+            log.warning("generate_data_md: sector analysis failed: %s", e)
+            sections.append("## 五、板块分析\n\n> ⚠ 数据获取失败\n")
+
+        # ── 六、AI导语 ──
+        try:
+            ai_summary = self.get_ai_summary(td)
+            ai_sector = self.get_ai_summary(td, summary_type="sector_analysis")
+            sections.append(self._md_ai_guides(ai_summary, ai_sector))
+        except Exception as e:
+            log.warning("generate_data_md: AI guides failed: %s", e)
+
+        md_content = "\n\n".join(sections)
+        os.makedirs(output_dir, exist_ok=True)
+        filepath = os.path.join(output_dir, f"data-{td}.md")
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(md_content)
+
+        log.info("generate_data_md(%s): %d chars → %s (%.2fs)",
+                 td, len(md_content), filepath, _time.perf_counter() - _t0)
+        return filepath
+
+    # ── private helpers ──
+
+    @staticmethod
+    def _val(v, fmt: str = ".2f") -> str:
+        """Format a float value, return 'N/A' if None or NaN."""
+        if v is None:
+            return "N/A"
+        try:
+            fv = float(v)
+            if np.isnan(fv):
+                return "N/A"
+            return format(fv, fmt)
+        except (ValueError, TypeError):
+            return str(v)
+
+    @staticmethod
+    def _pct_str(v, sign: bool = True) -> str:
+        """Format as percentage string, e.g. '+3.21%' or '-1.05%'."""
+        if v is None:
+            return "N/A"
+        try:
+            fv = float(v)
+            if np.isnan(fv):
+                return "N/A"
+            p = "+" if (sign and fv >= 0) else ""
+            return f"{p}{fv:.2f}%"
+        except (ValueError, TypeError):
+            return str(v)
+
+    @staticmethod
+    def _chg_str(today, yesterday, fmt: str = ".2f") -> str:
+        """Format change from yesterday, e.g. '+2.5% (was 3.0%)'."""
+        tv = DashboardService._val(today, fmt)
+        if yesterday is not None:
+            try:
+                yv = float(yesterday)
+                tv_f = float(today)
+                if yv != 0:
+                    pct = (tv_f / yv - 1) * 100
+                    p = "+" if pct >= 0 else ""
+                    return f"{tv}（{p}{pct:.1f}%）"
+            except (ValueError, TypeError):
+                pass
+        return tv
+
+    @staticmethod
+    def _short_date(d: str) -> str:
+        """'20260731' → '07-31'."""
+        clean = d.replace("-", "").strip()
+        return f"{clean[4:6]}-{clean[6:8]}" if len(clean) >= 8 else d
+
+    @staticmethod
+    def _latest_val(series: list[float]) -> float | None:
+        """Get latest non-NaN value from a list."""
+        for v in reversed(series):
+            if v is not None and not np.isnan(float(v)):
+                return round(float(v), 2)
+        return None
+
+    def _md_market_overview(self, overview: dict, trade_date: str) -> str:
+        """Section 一: 市场概览."""
+        today = overview["today"]
+        yesterday = overview.get("yesterday")
+        trend = overview.get("trend", [])
+        avg_5d = overview.get("avg_5d", 0)
+        avg_10d = overview.get("avg_10d", 0)
+
+        up, flat, down = today["up"], today["flat"], today["down"]
+        total = up + flat + down
+        up_pct = up / total * 100 if total else 0
+        down_pct = down / total * 100 if total else 0
+
+        lines = ["## 一、市场概览\n"]
+
+        # 涨跌家数
+        lines.append("### 涨跌家数\n")
+        lines.append("| 指标 | 今日 | 昨日 |")
+        lines.append("|------|------|------|")
+        up_str = f"{up}:{flat}:{down}"
+        if yesterday:
+            yu, yf, yd = yesterday["up"], yesterday["flat"], yesterday["down"]
+            yest_str = f"{yu}:{yf}:{yd}"
+        else:
+            yest_str = "N/A"
+        lines.append(f"| 上涨:平盘:下跌 | {up_str} | {yest_str} |")
+        lines.append(f"| 涨停 / 跌停 | {today['up_limit']} / {today['down_limit']} | "
+                     f"{yesterday['up_limit']} / {yesterday['down_limit']} |" if yesterday else "N/A |")
+        sentiment = "涨" if up >= down else "跌"
+        sp = up_pct if up >= down else down_pct
+        lines.append(f"| 市场情绪 | {sentiment} {sp:.1f}% | — |")
+        lines.append("")
+
+        # 成交额
+        lines.append("### 成交额\n")
+        lines.append("| 指标 | 今日 | 昨日 |")
+        lines.append("|------|------|------|")
+        tyi = today["total_yi"]
+        lines.append(f"| 两市成交额(亿) | {tyi:,.0f} | "
+                     f"{yesterday['total_yi']:,.0f} |" if yesterday else "N/A |")
+        lines.append(f"| 上证(亿) | {today['sh_yi']:,.0f} | "
+                     f"{yesterday['sh_yi']:,.0f} |" if yesterday else "N/A |")
+        lines.append(f"| 深证(亿) | {today['sz_yi']:,.0f} | "
+                     f"{yesterday['sz_yi']:,.0f} |" if yesterday else "N/A |")
+        if today.get("bj_yi", 0) > 0:
+            lines.append(f"| 北证(亿) | {today['bj_yi']:,.0f} | "
+                         f"{yesterday['bj_yi']:,.0f} |" if yesterday else "N/A |")
+        lines.append(f"| 5日均额(亿) | {avg_5d:,.0f} | — |")
+        lines.append(f"| 10日均额(亿) | {avg_10d:,.0f} | — |")
+        if yesterday:
+            chg = tyi - yesterday["total_yi"]
+            chg_pct = (tyi / yesterday["total_yi"] - 1) * 100
+            p = "+" if chg >= 0 else ""
+            lines.append(f"\n成交额变化：{p}{chg:,.0f}亿（{p}{chg_pct:.1f}%）")
+        lines.append("")
+
+        # 10日成交额趋势
+        if trend:
+            lines.append("### 10日成交额趋势\n")
+            lines.append("| 日期 | 成交额(亿) | 涨跌方向 |")
+            lines.append("|------|-----------|----------|")
+            for d in trend:
+                dt = self._short_date(d["date"])
+                amt = d["total_yi"]
+                direction = "涨多" if d.get("up", 0) >= d.get("down", 0) else "跌多"
+                lines.append(f"| {dt} | {amt:,.0f} | {direction} |")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _md_index_section(self, df, code: str, name: str,
+                          section_num: str, trade_date: str) -> str:
+        """Section 二/三: index OHLCV + technical analysis."""
+        lines = [f"## {section_num}、{name} ({code})\n"]
+
+        if df.empty:
+            lines.append("> 暂无数据\n")
+            return "\n".join(lines)
+
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) >= 2 else None
+        price = float(latest["close"])
+
+        # ── K线数据 ──
+        lines.append("### K线数据\n")
+        lines.append("| 指标 | 值 |")
+        lines.append("|------|-----|")
+        o = float(latest["open"])
+        h = float(latest["high"])
+        l = float(latest["low"])
+        c = float(latest["close"])
+        lines.append(f"| 开盘 | {o:.2f} |")
+        lines.append(f"| 最高 | {h:.2f} |")
+        lines.append(f"| 最低 | {l:.2f} |")
+        lines.append(f"| 收盘 | {c:.2f} |")
+        if prev is not None:
+            prev_c = float(prev["close"])
+            chg_pct = (c / prev_c - 1) * 100
+            open_vs = (o / prev_c - 1) * 100
+            p = "+" if chg_pct >= 0 else ""
+            po = "+" if open_vs >= 0 else ""
+            lines.append(f"| 昨收 | {prev_c:.2f} |")
+            lines.append(f"| 涨跌幅 | {p}{chg_pct:.2f}% |")
+            lines.append(f"| 开盘vs昨收 | {po}{open_vs:.2f}% |")
+        today_amt = float(latest["amount"]) / 1e5
+        lines.append(f"| 成交额(亿) | {today_amt:.2f} |")
+        # ATR
+        atr_arr = calc_atr(df, 14)
+        atr14 = atr_arr[-1] if len(atr_arr) > 0 and not np.isnan(atr_arr[-1]) else 0
+        atr_pct = (atr14 / price * 100) if atr14 > 0 else 0
+        lines.append(f"| ATR(14) | {atr14:.2f}（占价格{atr_pct:.1f}%） |")
+        lines.append("")
+
+        # ── K线形态 ──
+        lines.append("### K线形态\n")
+        try:
+            patterns = self.get_kline_patterns(df, obj_type="index")
+            if patterns:
+                for p in patterns:
+                    lines.append(f"- **{p['name']}** ({p['direction']}) — {p['note']}")
+            else:
+                lines.append("无明确多空意义的形态")
+        except Exception:
+            lines.append("N/A")
+        lines.append("")
+
+        # ── 均线分析 ──
+        lines.append("### 均线分析\n")
+        ma_periods = [5, 10, 20, 60, 120, 240]
+        mas = calc_ma(df, ma_periods)
+        lines.append("| 均线 | 值 | 方向 | 作用 | 扣抵日 | 扣抵量 | 后续均量 |")
+        lines.append("|------|-----|------|------|--------|--------|----------|")
+        for p in ma_periods:
+            mk = f"MA{p}"
+            mv = self._latest_val(mas[mk])
+            mdir = ma_direction(mas[mk])
+            role = get_ma_role(price, mv, mdir) if mv else "N/A"
+            off = get_offset_info(df, p)
+            off_date = self._short_date(off["offset_date"]) if off.get("offset_date") else "N/A"
+            off_amt = off.get("offset_amount_yi")
+            off_pct = off.get("vs_today_pct")
+            if off_amt is not None and off_pct is not None:
+                p_sign = "+" if off_pct > 0 else ""
+                off_str = f"{off_amt:.2f}亿（{p_sign}{off_pct:.1f}%）"
+            else:
+                off_str = "N/A"
+            avg_amt = off.get("avg_offset_amount_yi")
+            avg_pct = off.get("avg_vs_today_pct")
+            if avg_amt is not None and avg_pct is not None and off.get("window", 1) > 1:
+                a_sign = "+" if avg_pct > 0 else ""
+                avg_str = f"{avg_amt:.2f}亿（{a_sign}{avg_pct:.1f}%）"
+            else:
+                avg_str = "—"
+            mv_str = f"{mv:.2f}" if mv else "N/A"
+            lines.append(f"| {mk} | {mv_str} | {mdir} | {role} | {off_date} | {off_str} | {avg_str} |")
+
+        arrangement = ma_arrangement(df, medium_long_periods=[60, 120, 240])
+        lines.append(f"\n均线排列：**{arrangement}**\n")
+
+        # ── 成交额分析 ──
+        lines.append("### 成交额分析\n")
+        vol = volume_analysis(df)
+        lines.append("| 指标 | 值 |")
+        lines.append("|------|-----|")
+        lv = vol.get("latest_amount_yi")
+        lines.append(f"| 今日成交额 | {lv:.2f}亿 |" if lv else "| 今日成交额 | N/A |")
+        t5 = vol.get("trend_5d", "—")
+        lines.append(f"| 5日额趋势 | {t5} |")
+
+        def _amt_row(label: str, key_yi: str, key_pct: str) -> str:
+            v = vol.get(key_yi)
+            vp = vol.get(key_pct)
+            if v is not None and vp is not None:
+                ps = "+" if vp > 0 else ""
+                return f"| {label} | {v:.2f}亿（{ps}{vp:.1f}%） |"
+            return f"| {label} | N/A |"
+
+        lines.append(_amt_row("MA5扣抵量", "ma5_deduct_yi", "vs_ma5_deduct_pct"))
+        lines.append(_amt_row("MA10扣抵量", "ma10_deduct_yi", "vs_ma10_deduct_pct"))
+        lines.append(_amt_row("5日均量", "ma5_yi", "vs_ma5_pct"))
+        lines.append(_amt_row("10日均量", "ma10_yi", "vs_ma10_pct"))
+        lines.append(_amt_row("20日均量", "ma20_yi", "vs_ma20_pct"))
+        cs = vol.get("cross_state") or "—"
+        cd = vol.get("cross_days", 0)
+        cs_str = f"{cs} {cd}天" if cd and cs in ("金叉", "死叉") else cs
+        lines.append(f"| 5-10日均量状态 | {cs_str} |")
+        lines.append("")
+
+        # ── 技术指标 ──
+        lines.append("### 技术指标\n")
+        lines.append("| 指标 | 值 | 状态 |")
+        lines.append("|------|-----|------|")
+
+        # Short-term trend
+        def _ma_trend(idx: int) -> str:
+            m5 = self._latest_val(mas["MA5"][:idx + 1]) if idx < 0 else self._latest_val(mas["MA5"][idx:idx + 1])
+            m10 = self._latest_val(mas["MA10"])
+            m20 = self._latest_val(mas["MA20"])
+            _m5v = mas["MA5"][idx]
+            _m10v = mas["MA10"][idx]
+            _m20v = mas["MA20"][idx]
+            if any(np.isnan(float(v)) for v in [_m5v, _m10v, _m20v]):
+                return "盘整"
+            if float(_m5v) > float(_m10v) > float(_m20v):
+                return "多头"
+            elif float(_m5v) < float(_m10v) < float(_m20v):
+                return "空头"
+            return "盘整"
+
+        today_trend = _ma_trend(-1)
+        yesterday_trend = _ma_trend(-2) if len(df) >= 2 else "盘整"
+        if today_trend == "盘整" and yesterday_trend == "多头":
+            trend_label = "多头转盘整"
+        elif today_trend == "盘整" and yesterday_trend == "空头":
+            trend_label = "空头转盘整"
+        elif today_trend == "多头":
+            trend_label = "多头趋势"
+        elif today_trend == "空头":
+            trend_label = "空头趋势"
+        else:
+            trend_label = "盘整"
+        lines.append(f"| 短期趋势(MA5/10/20) | {trend_label} | — |")
+
+        # KD
+        kd = calc_kd(df)
+        k_val = self._latest_val(kd["K"])
+        d_val = self._latest_val(kd["D"])
+        kd_div = detect_kd_divergence(df, kd["K"], kd["D"])
+        if k_val is not None and d_val is not None:
+            if k_val > 80 and d_val > 80:
+                kd_zone = "超买区"
+            elif k_val < 20 and d_val < 20:
+                kd_zone = "超卖区"
+            else:
+                kd_zone = "常态区"
+        else:
+            kd_zone = "N/A"
+        lines.append(f"| KD.K | {self._val(k_val)} | {kd_zone} |")
+        lines.append(f"| KD.D | {self._val(d_val)} | |")
+        if k_val is not None and d_val is not None:
+            kd_diff = round(abs(k_val - d_val), 1)
+            diff_note = f"差值{kd_diff:.1f}" + (" ⚠开口过大" if kd_diff >= 20 else "")
+            lines.append(f"| KD差值 | {kd_diff:.1f} | {diff_note} |")
+        lines.append(f"| KD背离 | {kd_div.get('type') or '无'} | |")
+
+        # RSI
+        rsi = calc_rsi(df)
+        rsi_val = self._latest_val(rsi["RSI1"])
+        rsi_div = detect_rsi_divergence(df, rsi["RSI1"], kd["K"], kd["D"])
+        if rsi_val is not None:
+            if rsi_val > 70:
+                rsi_zone = "超买区"
+            elif rsi_val < 30:
+                rsi_zone = "超卖区"
+            else:
+                rsi_zone = "常态区"
+        else:
+            rsi_zone = "N/A"
+        lines.append(f"| RSI(6) | {self._val(rsi_val)} | {rsi_zone} |")
+        lines.append(f"| RSI背离 | {rsi_div.get('type') or '无'} | |")
+
+        # BIAS
+        bias = calc_bias(df, [10, 20])
+        bstatus = bias_status(bias, [10, 20])
+        b10 = self._latest_val(bias["BIAS10"])
+        b20 = self._latest_val(bias["BIAS20"])
+        b10s = bstatus.get("BIAS10", {}).get("status") or "—"
+        b20s = bstatus.get("BIAS20", {}).get("status") or "—"
+        lines.append(f"| BIAS10 | {self._pct_str(b10)} | {b10s} |")
+        lines.append(f"| BIAS20 | {self._pct_str(b20)} | {b20s} |")
+        lines.append("")
+
+        # ── 权重贡献 ──
+        lines.append("### 权重贡献\n")
+        try:
+            contrib = self.get_index_contribution(code, trade_date)
+            if contrib:
+                idx_info = contrib.get("index", {})
+                lines.append(f"指数涨跌：{self._val(idx_info.get('chg_pts'), '.2f')}点 "
+                             f"（{self._pct_str(idx_info.get('chg_pct'))}）\n")
+                for side, side_label in [("gainers", "领涨贡献 TOP 5"), ("losers", "领跌拖累 TOP 5")]:
+                    items = contrib.get(side, [])[:5]
+                    if items:
+                        lines.append(f"**{side_label}**\n")
+                        lines.append("| 排名 | 代码 | 名称 | 权重% | 涨跌幅 | 贡献点 |")
+                        lines.append("|------|------|------|-------|--------|--------|")
+                        for i, item in enumerate(items):
+                            lines.append(
+                                f"| {i + 1} | {item.get('code', 'N/A')} | "
+                                f"{item.get('name', 'N/A')} | "
+                                f"{self._val(item.get('weight'), '.2f')} | "
+                                f"{self._pct_str(item.get('chg_pct'))} | "
+                                f"{self._val(item.get('contrib'), '.3f')} |")
+                        lines.append("")
+        except Exception:
+            lines.append("暂无数据\n")
+
+        # ── 行业频次 ──
+        try:
+            freq = self.get_industry_frequency(code, trade_date)
+            if freq:
+                for f_side, f_label in [("gainers", "近5日频繁领涨"), ("losers", "近5日频繁领跌")]:
+                    items = freq.get(f_side, [])
+                    if items:
+                        lines.append(f"**{f_label}**（出现 ≥3天）\n")
+                        lines.append("| 行业 | 出现天数 |")
+                        lines.append("|------|----------|")
+                        for item in items:
+                            lines.append(f"| {item.get('industry', 'N/A')} | {item.get('days', 0)} |")
+                        lines.append("")
+        except Exception:
+            pass
+
+        return "\n".join(lines)
+
+    def _md_wave33(self, w33: dict) -> str:
+        """Section 四: 3浪3统计."""
+        lines = ["## 四、3浪3统计\n"]
+        dates = w33.get("dates", [])
+        counts = w33.get("counts", [])
+        profit_pcts = w33.get("profit_pcts", [])
+        trend_info = w33.get("trend", {})
+
+        if dates:
+            lines.append("| 日期 | 21日累计数 | 盈利率 | 趋势 |")
+            lines.append("|------|-----------|--------|------|")
+            trend_series = w33.get("trend_series", [])
+            for i, d in enumerate(dates):
+                dt = self._short_date(d)
+                cnt = counts[i] if i < len(counts) else "N/A"
+                pp = f"{profit_pcts[i]:.1f}%" if i < len(profit_pcts) and profit_pcts[i] is not None else "N/A"
+                ts = trend_series[i] if i < len(trend_series) else "—"
+                lines.append(f"| {dt} | {cnt} | {pp} | {ts} |")
+            lines.append("")
+
+        lines.append(f"**趋势判定**：{trend_info.get('label', 'N/A')}")
+        lines.append(f"最新窗口：{w33.get('last_window_start', '?')} ~ {w33.get('last_window_end', '?')}")
+        lines.append(f"当日新增：{w33.get('latest_day_new', 'N/A')} 只\n")
+        return "\n".join(lines)
+
+    def _md_sector_section(self, ranking: list[dict],
+                           freq_sh: dict | None,
+                           freq_cz: dict | None) -> str:
+        """Section 五: 板块分析."""
+        lines = ["## 五、板块分析\n"]
+
+        # TOP 10 gainers
+        lines.append("### 今日领涨 TOP 10\n")
+        lines.append("| 排名 | 板块 | 层级 | 涨跌幅 | 5日涨幅 | 20日涨幅 | 成交额(亿) |")
+        lines.append("|------|------|------|--------|---------|----------|------------|")
+        for i, r in enumerate(ranking[:10]):
+            lines.append(
+                f"| {i + 1} | {r.get('name', r.get('code', 'N/A'))} | "
+                f"{r.get('level', '')} | "
+                f"{self._pct_str(r.get('pct_change'))} | "
+                f"{self._pct_str(r.get('pct_5d'))} | "
+                f"{self._pct_str(r.get('pct_20d'))} | "
+                f"{self._val(r.get('amount', 0) / 1e5, '.2f')} |")
+        lines.append("")
+
+        # BOTTOM 10 losers
+        lines.append("### 今日领跌 BOTTOM 10\n")
+        lines.append("| 排名 | 板块 | 层级 | 涨跌幅 | 5日涨幅 | 20日涨幅 | 成交额(亿) |")
+        lines.append("|------|------|------|--------|---------|----------|------------|")
+        bottom = ranking[-10:][::-1] if len(ranking) >= 10 else ranking[::-1]
+        for i, r in enumerate(bottom):
+            lines.append(
+                f"| {i + 1} | {r.get('name', r.get('code', 'N/A'))} | "
+                f"{r.get('level', '')} | "
+                f"{self._pct_str(r.get('pct_change'))} | "
+                f"{self._pct_str(r.get('pct_5d'))} | "
+                f"{self._pct_str(r.get('pct_20d'))} | "
+                f"{self._val(r.get('amount', 0) / 1e5, '.2f')} |")
+        lines.append("")
+
+        # Industry frequency
+        for idx_label, freq in [("上证", freq_sh), ("创业板", freq_cz)]:
+            if not freq:
+                continue
+            for side, side_label in [("gainers", "频繁领涨"), ("losers", "频繁领跌")]:
+                items = freq.get(side, [])
+                if items:
+                    lines.append(f"### {idx_label} — {side_label}行业（近5日 ≥3天）\n")
+                    lines.append("| 行业 | 出现天数 |")
+                    lines.append("|------|----------|")
+                    for item in items:
+                        lines.append(f"| {item.get('industry', 'N/A')} | {item.get('days', 0)} |")
+                    lines.append("")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _md_ai_guides(ai_summary: dict | None, ai_sector: dict | None) -> str:
+        """Section 六: AI导语汇总."""
+        lines = ["## 六、AI 导语汇总\n"]
+
+        if ai_summary:
+            if "summary" in ai_summary:
+                lines.append(f"### 市场总览\n\n{ai_summary['summary']['content']}\n")
+            for gk, glabel in [("guide/sh_index", "上证指数"), ("guide/cz_index", "创业板指")]:
+                if gk in ai_summary:
+                    lines.append(f"### {glabel}\n\n{ai_summary[gk]['content']}\n")
+
+        if ai_sector:
+            if "sector_summary" in ai_sector:
+                lines.append(f"### 板块总览\n\n{ai_sector['sector_summary']['content']}\n")
+            # Per-industry guides (watchlist only — too many to include all)
+            for gk in sorted(ai_sector.keys()):
+                if gk == "sector_summary":
+                    continue
+                content = ai_sector[gk].get("content", "")
+                if content and content != "AI 摘要暂时不可用":
+                    ind_code = gk.replace("sector/", "")
+                    lines.append(f"### {ind_code}\n\n{content}\n")
+
+        if not lines[1:]:  # Only header
+            lines.append("暂无AI导语\n")
+
+        return "\n".join(lines)
+
     # ── AI 功能版本号 ─────────────────────────────────────────────
     # X.Y.Z (语义化，仅用于验证代码是否热更成功)
     #   X — 大板块上线时 +1，Y/Z 归零  （例：市场全景→1，个股追踪→2）
@@ -1867,7 +2423,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "9.24.4"
+    _AI_VERSION = "9.24.5"
 
     def run_winrate_scan(self, cfg, progress_cb=None, timing_sink=None):
         """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。

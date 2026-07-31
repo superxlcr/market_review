@@ -30,3 +30,4 @@
 - [Trading Time Boundaries](trading-time-boundaries.md) — 交易的时间边界：三个边界防心态失衡，投入过多→期待过高→心态崩盘
 - [QFQ vs 通达信](qfq-vs-tongdaxin.md) — 我们前复权(乘法)与通达信(减现金分红)差一点点是口径不同不是bug；raw已核对
 - [Cluster Effect Findings](cluster-effect-findings.md) — 族群效应分析：±2交易日≥3同行最佳窗口，申万分类不可靠→改用同花顺概念标签
+- [Review Process](review-process.md) — 复盘流程：暗号「复盘」→ 4步框架 → journal/ 存取结论，一次一个问题引导思考
