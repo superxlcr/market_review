@@ -374,6 +374,10 @@ class DataProvider:
             total = _listed_so_far(d)
             if total == 0:
                 continue   # 该日理论上无股票上市（极早日期），跳过
+            # Skip non-trading days (holidays): real trading days have 4000+
+            # stocks with K-line data; holidays have ~50-100 from stale sources.
+            if cnt < 500:
+                continue
             ratio = cnt / total
             if ratio < self._COVERAGE_WARN_THRESHOLD:
                 gaps.append((d, cnt, total))

@@ -504,11 +504,14 @@ class CacheManager:
         # is present for that day.  This keeps the daily_basic cache
         # check independent: K-line cached ≠ daily_basic cached.
         # 14 days covers the longest A-share holiday (CNY 10-12 days).
+        # _MIN_TRADING_COUNT: real trading days have 5000+ K-line records;
+        # holiday noise (e.g. CNY) has ~50-100. 500 is a safe floor.
+        _MIN_TRADING_COUNT = 500
         end_dt = datetime.strptime(end_date, "%Y%m%d")
         found_trading_day = False
         for offset in range(15):  # 0..14 days back
             check_date = (end_dt - timedelta(days=offset)).strftime("%Y%m%d")
-            if self.count_daily_date(check_date) > 0:
+            if self.count_daily_date(check_date) >= _MIN_TRADING_COUNT:
                 # Found a trading day — daily_basic must also have data
                 found_trading_day = True
                 if self.count_daily_basic_date(check_date) == 0:
