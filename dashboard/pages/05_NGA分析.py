@@ -133,6 +133,36 @@ if st.button("🔍 分析", type="primary", use_container_width=True):
                     today = rows_asc[-1]
                     advice2 = calculate_advice2(yesterday, today, trend)
 
+                # ── 回调一半序列（从阶段顶开始，逐日 (high + running_low)/2，跌破0.618后才画）──
+                half_retrace_series: list[dict] = []
+                half_retrace_trigger_date: str = ""
+                if swing.fibonacci_valid and swing.high > 0 and swing.f618 > 0:
+                    # 找阶段顶部对应的 K 线（最后一次出现 high 的 bar）
+                    peak_idx = -1
+                    for idx in range(len(rows_asc) - 1, -1, -1):
+                        if abs(float(rows_asc[idx].get("high", 0) or 0) - swing.high) < 0.01:
+                            peak_idx = idx
+                            break
+                    if peak_idx >= 0:
+                        running_low = float(rows_asc[peak_idx].get("low", swing.high) or swing.high)
+                        triggered = False
+                        for idx in range(peak_idx, len(rows_asc)):
+                            bar_low = float(rows_asc[idx].get("low", 0) or 0)
+                            bar_date = str(rows_asc[idx].get("date", ""))
+                            if bar_low > 0 and bar_low < running_low:
+                                running_low = bar_low
+                            hr_price = round((swing.high + running_low) / 2.0, 2)
+                            # 跌破 0.618 才激活
+                            if not triggered and bar_low > 0 and bar_low < swing.f618:
+                                triggered = True
+                                half_retrace_trigger_date = bar_date
+                            if triggered:
+                                half_retrace_series.append({
+                                    "date": bar_date,
+                                    "price": hr_price,
+                                })
+                half_retrace_current = half_retrace_series[-1]["price"] if half_retrace_series else 0.0
+
                 # ── 存 session ──
                 st.session_state.nga_df = df
                 st.session_state.nga_swing = swing
@@ -145,6 +175,8 @@ if st.button("🔍 分析", type="primary", use_container_width=True):
                 st.session_state.nga_advice2 = advice2
                 st.session_state.nga_rows = rows_asc
                 st.session_state.nga_last_incomplete = last_bar_incomplete
+                st.session_state.nga_half_retrace_series = half_retrace_series
+                st.session_state.nga_half_retrace_current = half_retrace_current
 
                 st.success(f"✅ {selected_code} MACD 波段分析完成")
 
@@ -166,6 +198,8 @@ if st.session_state.get("nga_swing"):
     advice2 = st.session_state.get("nga_advice2", {"text": "—", "className": "advice-normal"})
     rows_asc = st.session_state.get("nga_rows", [])
     last_incomplete = st.session_state.get("nga_last_incomplete", False)
+    half_retrace_series = st.session_state.get("nga_half_retrace_series", [])
+    half_retrace_current = st.session_state.get("nga_half_retrace_current", 0.0)
 
     if swing.block_reason:
         st.warning(f"⚠️ {swing.block_reason}")
@@ -213,7 +247,28 @@ if st.session_state.get("nga_swing"):
         st.subheader("📐 斐波那契回调位 （⚠️ 上一波段 — 当前为筑底反弹，非回调）")
 
     # 始终显示斐波那契卡片 (无效时回退到上一个死叉波段)
-    fc1, fc2, fc3, fc4 = st.columns(4)
+    fc_half, fc1, fc2, fc3, fc4 = st.columns(5)
+    with fc_half:
+        if half_retrace_current > 0:
+            dist_half = (current_price / half_retrace_current - 1) * 100
+            st.html(f"""
+            <div style="border-radius:0.5rem;padding:0.75rem;text-align:center;
+                        background:linear-gradient(135deg,#fff3e0,#ffe0b2);border:2px solid #ff6d00;">
+                <div style="font-size:0.75rem;color:#e65100;">回调一半</div>
+                <div style="font-size:1.6rem;font-weight:700;color:#bf360c;">{half_retrace_current:.2f}</div>
+                <div style="font-size:0.8rem;color:#888;">距现价 {dist_half:+.1f}%</div>
+                <div style="font-size:0.7rem;color:#888;">(P + 当前最低) / 2</div>
+            </div>
+            """)
+        else:
+            st.html("""
+            <div style="border-radius:0.5rem;padding:0.75rem;text-align:center;
+                        background:#f5f5f5;border:1px dashed #ccc;">
+                <div style="font-size:0.75rem;color:#888;">回调一半</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#999;">—</div>
+                <div style="font-size:0.7rem;color:#999;">尚未跌破 0.618</div>
+            </div>
+            """)
     with fc1:
         dist_382 = (current_price / swing.f382 - 1) * 100 if swing.f382 > 0 else 0
         highlight_382 = abs(dist_382) <= 3.0
@@ -409,6 +464,19 @@ if st.session_state.get("nga_swing"):
                 x=date_short, y=ma_tail, mode="lines",
                 line=dict(color=color, width=width), name=f"MA{period}",
                 hovertemplate=f"MA{period}: %{{y:.2f}}<extra></extra>",
+            ), row=1, col=1)
+
+    # 回调一半动态线 (从阶段顶开始, 逐日 (high + running_low)/2)
+    if half_retrace_series:
+        hr_map = {p["date"]: p["price"] for p in half_retrace_series}
+        hr_y = [hr_map.get(d, None) for d in plot_df["date"]]
+        if any(v is not None for v in hr_y):
+            fig.add_trace(go.Scatter(
+                x=date_short, y=hr_y, mode="lines+markers",
+                line=dict(color="#ff6d00", width=1.5), marker=dict(size=3, color="#ff6d00"),
+                name=f"回调一半 {half_retrace_current:.2f}",
+                connectgaps=False,
+                hovertemplate="回调一半: %{y:.2f}<extra></extra>",
             ), row=1, col=1)
 
     # 斐波那契水平线 (始终显示, 无效时显示的是上一个上升波段)
