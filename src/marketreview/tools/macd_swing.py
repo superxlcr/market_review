@@ -73,6 +73,8 @@ class MacdSwingResult:
     # 阶段顶/底
     high: float = 0.0        # 阶段顶部价格
     low: float = 0.0         # 阶段底部价格
+    high_date: str = ""      # 阶段顶部日期
+    low_date: str = ""       # 阶段底部日期
     high_source: str = ""    # "up-leg-high" | "running-tail-high" | "range"
     low_source: str = ""     # "down-leg-low" | "running-tail-low" | "range"
 
@@ -155,20 +157,25 @@ def find_macd_swing(
         result.block_reason = "MACD 数据不足 (需 ≥26 日)"
         return result
 
-    # 辅助函数: 区间最高/最低
-    def segment_high(frm: int, to: int) -> float:
+    # 辅助函数: 区间最高/最低, 返回 (value, bar_index)
+    def segment_high(frm: int, to: int) -> tuple[float, int]:
         v = 0.0
+        vi = -1
         for j in range(max(frm, 0), min(to + 1, len(highs))):
-            v = max(v, highs[j])
-        return v
+            if highs[j] > v:
+                v = highs[j]
+                vi = j
+        return v, vi
 
-    def segment_low(frm: int, to: int) -> float:
+    def segment_low(frm: int, to: int) -> tuple[float, int]:
         v = float("inf")
+        vi = -1
         for j in range(max(frm, 0), min(to + 1, len(lows))):
             lv = lows[j]
-            if lv > 0:
-                v = min(v, lv)
-        return v if v != float("inf") else 0.0
+            if lv > 0 and lv < v:
+                v = lv
+                vi = j
+        return (v, vi) if v != float("inf") else (0.0, -1)
 
     # 交叉扫描
     # 盘中最后一根 K 线不参与交叉判定 (避免闪烁)
@@ -176,6 +183,11 @@ def find_macd_swing(
 
     high = 0.0
     low = 0.0
+    high_date = ""
+    low_date = ""
+    # 斐波那契专用 low: 死叉时保存的波段原点 low, 不被尾段新低覆盖
+    fib_low = 0.0
+    fib_low_date = ""
     high_source = "range"
     low_source = "range"
     last_golden_idx = -1
@@ -196,19 +208,27 @@ def find_macd_swing(
         # 金叉: DIFF 上穿 DEA
         if prev_m["diff"] <= prev_m["dea"] and curr_m["diff"] > curr_m["dea"]:
             frm = last_death_idx - 1 if last_death_idx > -1 else 0
-            low = segment_low(frm, i - 1)
+            low, low_i = segment_low(frm, i - 1)
             low_source = "down-leg-low"
+            if low_i >= 0:
+                low_date = str(klines[low_i].get("date", ""))
             last_golden_idx = i
             golden_count += 1
 
         # 死叉: DIFF 下穿 DEA
         if prev_m["diff"] >= prev_m["dea"] and curr_m["diff"] < curr_m["dea"]:
             frm = last_golden_idx - 1 if last_golden_idx > -1 else 0
-            high = segment_high(frm, i - 1)
+            high, high_i = segment_high(frm, i - 1)
             high_source = "up-leg-high"
+            if high_i >= 0:
+                high_date = str(klines[high_i].get("date", ""))
             last_death_idx = i
             death_count += 1
-            # 死叉 = 上升波段结束, 此时 (low, high) 构成有效斐波那契, 保存作为兜底
+            # 死叉 = 上升波段结束, 此时 (low, high) 构成有效斐波那契.
+            # 保存 fib_low (波段原点, 日期一定在 high 之前), 后续尾段新低不能覆盖它.
+            fib_low = low
+            fib_low_date = low_date
+            # 保存斐波那契数值作为兜底 (金叉结尾时回退用)
             if low > 0 and high > 0:
                 d = high - low
                 prev_fib = (
@@ -223,18 +243,25 @@ def find_macd_swing(
     last_cross_idx = max(last_golden_idx, last_death_idx)
 
     if last_cross_idx > -1:
-        # 跟踪新高 (如死叉后顶背离创新高)
-        running_high = segment_high(last_cross_idx - 1, last_idx)
+        # 跟踪新高 (如死叉后顶背离创新高) — 两种交叉都适用
+        running_high, running_high_i = segment_high(last_cross_idx - 1, last_idx)
         if running_high > high:
             high = running_high
             high_source = "running-tail-high"
+            if running_high_i >= 0:
+                high_date = str(klines[running_high_i].get("date", ""))
 
-        # 跟踪新低 (仅当已有底部值时)
-        if low > 0:
-            running_low = segment_low(last_cross_idx - 1, last_idx)
+        # 跟踪新低: 仅金叉结尾时允许 (下跌段可能继续探底).
+        # 死叉结尾时 low 是上升波段原点, 日期在 high 前面;
+        # 尾段找到的更低价是 high 之后的回调新低, 不能覆盖斐波那契的波段原点.
+        is_golden_end = last_golden_idx > last_death_idx
+        if low > 0 and is_golden_end:
+            running_low, running_low_i = segment_low(last_cross_idx - 1, last_idx)
             if running_low > 0 and running_low < low:
                 low = running_low
                 low_source = "running-tail-low"
+                if running_low_i >= 0:
+                    low_date = str(klines[running_low_i].get("date", ""))
 
     # 兜底
     if high <= 0:
@@ -246,6 +273,8 @@ def find_macd_swing(
 
     result.high = round(high, 2)
     result.low = round(low, 2)
+    result.high_date = high_date
+    result.low_date = low_date
     result.high_source = high_source
     result.low_source = low_source
     result.golden_cross_count = golden_count

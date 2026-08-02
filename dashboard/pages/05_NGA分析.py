@@ -212,10 +212,15 @@ if st.session_state.get("nga_swing"):
     st.subheader("📊 MACD 波段结构")
 
     c1, c2, c3, c4, c5 = st.columns(5)
+    # 日期格式: 20260801 → 0801
+    high_date_short = swing.high_date[4:8] if len(swing.high_date) >= 8 else swing.high_date
+    low_date_short = swing.low_date[4:8] if len(swing.low_date) >= 8 else swing.low_date
     with c1:
-        st.metric("阶段顶部", f"{swing.high:.2f}", delta=f"来源: {swing.high_source}")
+        st.metric("阶段顶部", f"{swing.high:.2f}",
+                  delta=f"@{high_date_short} · {swing.high_source}" if high_date_short else f"来源: {swing.high_source}")
     with c2:
-        st.metric("阶段底部", f"{swing.low:.2f}", delta=f"来源: {swing.low_source}")
+        st.metric("阶段底部", f"{swing.low:.2f}",
+                  delta=f"@{low_date_short} · {swing.low_source}" if low_date_short else f"来源: {swing.low_source}")
     with c3:
         band_pct = swing.band_range_pct
         st.metric("波段幅度", f"{swing.band_range:.2f}",
