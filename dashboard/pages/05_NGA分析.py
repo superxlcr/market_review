@@ -423,10 +423,10 @@ if st.session_state.get("nga_swing"):
     chg_tail = chg_pct.tail(display_tail).to_numpy()
 
     fig = make_subplots(
-        rows=3, cols=1,
+        rows=4, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.02,
-        row_heights=[0.50, 0.25, 0.25],
+        row_heights=[0.42, 0.13, 0.225, 0.225],
     )
 
     # ── Row 1: K线 + 斐波那契线 + 均线 ──
@@ -513,7 +513,32 @@ if st.session_state.get("nga_swing"):
         row=1, col=1,
     )
 
-    # ── Row 2: MACD 柱 ──
+    # ── Row 2: 成交额 (亿) + MA5/MA10 ──
+    amount_yi = plot_df["amount"].to_numpy() / 1e5  # 千元→亿
+    amount_colors = [
+        "#e53935" if plot_df.iloc[i]["close"] >= plot_df.iloc[i]["open"] else "#43a047"
+        for i in range(len(plot_df))
+    ]
+    fig.add_trace(go.Bar(
+        x=date_short, y=amount_yi, marker_color=amount_colors,
+        name="成交额",
+        hovertemplate="成交额: %{y:.1f}亿<extra></extra>",
+    ), row=2, col=1)
+
+    # 成交额 MA5 / MA10 (全量计算, 截尾画图)
+    full_amount = df["amount"].to_numpy() / 1e5
+    for period, color in [(5, "#ff9800"), (10, "#2196f3")]:
+        if len(full_amount) >= period:
+            amt_ma = [sum(full_amount[max(0, i - period + 1):i + 1]) / min(i + 1, period)
+                      for i in range(len(full_amount))]
+            amt_ma_tail = amt_ma[-display_tail:]
+            fig.add_trace(go.Scatter(
+                x=date_short, y=amt_ma_tail, mode="lines",
+                line=dict(color=color, width=1.0), name=f"成交额MA{period}",
+                hovertemplate=f"成交额MA{period}: %{{y:.1f}}亿<extra></extra>",
+            ), row=2, col=1)
+
+    # ── Row 3: MACD 柱 ──
     macd_x = date_short.tolist()
     macd_vals = [m["macd"] for m in macd_tail]
     # 红涨绿跌
@@ -522,25 +547,25 @@ if st.session_state.get("nga_swing"):
         x=macd_x, y=macd_vals, marker_color=macd_colors,
         name="MACD 柱",
         hovertemplate="MACD: %{y:.4f}<extra></extra>",
-    ), row=2, col=1)
+    ), row=3, col=1)
 
-    # ── Row 3: DIFF + DEA ──
+    # ── Row 4: DIFF + DEA ──
     diff_vals = [m["diff"] for m in macd_tail]
     dea_vals = [m["dea"] for m in macd_tail]
     fig.add_trace(go.Scatter(
         x=macd_x, y=diff_vals, mode="lines",
         line=dict(color="#2196f3", width=1.2), name="DIFF",
         hovertemplate="DIFF: %{y:.4f}<extra></extra>",
-    ), row=3, col=1)
+    ), row=4, col=1)
     fig.add_trace(go.Scatter(
         x=macd_x, y=dea_vals, mode="lines",
         line=dict(color="#ff9800", width=1.2), name="DEA",
         hovertemplate="DEA: %{y:.4f}<extra></extra>",
-    ), row=3, col=1)
+    ), row=4, col=1)
 
     # 零轴
-    fig.add_hline(y=0, line=dict(color="#888", width=0.5), row=2, col=1)
     fig.add_hline(y=0, line=dict(color="#888", width=0.5), row=3, col=1)
+    fig.add_hline(y=0, line=dict(color="#888", width=0.5), row=4, col=1)
 
     # Lock y-axis range to visible K-lines
     y_min = plot_df["low"].min()
@@ -550,17 +575,19 @@ if st.session_state.get("nga_swing"):
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
-        template="plotly_white", height=700,
+        template="plotly_white", height=850,
         margin=dict(l=20, r=20, t=10, b=20),
         legend=dict(orientation="h", yanchor="top", y=1.05, xanchor="left", x=0),
         hovermode="x unified",
     )
     fig.update_xaxes(title_text="", showticklabels=False, row=1, col=1)
     fig.update_xaxes(title_text="", showticklabels=False, row=2, col=1)
-    fig.update_xaxes(title_text="日期", showticklabels=True, row=3, col=1)
+    fig.update_xaxes(title_text="", showticklabels=False, row=3, col=1)
+    fig.update_xaxes(title_text="日期", showticklabels=True, row=4, col=1)
     fig.update_yaxes(title_text="价格", row=1, col=1)
-    fig.update_yaxes(title_text="MACD 柱", row=2, col=1)
-    fig.update_yaxes(title_text="DIFF / DEA", row=3, col=1)
+    fig.update_yaxes(title_text="成交额（亿）", row=2, col=1)
+    fig.update_yaxes(title_text="MACD 柱", row=3, col=1)
+    fig.update_yaxes(title_text="DIFF / DEA", row=4, col=1)
 
     st.plotly_chart(fig, use_container_width=True)
 
