@@ -198,6 +198,13 @@ def find_macd_swing(
     # 追踪上一个有效斐波那契 (死叉确认的上升波段).
     # 当最后交叉为金叉时, 回退到上一个上升波段的斐波那契, 而不是什么都不显示.
     prev_fib = (0.0, 0.0, 0.0, 0.0)  # f382, f618, f786, mid
+    # 上一个有效上涨波段 (死叉确认) 的顶/底/日期/来源 — 金叉结尾时整组替换
+    prev_band_high = 0.0
+    prev_band_low = 0.0
+    prev_band_high_date = ""
+    prev_band_low_date = ""
+    prev_band_high_source = ""
+    prev_band_low_source = ""
 
     for i in range(1, cross_end):
         prev_m = macd_series[i - 1]
@@ -228,6 +235,13 @@ def find_macd_swing(
             # 保存 fib_low (波段原点, 日期一定在 high 之前), 后续尾段新低不能覆盖它.
             fib_low = low
             fib_low_date = low_date
+            # 保存整个有效上涨波段 (金叉结尾时整组回退用)
+            prev_band_high = high
+            prev_band_low = low
+            prev_band_high_date = high_date
+            prev_band_low_date = low_date
+            prev_band_high_source = high_source
+            prev_band_low_source = low_source
             # 保存斐波那契数值作为兜底 (金叉结尾时回退用)
             if low > 0 and high > 0:
                 d = high - low
@@ -281,18 +295,27 @@ def find_macd_swing(
     result.death_cross_count = death_count
     result.last_cross_type = "golden" if last_golden_idx > last_death_idx else "death"
 
+    # ── 金叉结尾 → 当前是下跌反弹，整组回退到上一个死叉确认的上涨波段 ──
+    if result.last_cross_type == "golden" and prev_band_high > 0 and prev_band_low > 0:
+        result.high = round(prev_band_high, 2)
+        result.low = round(prev_band_low, 2)
+        result.high_date = prev_band_high_date
+        result.low_date = prev_band_low_date
+        result.high_source = prev_band_high_source
+        result.low_source = prev_band_low_source
+
     # ── 斐波那契回调位 ──
     # death 结尾 → 低在前高在后 → 上升波段回调 → 当前斐波那契有效       ✅
     # golden 结尾 → 高在前低在后 → 下跌波段反弹 → 回退到上一个死叉波段   ⚠️
     result.fibonacci_valid = (result.last_cross_type == "death")
-    diff = high - low
+    diff = result.high - result.low
     result.band_range = round(diff, 2)
-    result.band_range_pct = round(diff / low * 100, 1) if low > 0 else 0.0
+    result.band_range_pct = round(diff / result.low * 100, 1) if result.low > 0 else 0.0
     if result.fibonacci_valid:
-        result.f382 = round(high - diff * 0.382, 3)
-        result.f618 = round(high - diff * 0.618, 3)
-        result.f786 = round(high - diff * 0.786, 3)
-        result.mid_point = round((high + low) / 2.0, 3)
+        result.f382 = round(result.high - diff * 0.382, 3)
+        result.f618 = round(result.high - diff * 0.618, 3)
+        result.f786 = round(result.high - diff * 0.786, 3)
+        result.mid_point = round((result.high + result.low) / 2.0, 3)
     else:
         # 回退到上一个死叉确认的上升波段斐波那契
         result.f382, result.f618, result.f786, result.mid_point = prev_fib
