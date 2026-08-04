@@ -1885,10 +1885,11 @@ class DashboardService:
         if overview and "error" not in overview:
             sections.append(self._md_market_overview(overview, td))
 
-        # ── 二/三、指数分析 ──
+        # ── 二/三/四、指数分析 ──
         for idx_code, idx_name, section_num in [
             ("000001.SH", "上证指数", "二"),
             ("399006.SZ", "创业板指", "三"),
+            ("000688.SH", "科创50", "四"),
         ]:
             try:
                 df = self.get_index_data(idx_code, lookback=360, end_date=td)
@@ -1899,7 +1900,7 @@ class DashboardService:
                 log.warning("generate_data_md: index %s failed: %s", idx_code, e)
                 sections.append(f"## {section_num}、{idx_name} ({idx_code})\n\n> ⚠ 数据获取失败: {e}\n")
 
-        # ── 四、3浪3统计 ──
+        # ── 五、3浪3统计 ──
         try:
             w33 = self.get_wave33_data(end_date=td)
             if w33 and w33.get("dates"):
@@ -1907,7 +1908,7 @@ class DashboardService:
         except Exception as e:
             log.warning("generate_data_md: wave33 failed: %s", e)
 
-        # ── 五、板块分析 ──
+        # ── 六、板块分析 ──
         try:
             ranking = self.get_industry_ranking(td, lookback=21)
             if ranking:
@@ -1917,9 +1918,9 @@ class DashboardService:
                 sections.append(self._md_sector_section(ranking, freq_sh, freq_cz))
         except Exception as e:
             log.warning("generate_data_md: sector analysis failed: %s", e)
-            sections.append("## 五、板块分析\n\n> ⚠ 数据获取失败\n")
+            sections.append("## 六、板块分析\n\n> ⚠ 数据获取失败\n")
 
-        # ── 六、AI导语 ──
+        # ── 七、AI导语 ──
         try:
             ai_summary = self.get_ai_summary(td)
             ai_sector = self.get_ai_summary(td, summary_type="sector_analysis")
@@ -2389,13 +2390,13 @@ class DashboardService:
 
     @staticmethod
     def _md_ai_guides(ai_summary: dict | None, ai_sector: dict | None) -> str:
-        """Section 六: AI导语汇总."""
-        lines = ["## 六、AI 导语汇总\n"]
+        """Section 七: AI导语汇总."""
+        lines = ["## 七、AI 导语汇总\n"]
 
         if ai_summary:
             if "summary" in ai_summary:
                 lines.append(f"### 市场总览\n\n{ai_summary['summary']['content']}\n")
-            for gk, glabel in [("guide/sh_index", "上证指数"), ("guide/cz_index", "创业板指")]:
+            for gk, glabel in [("guide/sh_index", "上证指数"), ("guide/cz_index", "创业板指"), ("guide/kc_index", "科创50")]:
                 if gk in ai_summary:
                     lines.append(f"### {glabel}\n\n{ai_summary[gk]['content']}\n")
 
@@ -2423,7 +2424,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "9.26.0"
+    _AI_VERSION = "9.27.0"
 
     def run_winrate_scan(self, cfg, progress_cb=None, timing_sink=None):
         """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。
@@ -2752,7 +2753,19 @@ class DashboardService:
         cz_user_tmpl = self._load_prompt("guide_cz_index")
         cz_user_msg = cz_user_tmpl.format(market_data=market_data_json, data=cz_data_json)
 
-        # --- 4. Guide: SH + CZ index (concurrent LLM calls) ---
+        # 科创50
+        kc_rows = self._dp.get_daily("000688.SH", end_date=trade_date, lookback_days=360)
+        kc_summary = build_technical_summary("000688.SH", "科创50", kc_rows)
+        kc_contrib = self.get_index_contribution("000688.SH", trade_date)
+        kc_freq = self.get_industry_frequency("000688.SH", trade_date)
+        kc_data_json = _json.dumps(
+            self._build_index_ai_data("000688.SH", "科创50", kc_rows, kc_summary,
+                                      contrib=kc_contrib, freq=kc_freq),
+            ensure_ascii=False)
+        kc_user_tmpl = self._load_prompt("guide_kc_index")
+        kc_user_msg = kc_user_tmpl.format(market_data=market_data_json, data=kc_data_json)
+
+        # --- 4. Guide: SH + CZ + KC index (concurrent LLM calls) ---
         from marketreview.llm.concurrent import batch_chat
 
         log.info("stage=index_data_prep elapsed=%.1fs", _time.perf_counter() - _t2)
@@ -2760,12 +2773,13 @@ class DashboardService:
         INDEX_TASKS = [
             {"label": "guide/sh_index", "user_message": sh_user_msg},
             {"label": "guide/cz_index", "user_message": cz_user_msg},
+            {"label": "guide/kc_index", "user_message": kc_user_msg},
         ]
 
         def _index_progress(phase: str, current: int, total: int, label: str):
             if progress_cb is None:
                 return
-            label_map = {"guide/sh_index": "上证指数", "guide/cz_index": "创业板指"}
+            label_map = {"guide/sh_index": "上证指数", "guide/cz_index": "创业板指", "guide/kc_index": "科创50"}
             if phase == "start":
                 progress_cb("index_start", f"正在生成指数总结（共 {total} 个）...")
             elif phase == "progress":
@@ -2775,16 +2789,17 @@ class DashboardService:
                 progress_cb("index_done", f"指数总结全部完成（{total}/{total}）")
 
         if progress_cb:
-            progress_cb("index_start", f"正在生成指数总结（共 2 个）...")
+            progress_cb("index_start", f"正在生成指数总结（共 3 个）...")
         index_results = batch_chat(
             llm, sys_prompt, INDEX_TASKS,
-            max_workers=2,
+            max_workers=3,
             progress_cb=_index_progress,
             fail_placeholder=FAIL_PLACEHOLDER,
         )
 
         guide_sh = index_results["guide/sh_index"]
         guide_cz = index_results["guide/cz_index"]
+        guide_kc = index_results["guide/kc_index"]
 
         if guide_sh != FAIL_PLACEHOLDER:
             self._dp.cache.save_ai_summary(
@@ -2800,6 +2815,13 @@ class DashboardService:
             )
         result["guide/cz_index"] = {"content": guide_cz, "model": model}
 
+        if guide_kc != FAIL_PLACEHOLDER:
+            self._dp.cache.save_ai_summary(
+                trade_date, "market_overview", "guide/kc_index",
+                guide_kc, model,
+            )
+        result["guide/kc_index"] = {"content": guide_kc, "model": model}
+
         # --- 5. Summary (market panorama overview, placed at top of page) ---
         _t4 = _time.perf_counter()
         if progress_cb:
@@ -2810,6 +2832,7 @@ class DashboardService:
                 market_data=market_data_json,
                 guide_sh=guide_sh,
                 guide_cz=guide_cz,
+                guide_kc=guide_kc,
             ))
         except Exception as e:
             import traceback as _tb3

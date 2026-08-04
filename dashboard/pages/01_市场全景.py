@@ -356,3 +356,13 @@ with st.expander("📉 创业板指 399006.SZ", expanded=True):
     _df_cz = _service.get_index_data("399006.SZ", end_date=_trade_date_yyyymmdd)
     render_ohlcv_section(_df_cz, "399006.SZ", "创业板指", _service, "index")
 
+st.divider()
+
+# ============ 科创50 ============
+with st.expander("📉 科创50 000688.SH", expanded=True):
+    # AI 导语
+    if _ai_cache and "guide/kc_index" in _ai_cache:
+        st.info(f"🤖 {_ai_cache['guide/kc_index']['content']}")
+    _df_kc = _service.get_index_data("000688.SH", end_date=_trade_date_yyyymmdd)
+    render_ohlcv_section(_df_kc, "000688.SH", "科创50", _service, "index")
+
