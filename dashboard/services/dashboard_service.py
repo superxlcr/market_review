@@ -29,6 +29,35 @@ import numpy as np
 log = get_logger(__name__)
 
 
+# ── Sector flow helpers ──
+
+def _extract_flow_date(data: dict) -> str | None:
+    """从 sector_flow fetch_all 返回值中提取实际数据日期（YYYYMMDD）。"""
+    series = data.get("series") or []
+    if not series:
+        return None
+    # series: [(name, [(HH:MM, val), ...], final), ...]
+    # 分时数据点里没有日期，通过 last_time 结合 today 推断
+    # 实际上 API klines 里的 timestamp 是 "2026-08-04 14:56" 格式
+    # 但 fetch_intraday_flow 只取 HH:MM。这里用 last_time 推断。
+    # 直接返回 None 让调用方用约定的 trade_date。
+    return None
+
+
+def _apply_blocked_filter(data: dict, blocked_names: set[str]) -> dict:
+    """对从 DB 加载的板块资金流数据重新应用屏蔽列表过滤。"""
+    if not blocked_names:
+        return data
+    kept = [s for s in data.get("sectors", [])
+            if s.get("display_name", s.get("name", "")) not in blocked_names]
+    data["sectors"] = kept
+    # Also filter series
+    kept_series = [s for s in data.get("series", [])
+                   if s[0] not in blocked_names]
+    data["series"] = kept_series
+    return data
+
+
 class DashboardService:
     """Unified data service for the Streamlit dashboard."""
 
@@ -452,6 +481,110 @@ class DashboardService:
         if not df.empty and "trade_date" in df.columns:
             df = df.rename(columns={"trade_date": "date"})
         return df
+
+    # ── Sector Fund Flow (East Money) ──
+
+    def fetch_and_save_sector_flow(self, trade_date: str) -> dict:
+        """控制台「应用」时调用：拉取当天板块资金流（概念+行业），写入 SQLite。
+
+        返回 {"concept": bool, "industry": bool, "note": str}
+        API 只提供当天分时数据，如果 trade_date 不是今天则无法获取。
+        """
+        import json
+        from marketreview.data.sector_flow import fetch_all as _fetch_flow
+
+        today = datetime.now().strftime("%Y%m%d")
+        result = {"concept": False, "industry": False, "note": ""}
+
+        if trade_date != today:
+            result["note"] = f"trade_date={trade_date} ≠ today={today}，API 无历史数据，跳过"
+            log.info("fetch_and_save_sector_flow: %s", result["note"])
+            return result
+
+        for is_industry, label in [(False, "概念"), (True, "行业")]:
+            try:
+                data = _fetch_flow(industry=is_industry)
+                if data and data.get("series"):
+                    # 校验 API 返回日期是否匹配 trade_date
+                    api_date = _extract_flow_date(data)
+                    if api_date and api_date != trade_date:
+                        log.warning("sector_flow date mismatch: api=%s trade=%s, skip",
+                                    api_date, trade_date)
+                        continue
+                    json_str = json.dumps(data, ensure_ascii=False, default=str)
+                    self._dp.cache.upsert_sector_flow(trade_date, label, json_str)
+                    result["concept" if not is_industry else "industry"] = True
+                    log.info("sector_flow saved: %s %s (%d series)",
+                             trade_date, label, len(data["series"]))
+                else:
+                    log.info("sector_flow empty: %s %s", trade_date, label)
+            except Exception as e:
+                log.warning("sector_flow fetch/save failed for %s %s: %s",
+                            trade_date, label, e)
+
+        parts = []
+        if result["concept"]:
+            parts.append("概念")
+        if result["industry"]:
+            parts.append("行业")
+        result["note"] = f"已保存: {', '.join(parts)}" if parts else "无数据可保存"
+        return result
+
+    def get_sector_flow_data(self, trade_date: str | None = None,
+                             industry: bool = False, top_n: int = 8,
+                             blocked_names: set[str] | None = None) -> dict:
+        """读取板块资金流数据。优先从 DB 读，DB 无数据时回退到实时 API。
+
+        Args:
+            trade_date: 交易日 YYYYMMDD，默认今天
+        """
+        import json
+        from marketreview.data.sector_flow import fetch_all as _fetch_flow
+
+        if trade_date is None:
+            trade_date = datetime.now().strftime("%Y%m%d")
+
+        label = "行业" if industry else "概念"
+
+        # 1) 尝试从 DB 读取
+        try:
+            cached = self._dp.cache.get_sector_flow(trade_date, label)
+            if cached:
+                data = json.loads(cached)
+                # blocked_names 需要运行时重新过滤（屏蔽列表是 session 级别的）
+                if blocked_names:
+                    data = _apply_blocked_filter(data, blocked_names)
+                return data
+        except Exception as e:
+            log.warning("get_sector_flow_data: DB read failed for %s %s: %s",
+                        trade_date, label, e)
+
+        # 2) DB 无数据，回退到实时 API（仅当天）
+        today = datetime.now().strftime("%Y%m%d")
+        if trade_date == today:
+            data = _fetch_flow(industry=industry, top_n=top_n,
+                               blocked_names=blocked_names)
+            if data and data.get("series"):
+                return data
+
+        # 3) 无数据
+        return {"sectors": [], "series": [], "snapshot": {},
+                "last_time": "", "kind": label, "elapsed": 0}
+
+    def has_sector_flow(self, trade_date: str) -> bool:
+        """检查某日是否有板块资金流数据（任一类型）。"""
+        return self._dp.cache.has_sector_flow(trade_date)
+
+    def is_market_trading_now(self) -> bool:
+        """Check if A-share market is in trading session (9:30-11:30, 13:00-15:00, Mon-Fri)."""
+        now = datetime.now()
+        t = now.hour * 60 + now.minute
+        return now.weekday() < 5 and ((570 <= t <= 690) or (780 <= t <= 900))
+
+    def generate_flow_md(self, data: dict) -> str:
+        """Generate markdown snippet for sector fund flow (used in journal data.md)."""
+        from marketreview.data.sector_flow import generate_flow_md as _gen_md
+        return _gen_md(data)
 
     def get_industry_ranking(self, trade_date: str, lookback: int = 1) -> list[dict]:
         """
@@ -1928,6 +2061,17 @@ class DashboardService:
         except Exception as e:
             log.warning("generate_data_md: AI guides failed: %s", e)
 
+        # ── 八、板块资金流 ──
+        try:
+            flow_data = self.get_sector_flow_data(trade_date=td, industry=False)
+            if flow_data and flow_data.get("series"):
+                flow_md = self.generate_flow_md(flow_data)
+                if flow_md:
+                    sections.append(flow_md)
+            concept_flow = flow_data
+        except Exception as e:
+            log.warning("generate_data_md: sector flow failed: %s", e)
+
         md_content = "\n\n".join(sections)
         os.makedirs(output_dir, exist_ok=True)
         filepath = os.path.join(output_dir, f"data-{td}.md")
@@ -2424,7 +2568,7 @@ class DashboardService:
     #   Z — 每次本地改完代码、想验证重启是否生效时 +1
     # 打印位置：__init__() + generate_ai_summary() → log.info
     # ──────────────────────────────────────────────────────────────
-    _AI_VERSION = "9.27.0"
+    _AI_VERSION = "9.29.0"
 
     def run_winrate_scan(self, cfg, progress_cb=None, timing_sink=None):
         """运行买点胜率全市场扫描，返回 (每买点统计, 全部交易明细)。

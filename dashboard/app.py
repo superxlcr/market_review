@@ -26,6 +26,7 @@ pg = st.navigation([
     st.Page("pages/00_控制台.py", title="控制台", icon="🎛️", default=True),
     st.Page("pages/01_市场全景.py", title="市场全景", icon="📊"),
     st.Page("pages/02_板块分析.py", title="板块分析", icon="🏭"),
+    st.Page("pages/08_板块资金流.py", title="板块资金", icon="💰"),
     st.Page("pages/03_个股追踪.py", title="个股追踪", icon="📋"),
     st.Page("pages/04_波段分析.py", title="波段分析", icon="📐"),
     st.Page("pages/05_NGA分析.py", title="NGA分析", icon="🧮"),

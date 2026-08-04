@@ -79,6 +79,9 @@ class CacheManager:
         "csi_index_pool": {
             "ts_code", "name", "category", "list_date",
         },
+        "sector_flow_daily": {
+            "trade_date", "sector_type", "data", "created_at",
+        },
     }
 
     def _init_schema(self):
@@ -1037,3 +1040,35 @@ class CacheManager:
             elif r["type"] == "N":
                 result[code]["n_concepts"].append(r["name"])
         return result
+
+    # ── 板块资金流 ──
+
+    def upsert_sector_flow(self, trade_date: str, sector_type: str, data: str):
+        """写入/覆盖某日某类板块资金流快照。data 为 JSON 字符串。"""
+        with self._get_conn() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO sector_flow_daily
+                   (trade_date, sector_type, data)
+                   VALUES (?, ?, ?)""",
+                [trade_date, sector_type, data],
+            )
+            conn.commit()
+
+    def get_sector_flow(self, trade_date: str, sector_type: str) -> str | None:
+        """读取某日某类板块资金流 JSON，无数据返回 None。"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT data FROM sector_flow_daily "
+                "WHERE trade_date = ? AND sector_type = ?",
+                [trade_date, sector_type],
+            ).fetchone()
+        return row["data"] if row else None
+
+    def has_sector_flow(self, trade_date: str) -> bool:
+        """检查某日是否有任何板块资金流数据。"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM sector_flow_daily WHERE trade_date = ?",
+                [trade_date],
+            ).fetchone()
+        return row is not None

@@ -150,6 +150,16 @@ CREATE TABLE IF NOT EXISTS concept_member (
     PRIMARY KEY (con_code, stock_code)
 );
 
+-- ── 板块资金流（东方财富盘后快照）──
+
+CREATE TABLE IF NOT EXISTS sector_flow_daily (
+    trade_date   TEXT NOT NULL,      -- 交易日 YYYYMMDD
+    sector_type  TEXT NOT NULL,      -- "概念" | "行业"
+    data         TEXT NOT NULL,      -- JSON blob: fetch_all() 的完整返回值
+    created_at   TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (trade_date, sector_type)
+);
+
 -- ── CSI (中证) 可回测指数池 ──
 
 CREATE TABLE IF NOT EXISTS csi_index_pool (

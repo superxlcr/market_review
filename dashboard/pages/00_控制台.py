@@ -301,6 +301,17 @@ if _pending:
                 state="complete",
             )
             st.session_state.trade_date = _pending
+            # ── 板块资金流快照 ──
+            try:
+                flow_result = _service.fetch_and_save_sector_flow(_pending)
+                if flow_result.get("note"):
+                    log_msg = flow_result["note"]
+                    if "跳过" in log_msg:
+                        pass  # 非今日数据，静默跳过
+                    elif "无数据" in log_msg:
+                        pass  # API 无数据
+            except Exception as _fe:
+                pass  # 板块资金流不是阻断项
             # Clear stale caches so other pages pick up fresh data
             st.cache_data.clear()
             st.rerun()
