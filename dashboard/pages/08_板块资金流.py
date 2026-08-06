@@ -123,15 +123,47 @@ cards_data = [
     ("资金广度", f"{nin} / {nout}", f"净流入 {nin} · 净流出 {nout}", "#888"),
 ]
 
+# Card colors — use warm for inflow, cool for outflow (matching chart gradient)
+CARD_IN_COLOR = "#ff6f83"
+CARD_OUT_COLOR = "#39d9ff"
+
 cols = st.columns(4)
-for col, (label, value, meta, color) in zip(cols, cards_data):
+for col, (label, value, meta, orig_color) in zip(cols, cards_data):
+    # Map card colors to the dark theme palette
+    if label == "最强流入":
+        accent = CARD_IN_COLOR
+    elif label == "最强流出":
+        accent = CARD_OUT_COLOR
+    else:
+        accent = "#90a7cf"
     with col:
         st.html(f"""
-        <div style="background:#fafafa;border:1px solid #e0e0e0;border-radius:10px;
-                    padding:14px;text-align:center;">
-            <div style="font-size:13px;color:#888;margin-bottom:4px;">{label}</div>
-            <div style="font-size:22px;font-weight:800;color:{color};">{value}</div>
-            <div style="font-size:12px;color:#999;margin-top:4px;">{meta}</div>
+        <div style="
+            background: linear-gradient(160deg, rgba(20,34,69,0.92), rgba(12,21,44,0.92));
+            border: 1px solid rgba(125,154,211,0.18);
+            border-radius: 16px;
+            padding: 15px 16px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        ">
+            <div style="
+                position: absolute;
+                inset: auto -30px -40px auto;
+                width: 110px; height: 110px;
+                border-radius: 50%;
+                background: radial-gradient(circle, {accent}22, transparent 68%);
+                pointer-events: none;
+            "></div>
+            <div style="font-size: 12px; color: #90a7cf; margin-bottom: 8px; position: relative; z-index: 1;">
+                {label}
+            </div>
+            <div style="font-size: 24px; font-weight: 800; color: {accent}; line-height: 1.1; position: relative; z-index: 1;">
+                {value}
+            </div>
+            <div style="font-size: 12px; color: #bdd1f2; margin-top: 7px; line-height: 1.5; position: relative; z-index: 1;">
+                {meta}
+            </div>
         </div>""")
 
 st.divider()
@@ -165,9 +197,32 @@ else:
 
         # ── Chart: truncate to current_time ──
         import plotly.graph_objects as go
+        import math
+
+        # ── HSL → hex (same as reference HTML) ──
+        def _hsl_hex(h: float, s: float = 0.70, l: float = 0.60) -> str:
+            """h in [0,360], s/l in [0,1] → #rrggbb"""
+            c = (1 - abs(2 * l - 1)) * s
+            hp = (h % 360) / 60.0
+            x = c * (1 - abs(hp % 2 - 1))
+            m = l - c / 2
+            sector = int(hp)
+            if sector == 0:   r, g, b = c, x, 0
+            elif sector == 1: r, g, b = x, c, 0
+            elif sector == 2: r, g, b = 0, c, x
+            elif sector == 3: r, g, b = 0, x, c
+            elif sector == 4: r, g, b = x, 0, c
+            else:             r, g, b = c, 0, x
+            return "#{:02x}{:02x}{:02x}".format(
+                round((r + m) * 255), round((g + m) * 255), round((b + m) * 255))
 
         fig = go.Figure()
         n_series = len(series)
+        # Warm (hue=0, red) for top-inflow → cool (hue=215, blue) for top-outflow
+        hue_base = 215.0
+
+        # ── Build label list for anti-collision ──
+        label_entries: list[dict] = []
 
         for i, (name, pts, final) in enumerate(series):
             # Truncate to current_time
@@ -177,49 +232,107 @@ else:
             times = [p[0] for p in truncated]
             vals = [p[1] for p in truncated]
 
-            # Warm-to-cool color gradient
-            ratio = i / max(n_series - 1, 1)
-            if ratio <= 0.2:
-                color = "#e53935"
-            elif ratio <= 0.4:
-                color = "#ff9800"
-            elif ratio <= 0.6:
-                color = "#8bc34a"
-            elif ratio <= 0.8:
-                color = "#00bcd4"
-            else:
-                color = "#42a5f5"
+            hue = hue_base * (i / max(n_series - 1, 1))
+            color = _hsl_hex(hue)
 
             fig.add_trace(go.Scatter(
                 x=times, y=vals,
                 mode="lines",
                 name=name,
-                line=dict(color=color, width=1.8),
-                hovertemplate=f"<b>{name}</b><br>时间: %{{x}}<br>累计: %{{y:+.2f}}亿<extra></extra>",
+                line=dict(color=color, width=2.0, shape="linear"),
+                hovertemplate=(
+                    f"<b>{name}</b><br>"
+                    f"时间: %{{x}}<br>"
+                    f"累计: %{{y:+.2f}}亿<extra></extra>"
+                ),
             ))
 
-            # End-point annotation
+            # Record label for anti-collision layout
             if truncated:
                 last_t, last_v = truncated[-1]
-                label = f"{name} {last_v:+.1f}亿"
+                label_entries.append({
+                    "name": name, "t": last_t, "v_raw": last_v,
+                    "v_str": f"{last_v:+.1f}亿", "color": color,
+                    "rank": i,
+                })
+
+        # ── Anti-collision: spread labels on y-axis if too close ──
+        if label_entries:
+            # Sort by y-value for collision detection
+            label_entries.sort(key=lambda e: e["v_raw"])
+            y_range = max(e["v_raw"] for e in label_entries) - min(e["v_raw"] for e in label_entries)
+            min_gap = y_range / max(len(label_entries), 1) * 0.85  # minimum gap
+            if min_gap < 0.2:
+                min_gap = 2.0  # absolute floor for tight clusters
+
+            # Push apart from top to bottom
+            for k in range(1, len(label_entries)):
+                prev = label_entries[k - 1]
+                cur = label_entries[k]
+                needed = prev["v_raw"] + min_gap
+                if cur["v_raw"] < needed:
+                    cur["v_raw"] = needed
+
+            # If pushing caused overflow at the top, compress from the bottom instead
+            overflow = label_entries[-1]["v_raw"] - max(e["v_raw"] for e in label_entries)
+            if overflow > min_gap:
+                for e in label_entries:
+                    e["v_raw"] -= overflow * 0.5
+
+            for e in label_entries:
+                label_text = f"<b>{e['name']}</b> {e['v_str']}"
                 fig.add_annotation(
-                    x=last_t, y=last_v, text=label,
-                    showarrow=False, xanchor="left", xshift=6,
-                    font=dict(size=10, color=color),
+                    x=e["t"], y=e["v_raw"],
+                    text=label_text,
+                    showarrow=False,
+                    xanchor="left", xshift=8,
+                    font=dict(size=12, color=e["color"]),
+                    bgcolor="rgba(8,14,27,0.82)",
+                    borderpad=2,
                 )
 
         # ── Zeroline ──
-        fig.add_hline(y=0, line=dict(color="#999", width=1, dash="solid"))
+        fig.add_hline(
+            y=0, line=dict(color="rgba(125,154,211,0.45)", width=1.2, dash="solid"),
+        )
 
+        # ── Layout ──
         fig.update_layout(
-            template="plotly_white",
-            height=500,
-            margin=dict(l=40, r=200, t=10, b=40),
-            showlegend=False,
+            template="plotly_dark",
+            height=800,
+            margin=dict(l=56, r=28, t=10, b=40),
+            paper_bgcolor="rgba(8,17,31,0.95)",
+            plot_bgcolor="rgba(8,17,31,0.92)",
+            showlegend=True,
+            legend=dict(
+                orientation="v",
+                yanchor="top", y=0.98,
+                xanchor="left", x=1.01,
+                bgcolor="rgba(8,14,27,0.75)",
+                bordercolor="rgba(125,154,211,0.18)",
+                font=dict(size=11, color="#90a7cf"),
+                itemclick="toggle",
+                itemdoubleclick="toggleothers",
+            ),
             hovermode="x unified",
-            xaxis=dict(title="", type="category", tickangle=45,
-                       tickmode="auto", nticks=20),
-            yaxis=dict(title="累计净流入（亿元）"),
+            hoverlabel=dict(
+                bgcolor="rgba(8,14,27,0.94)",
+                bordercolor="rgba(123,156,221,0.28)",
+                font=dict(size=13, color="#d5e6ff"),
+            ),
+            xaxis=dict(
+                title="", type="category", tickangle=45,
+                tickmode="auto", nticks=20,
+                tickfont=dict(size=11, color="#7e93b8"),
+                gridcolor="rgba(125,154,211,0.08)",
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title=dict(text="累计净流入（亿元）", font=dict(size=13, color="#90a7cf")),
+                tickfont=dict(size=12, color="#7e93b8"),
+                gridcolor="rgba(125,154,211,0.13)",
+                zeroline=False,
+            ),
             dragmode="pan",
         )
 
