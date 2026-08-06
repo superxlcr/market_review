@@ -49,7 +49,7 @@ col_mode, col_refresh = st.columns([3, 1])
 with col_mode:
     mode = st.radio(
         "板块类型", options=["概念板块", "行业板块"],
-        horizontal=True, index=0, key="sf_mode",
+        horizontal=True, index=1, key="sf_mode",
     )
 is_industry = (mode == "行业板块")
 
@@ -148,50 +148,20 @@ else:
     if not all_times:
         st.info("暂无有效时间点")
     else:
-        # ── Playback controls ──
-        st.subheader("📈 主力资金净流入 · 累计分时曲线")
-        st.caption("拖动时间轴或点击播放查看资金流向演变 ｜ 暖色=流入端 冷色=流出端")
-
-        col_play, col_speed, col_label = st.columns([1, 1, 4])
-        with col_play:
-            play_btn = st.button("▶ 播放" if not st.session_state.get("sf_playing", False)
-                                 else "⏸ 暂停", key="sf_play")
-            if play_btn:
-                st.session_state["sf_playing"] = not st.session_state.get("sf_playing", False)
-        with col_speed:
-            speed = st.selectbox("速度", ["1x", "2x", "4x"], index=0, key="sf_speed",
-                                 label_visibility="collapsed")
-            speed_map = {"1x": 1, "2x": 2, "4x": 4}
-            step = speed_map.get(speed, 1)
-
         # ── Timeline slider ──
-        max_idx = len(all_times) - 1
+        st.subheader("📈 主力资金净流入 · 累计分时曲线")
+        st.caption("拖动时间轴查看资金流向演变 ｜ 暖色=流入端 冷色=流出端")
 
-        # 播放推进：必须在 widget 渲染前修改 session_state
+        max_idx = len(all_times) - 1
         if "sf_slider" not in st.session_state:
             st.session_state["sf_slider"] = max_idx
-
-        if st.session_state.get("sf_playing", False):
-            next_idx = st.session_state["sf_slider"] + step
-            if next_idx >= max_idx:
-                st.session_state["sf_playing"] = False
-                next_idx = max_idx
-            st.session_state["sf_slider"] = next_idx
 
         current_idx = st.slider(
             "时间轴", 0, max_idx,
             key="sf_slider",
         )
         current_time = all_times[current_idx]
-        with col_label:
-            st.html(f"""
-            <div style="padding-top:14px;font-size:16px;font-weight:bold;color:#333;">
-                当前：<span style="color:#e53935;">{current_time}</span>
-            </div>""")
-
-        # ── Trigger next frame ──
-        if st.session_state.get("sf_playing", False):
-            st.rerun()
+        st.caption(f"当前：**{current_time}**")
 
         # ── Chart: truncate to current_time ──
         import plotly.graph_objects as go
